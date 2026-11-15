@@ -1241,18 +1241,19 @@ export class CompanionManager {
   }
 
   private removeSessionState(): boolean {
-    // Only a manager that actually owned a row may clear the shared spawn
-    // history: a headless manager's dispose must not erase the record that
-    // keeps an attached project from respawning after a user Quit.
-    const hadRow = readState().sessions.some(
-      (session) => session.session_id === this.id,
-    );
+    // Only removing the last live row can make the native window exit.
+    // Keep shared spawn history while another project's row remains.
+    let removedLastRow = false;
     const removed = !existsSync(stateFilePath())
       ? true
       : writeState((state) => {
+          const hadRow = state.sessions.some(
+            (session) => session.session_id === this.id,
+          );
           dropRow(state, this.id);
+          removedLastRow = hadRow && state.sessions.length === 0;
         });
-    if (removed && hadRow) clearSpawnAttemptRecordOnDispose();
+    if (removed && removedLastRow) clearSpawnAttemptRecordOnDispose();
     return removed;
   }
 
@@ -1426,10 +1427,17 @@ export class CompanionManager {
         rmSync(pidFile, { force: true });
       }
       const previousAttempt = readSpawnAttemptRecord();
+      const state = readState();
       const publishedAttachments = attachmentsWithPublishedRows(
         currentAttachments,
-        readState(),
+        state,
       );
+      if (
+        !isDirectoryAttached(publishedAttachments, this.cwd) ||
+        !state.sessions.some((session) => session.session_id === this.id)
+      ) {
+        return false;
+      }
       if (
         previousAttempt &&
         !publishedAttachments.some(

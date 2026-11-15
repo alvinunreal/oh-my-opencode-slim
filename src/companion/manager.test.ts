@@ -518,6 +518,30 @@ describe('CompanionManager', () => {
     }
   });
 
+  it('keeps the user-quit guard when another attached project disposes', () => {
+    const config = {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    };
+    const first = make('session-a', '/project-a', config);
+    const second = make('session-b', '/project-b', config);
+    first.onLoad();
+    second.onLoad();
+    writeFileSync(companionPidFile(), String(process.pid));
+    reconcile(first);
+    const history = readSpawnAttachments();
+    expect(history).toHaveLength(2);
+
+    writeFileSync(companionPidFile(), '999999999');
+    second.onExit();
+    expect(readState().sessions.map((row) => row.session_id)).toEqual([
+      'session-a',
+    ]);
+    expect(readSpawnAttachments()).toEqual(history);
+    reconcile(first);
+    expect(readSpawnAttachments()).toEqual(history);
+  });
+
   it('removes dead and mismatched attachment records', () => {
     const m = new CompanionManager('crash-leftover', '/crashed', {
       enabled: true,
