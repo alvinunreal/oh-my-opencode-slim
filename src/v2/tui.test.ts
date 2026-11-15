@@ -962,10 +962,16 @@ describe('v2 tui preset plugin', () => {
             return {
               sessionID: input.sessionID,
               status: 'bound',
-              presetName: 'server-alpha',
+              presetName:
+                input.sessionID === 'root-a' ? 'server-alpha' : 'server-gamma',
               affects: 'future-children-only',
               team: {
-                agentModels: { oracle: 'saved/team-a' },
+                agentModels: {
+                  oracle:
+                    input.sessionID === 'root-a'
+                      ? 'saved/team-a'
+                      : 'saved/team-c',
+                },
                 agentVariants: {},
                 inheritance: {},
               },
@@ -2533,7 +2539,7 @@ describe('v2 tui preset plugin', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true });
       fs.writeFileSync(
         path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ multiplexer: { type: 'tmux' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
       );
       process.env.TMUX_PANE = '%1';
       const originalArgv = process.argv;
@@ -2571,7 +2577,7 @@ describe('v2 tui preset plugin', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true });
       fs.writeFileSync(
         path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ multiplexer: { type: 'tmux' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3075,7 +3081,7 @@ describe('v2 tui preset plugin', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true });
       fs.writeFileSync(
         path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ multiplexer: { type: 'tmux' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3115,7 +3121,7 @@ describe('v2 tui preset plugin', () => {
       );
       fs.writeFileSync(
         configPath,
-        JSON.stringify({ multiplexer: { type: 'none' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'none' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3158,11 +3164,11 @@ describe('v2 tui preset plugin', () => {
         // Disabled at startup: no wiring and no host subscriptions.
         expect(subscriptions.size).toBe(0);
 
-        // v2 hot-reloads config; enabling panes must rebuild the wiring on the
-        // next sidebar poll instead of staying unavailable until restart.
+        // v2 hot-reloads config; enabling panes must rebuild the wiring
+        // without waiting for a restart.
         fs.writeFileSync(
           configPath,
-          JSON.stringify({ multiplexer: { type: 'tmux' } }),
+          JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
         );
         // Drive the real config notification instead of waiting on a guessed
         // poll interval (the sidebar-off interval is intentionally 5s).
@@ -3337,7 +3343,7 @@ describe('v2 tui preset plugin', () => {
       );
       fs.writeFileSync(
         configPath,
-        JSON.stringify({ multiplexer: { type: 'none' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'none' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3388,7 +3394,7 @@ describe('v2 tui preset plugin', () => {
         // while it is still waiting.
         fs.writeFileSync(
           configPath,
-          JSON.stringify({ multiplexer: { type: 'tmux' } }),
+          JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
         );
         const notified = await notifyConfigChanged(
           projectDir,

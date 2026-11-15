@@ -533,11 +533,15 @@ export async function hydrateModelNames(
   return cache.names;
 }
 
-/** Skip overlapping sidebar refreshes so a slow host fetch cannot pile up. */
+/** Coalesce overlapping sidebar refreshes into one trailing pass. */
 export function createSerializedRefresh(run: () => Promise<void>): () => void {
   let inFlight = false;
-  return () => {
-    if (inFlight) return;
+  let pending = false;
+  const schedule = () => {
+    if (inFlight) {
+      pending = true;
+      return;
+    }
     inFlight = true;
     void run()
       .catch(() => {
@@ -545,8 +549,13 @@ export function createSerializedRefresh(run: () => Promise<void>): () => void {
       })
       .finally(() => {
         inFlight = false;
+        if (pending) {
+          pending = false;
+          schedule();
+        }
       });
   };
+  return schedule;
 }
 
 /** Drop a refresh whose directory changed while the host fetch was in flight. */
@@ -900,7 +909,7 @@ export interface SidebarInteraction {
   expandedAgents: () => ReadonlySet<string>;
   toggleAgent: (agentName: string) => void;
   /** Reset expansion when the project directory or visible root changes. */
-  syncScope: (directory: string, rootID: string | undefined) => void;
+  syncScope: (directory: string, rootID: string | undefined) => boolean;
   /** True when this TUI has a non-empty text selection (skip click). */
   hasSelectedText?: () => boolean;
 }
@@ -942,14 +951,15 @@ export function createSidebarInteraction(
       });
     },
     syncScope: (directory, rootID) => {
-      if (
+      const changed =
         lastDirectory !== undefined &&
-        (lastDirectory !== directory || lastRootID !== rootID)
-      ) {
+        (lastDirectory !== directory || lastRootID !== rootID);
+      if (changed) {
         setExpanded(new Set<string>());
       }
       lastDirectory = directory;
       lastRootID = rootID;
+      return changed;
     },
   };
 }
@@ -2245,6 +2255,8 @@ export function overlaySelectedRootModel(
   };
 }
 
+const SIDEBAR_FINISHED_CAP = 2;
+
 /** One refresh/animation/interaction lifecycle for both host slot contracts. */
 function createSidebarRuntime(
   adapter: SidebarRuntimeAdapter,
@@ -2315,7 +2327,13 @@ function createSidebarRuntime(
     return changed;
   };
   const [snapshot, setSnapshot] = createSignal(
-    sidebarEnabled ? readTuiSnapshot(configDirectory) : EMPTY_TUI_SNAPSHOT,
+    sidebarEnabled
+      ? overlayHostSessions(
+          readTuiSnapshot(configDirectory),
+          adapter.getHostSessions?.(),
+          SIDEBAR_FINISHED_CAP,
+        )
+      : EMPTY_TUI_SNAPSHOT,
   );
   const [animationNow, setAnimationNow] = createSignal(Date.now());
   const [sessionPreset, setSessionPreset] = createSignal<{
@@ -2395,7 +2413,7 @@ function createSidebarRuntime(
     nextSnapshot = overlayHostSessions(
       nextSnapshot,
       adapter.getHostSessions?.(),
-      2,
+      SIDEBAR_FINISHED_CAP,
     );
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
@@ -2535,12 +2553,16 @@ function createSidebarRuntime(
               : undefined;
           const sessionOverride =
             boundPreset !== presetName ? boundPreset : undefined;
-          interaction.syncScope(
-            configDirectory,
-            visible === undefined
-              ? undefined
-              : resolveTuiSnapshotRoot(currentSnapshot, visible),
-          );
+          if (
+            interaction.syncScope(
+              configDirectory,
+              visible === undefined
+                ? undefined
+                : resolveTuiSnapshotRoot(currentSnapshot, visible),
+            )
+          ) {
+            scheduleRefresh();
+          }
           return renderSidebar(
             overlaySelectedRootModel(
               projectSidebarTeam(

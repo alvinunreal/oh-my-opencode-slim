@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
+import { createSignal } from 'solid-js';
 import sidebarFrameGolden from './sidebar-frame-golden.json';
 import type { ModelNamesCache } from './tui';
 import {
@@ -48,6 +49,7 @@ import {
   killAllSummaryMessage,
 } from './tui-kill';
 import {
+  getTuiStatePath,
   readTuiSnapshot,
   recordTuiAgentActivity,
   recordTuiAgentModels,
@@ -596,15 +598,13 @@ describe('tui sidebar agents', () => {
     refresh();
     await clock.advance(2_000);
     expect(signals[0]?.aborted).toBe(true);
-    expect(commits).toBe(1);
-    refresh();
     await clock.tick();
     expect(signals).toHaveLength(2);
     expect(commits).toBe(2);
     expect(clock.pending()).toBe(0);
   });
 
-  test('serialized refresh skips overlap and drops a stale directory (#1133)', async () => {
+  test('serialized refresh coalesces overlap and drops a stale directory (#1133)', async () => {
     expect(isRefreshCurrent('/a', '/a')).toBe(true);
     expect(isRefreshCurrent('/a', '/b')).toBe(false);
 
@@ -612,6 +612,7 @@ describe('tui sidebar agents', () => {
     let started = 0;
     let finished = 0;
     const release: Array<() => void> = [];
+    const clock = createTimerHarness();
     const schedule = createSerializedRefresh(async () => {
       started += 1;
       running += 1;
@@ -626,16 +627,18 @@ describe('tui sidebar agents', () => {
 
     schedule();
     schedule();
+    schedule();
     expect(started).toBe(1);
     expect(running).toBe(1);
     release[0]?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await clock.tick();
     expect(finished).toBe(1);
-    schedule();
     expect(started).toBe(2);
+    expect(running).toBe(1);
     release[1]?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await clock.tick();
     expect(finished).toBe(2);
+    expect(started).toBe(2);
   });
 
   test('uses default-enabled fallback before models are persisted', () => {
@@ -1257,7 +1260,7 @@ describe('clickable sidebar sessions', () => {
       toggleOpen: () => {},
       expandedAgents: () => new Set(['explorer']),
       toggleAgent: () => {},
-      syncScope: () => {},
+      syncScope: () => false,
     };
   }
 
@@ -1369,7 +1372,7 @@ describe('clickable sidebar sessions', () => {
       toggleOpen: () => {},
       expandedAgents: () => new Set<string>(),
       toggleAgent: () => {},
-      syncScope: () => {},
+      syncScope: () => false,
     });
     const frame = await renderAttributionFrame(() =>
       renderSidebar(
@@ -1631,7 +1634,7 @@ describe('clickable sidebar sessions', () => {
       toggleOpen: () => {},
       expandedAgents: () => new Set<string>(),
       toggleAgent: () => {},
-      syncScope: () => {},
+      syncScope: () => false,
     };
 
     const setup = await testRender(
@@ -1997,6 +2000,7 @@ describe('clickable sidebar sessions', () => {
     sessionID: string;
     navigate?: (name: string, params?: Record<string, unknown>) => void;
     data?: ReturnType<typeof fakeHostData>;
+    client?: unknown;
     forceSelectedModel?: boolean;
     transparentTheme?: boolean;
     sameSurfaceTheme?: boolean;
@@ -2012,6 +2016,7 @@ describe('clickable sidebar sessions', () => {
     const claim: { render: (input: { sessionID: string }) => unknown } = {
       render: () => undefined,
     };
+    const [sessionID, setSessionID] = createSignal(opts.sessionID);
     const dispose = await tuiPlugin.setup({
       location: { directory: opts.projectDir },
       data: opts.data,
@@ -2021,7 +2026,7 @@ describe('clickable sidebar sessions', () => {
           for (const resolve of refreshWaiters.splice(0)) resolve();
         },
       },
-      client: undefined,
+      client: opts.client,
       theme: {
         text: { default: '#ffffff', subdued: '#aaaaaa' },
         background: opts.transparentTheme
@@ -2048,7 +2053,7 @@ describe('clickable sidebar sessions', () => {
             }
           : {}),
         router: {
-          current: () => ({ type: 'session', sessionID: opts.sessionID }),
+          current: () => ({ type: 'session', sessionID: sessionID() }),
           navigate:
             opts.navigate &&
             ((route) => {
@@ -2066,12 +2071,13 @@ describe('clickable sidebar sessions', () => {
     if (opts.waitForInitialRefresh) await initialRefresh;
     const slotPlugin = {
       slots: {
-        sidebar_content: () => claim.render({ sessionID: opts.sessionID }),
+        sidebar_content: () => claim.render({ sessionID: sessionID() }),
       },
     };
     return {
       slotPlugin,
       disposers,
+      setSessionID,
       nextRefresh: () =>
         new Promise<void>((resolve) => refreshWaiters.push(resolve)),
     };
@@ -2081,13 +2087,20 @@ describe('clickable sidebar sessions', () => {
     const sessions = new Map(entries.map((entry) => [entry.id, entry]));
     const running = new Set<string>();
     const listeners = new Map<string, Set<(event: unknown) => void>>();
+    const rootOf = (id: string) => {
+      while (sessions.get(id)?.parentID) {
+        id = sessions.get(id)?.parentID as string;
+      }
+      return id;
+    };
     return {
       sessions,
       running,
       listeners,
       session: {
         get: (id: string) => sessions.get(id),
-        family: (_id: string) => [...sessions.keys()],
+        family: (id: string) =>
+          [...sessions.keys()].filter((key) => rootOf(key) === rootOf(id)),
         status: (id: string): 'running' | 'idle' =>
           running.has(id) ? 'running' : 'idle',
       },
@@ -2104,6 +2117,147 @@ describe('clickable sidebar sessions', () => {
       },
     };
   }
+
+  test('host overlay excludes stale rows before the first refresh completes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-initial-'));
+    const restore = withIsolatedDataHome(root);
+    const navigated: unknown[] = [];
+    const data = fakeHostData({
+      id: 'root',
+      agent: 'orchestrator',
+      time: { created: 1 },
+    });
+    let releaseModels = (_value: unknown[]) => {};
+    let startedModels = () => {};
+    const modelStarted = new Promise<void>((resolve) => {
+      startedModels = resolve;
+    });
+    const pendingModels = new Promise<unknown[]>((resolve) => {
+      releaseModels = resolve;
+    });
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      updateSnapshot(root, (snapshot) => {
+        snapshot.agentModels = { oracle: 'local/model' };
+        snapshot.activeSessions = { stale: 'oracle' };
+        snapshot.sessionParents = { stale: 'root' };
+        snapshot.reusableByAgent = {
+          root: {
+            oracle: [{ taskID: 'stale', alias: 'ora-1', running: true }],
+          },
+        };
+      });
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        client: {
+          model: {
+            list: () => {
+              startedModels();
+              return pendingModels;
+            },
+          },
+        },
+        navigate: (...args) => navigated.push(args),
+      });
+      await modelStarted;
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      const lines = screen.captureCharFrame().split('\n');
+      const row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).not.toMatch(ACTIVITY_FRAME_PATTERN);
+      expect(lines[row]).not.toContain('✦');
+      expect(screen.captureCharFrame()).not.toContain('ora-1');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([]);
+    } finally {
+      releaseModels([]);
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host overlay refreshes immediately when the visible root changes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-scope-'));
+    const restore = withIsolatedDataHome(root);
+    const data = fakeHostData(
+      { id: 'root-a', agent: 'orchestrator', time: { created: 1 } },
+      { id: 'root-b', agent: 'orchestrator', time: { created: 2 } },
+      {
+        id: 'child-a',
+        parentID: 'root-a',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 3, idle: 4 },
+      },
+      {
+        id: 'child-b',
+        parentID: 'root-b',
+        agent: 'explorer',
+        outcome: 'succeeded',
+        time: { created: 5, idle: 6 },
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    const stat = spyOn(fs.promises, 'stat');
+    try {
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            orchestrator: 'old',
+            oracle: 'local/model',
+            explorer: 'local/model',
+          },
+        },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root-a',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: () => {},
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      expect(
+        screen
+          .captureCharFrame()
+          .split('\n')
+          .find((line) => line.includes('oracle')),
+      ).toContain('✦');
+      stat.mockClear();
+      const refreshed = mounted.nextRefresh();
+      mounted.setSessionID('root-b');
+      await screen.renderOnce();
+      expect(
+        stat.mock.calls.some(([file]) => file === getTuiStatePath(root)),
+      ).toBe(true);
+      await refreshed;
+      await screen.renderOnce();
+      const lines = screen.captureCharFrame().split('\n');
+      expect(lines.find((line) => line.includes('explorer'))).toContain('✦');
+      expect(lines.find((line) => line.includes('oracle'))).not.toContain('✦');
+    } finally {
+      stat.mockRestore();
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test('host finished child shows history and its row navigates', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-finished-'));
@@ -2257,7 +2411,6 @@ describe('clickable sidebar sessions', () => {
       }
       data.running.delete('child');
       const child = data.sessions.get('child') as HostSessionInfo;
-      child.outcome = 'succeeded';
       child.time.idle = 3;
       const refreshed = mounted.nextRefresh();
       data.emit('session.execution.succeeded');
@@ -2271,6 +2424,7 @@ describe('clickable sidebar sessions', () => {
         ['session', { sessionID: 'child' }],
         ['session', { sessionID: 'child' }],
       ]);
+      child.outcome = 'succeeded';
       for (const dispose of mounted.disposers.splice(0)) dispose();
       expect(data.listeners.get('session.execution.succeeded')?.size).toBe(0);
     } finally {

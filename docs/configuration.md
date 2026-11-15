@@ -139,6 +139,8 @@ agent has a `•` before its name. While an agent session reports `busy` or
 `retry`, an animated Braille indicator replaces the bullet in the same spot.
 An idle agent with clickable session history shows `✦` instead of the bullet.
 The bullet returns when there is no active session or available history.
+The sidebar shows up to two most recently finished sessions per agent and
+parent; running sessions are always shown.
 
 In an expanded agent list, `⚰` marks an interrupted session; use
 `subagent(sessionID)` to continue it. Expanded subagent rows show the session's

@@ -51,7 +51,8 @@ export function overlayHostSessions(
   );
   const visible = hostViews?.visibleSessionID;
   const members = visible
-    ? [...new Set([visible, ...session.family(visible)])]
+    ? session
+        .family(visible)
         .map((id) => session.get?.(id))
         .filter((info): info is HostSessionInfo => info !== undefined)
         .sort(
@@ -65,10 +66,9 @@ export function overlayHostSessions(
     const agent = canonicalName(info.agent);
     let alias: string | undefined;
     if (info.parentID) {
-      const prefix =
-        (Object.hasOwn(AGENT_PREFIX, agent)
-          ? AGENT_PREFIX[agent]
-          : agent.slice(0, 3)) || 'job';
+      const prefix = Object.hasOwn(AGENT_PREFIX, agent)
+        ? AGENT_PREFIX[agent]
+        : agent.slice(0, 3);
       const key = `${info.parentID}:${prefix}`;
       const count = (counts.get(key) ?? 0) + 1;
       counts.set(key, count);
@@ -81,7 +81,12 @@ export function overlayHostSessions(
       sessionDetails[info.id] = { ...(alias ? { alias } : {}), status: 'busy' };
       continue;
     }
-    if (!info.parentID || !alias || !info.outcome) continue;
+    if (
+      !info.parentID ||
+      !alias ||
+      (!info.outcome && info.time.idle === undefined)
+    )
+      continue;
     const byAgent = reusable.get(info.parentID) ?? new Map();
     const entries = byAgent.get(agent) ?? [];
     entries.push({
@@ -120,7 +125,7 @@ export function overlayHostSessions(
   // An idle parent can fall outside its own history cap but still label a child.
   for (const parent of Object.values(sessionParents)) {
     const alias = aliases.get(parent);
-    if (alias && sessionParents[parent] && !sessionDetails[parent]) {
+    if (alias && !sessionDetails[parent]) {
       sessionDetails[parent] = { alias };
     }
   }

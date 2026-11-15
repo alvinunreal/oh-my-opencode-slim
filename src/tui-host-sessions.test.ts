@@ -5,7 +5,7 @@ import {
   getSidebarReusableTargets,
 } from './tui';
 import { type HostSessionInfo, overlayHostSessions } from './tui-host-sessions';
-import type { TuiSnapshot } from './tui-state';
+import { snapshotSectionsEqual, type TuiSnapshot } from './tui-state';
 
 function snapshot(): TuiSnapshot {
   return {
@@ -203,6 +203,10 @@ describe('overlayHostSessions', () => {
       nested: 'exp-1',
       reserved: 'con-1',
     });
+    expect(projected.sessionDetails.early).toEqual({
+      alias: 'exp-1',
+      status: 'busy',
+    });
   });
 
   test('cap keeps the two most recently idle per parent and all running children', () => {
@@ -331,6 +335,8 @@ describe('overlayHostSessions', () => {
       root: { oracle: [{ taskID: 'stale', alias: 'ora-1', running: true }] },
     };
     original.activeSessions = { stale: 'oracle' };
+    original.activityPids = { stale: 123 };
+    original.reusableOwners = { root: 123 };
     original.sessionParents = { stale: 'root' };
     const data = host(root);
     const projected = overlayHostSessions(
@@ -340,7 +346,9 @@ describe('overlayHostSessions', () => {
     );
     expect([...getActiveSidebarAgentNames(projected, 'root')]).toEqual([]);
     expect(projected.activeSessions).toEqual({});
+    expect(projected.activityPids).toEqual({});
     expect(projected.reusableByAgent).toEqual({});
+    expect(projected.reusableOwners).toEqual({});
     expect(overlayHostSessions(original, undefined, 2)).toBe(original);
     expect(
       overlayHostSessions(
@@ -349,6 +357,20 @@ describe('overlayHostSessions', () => {
         2,
       ),
     ).toBe(original);
+  });
+
+  test('the same host view produces stable snapshot sections on a second pass', () => {
+    const data = host(root, {
+      id: 'child',
+      parentID: 'root',
+      agent: 'explorer',
+      outcome: 'succeeded',
+      time: { created: 10, idle: 20 },
+    });
+    const views = { visibleSessionID: 'root', session: data.session };
+    const first = overlayHostSessions(snapshot(), views, 2);
+    const second = overlayHostSessions(first, views, 2);
+    expect(snapshotSectionsEqual(first, second)).toBe(true);
   });
 
   test('depth-two targets use the derived parent alias for via attribution', () => {
