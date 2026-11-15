@@ -43,8 +43,6 @@ function nameOf(text: string): string {
     /^(?:export\s+|async\s+|static\s+|private\s+|protected\s+|public\s+|readonly\s+|abstract\s+|override\s+)*(?:function\s*\*?\s*|get\s+|set\s+)?([A-Za-z_$][\w$]*)/,
   );
   if (m) return m[1];
-  if (/^\(/.test(first) || /^[A-Za-z_$][\w$]*\s*=>/.test(first))
-    return '<anonymous>';
   return '<anonymous>';
 }
 
@@ -54,8 +52,9 @@ function parseLcov(text: string): Map<string, Map<number, number>> {
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('SF:')) {
-      current = new Map();
-      files.set(line.slice(3), current);
+      const path = line.slice(3);
+      current = files.get(path) ?? new Map();
+      files.set(path, current);
     } else if (line.startsWith('DA:') && current) {
       const [ln, hits] = line.slice(3).split(',');
       const n = Number(ln);
@@ -68,11 +67,21 @@ function parseLcov(text: string): Map<string, Map<number, number>> {
 }
 
 function scanFunctions(absPaths: string[]): SgMatch[] {
-  const sg = resolve('node_modules/.bin/ast-grep');
+  if (absPaths.length === 0) return [];
   const result = spawnSync(
-    sg,
-    ['scan', '--rule', '/dev/stdin', '--json', '--', ...absPaths],
-    { input: FUNCTION_RULE, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+    process.execPath,
+    [
+      'run',
+      '--bun',
+      'ast-grep',
+      'scan',
+      '--inline-rules',
+      FUNCTION_RULE,
+      '--json',
+      '--',
+      ...absPaths,
+    ],
+    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
   );
   if (result.error) {
     console.error(

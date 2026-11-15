@@ -76,7 +76,9 @@ jobs:
             --reporter-outfile=reports/junit.xml
 
       - name: Convert coverage for fallow CRAP scoring
-        run: bun run coverage:istanbul
+        run: |
+          bun test ./scripts/lcov-to-istanbul.test.ts
+          bun run coverage:istanbul
 
       - name: Upload test and coverage reports
         if: ${{ always() }}
