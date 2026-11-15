@@ -270,6 +270,21 @@ describe('overlayHostSessions', () => {
       'running-a',
       'running-b',
     ]);
+
+    data.sessions.set('two', {
+      id: 'two',
+      parentID: 'root',
+      agent: 'oracle',
+      time: { created: 2, busy: 400 },
+    });
+    const provisional = overlayHostSessions(
+      snapshot(),
+      { visibleSessionID: 'root', session: data.session },
+      2,
+    );
+    expect(
+      provisional.reusableByAgent.root.oracle.map((entry) => entry.taskID),
+    ).toEqual(['two', 'one']);
   });
 
   test('root scoping ignores persisted activity from another conversation', () => {

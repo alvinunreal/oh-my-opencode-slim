@@ -11,7 +11,7 @@ export interface HostSessionInfo {
   agent?: string;
   title?: string;
   outcome?: 'succeeded' | 'failed' | 'interrupted';
-  time: { created: number; idle?: number; archived?: number };
+  time: { created: number; busy?: number; idle?: number; archived?: number };
 }
 
 export interface HostSessionViews {
@@ -84,7 +84,7 @@ export function overlayHostSessions(
     if (
       !info.parentID ||
       !alias ||
-      (!info.outcome && info.time.idle === undefined)
+      (!info.outcome && info.time.busy === undefined)
     )
       continue;
     const byAgent = reusable.get(info.parentID) ?? new Map();
@@ -99,7 +99,7 @@ export function overlayHostSessions(
             ? 'error'
             : 'completed',
       ...(info.time.idle === undefined ? {} : { completedAt: info.time.idle }),
-      lastUsedAt: info.time.idle ?? info.time.created,
+      lastUsedAt: info.time.idle ?? info.time.busy ?? info.time.created,
     });
     byAgent.set(agent, entries);
     reusable.set(info.parentID, byAgent);

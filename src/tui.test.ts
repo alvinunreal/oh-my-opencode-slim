@@ -2312,18 +2312,25 @@ describe('clickable sidebar sessions', () => {
     const data = fakeHostData(
       { id: 'root', agent: 'orchestrator', time: { created: 1 } },
       {
-        id: 'ok',
+        id: 'older',
         parentID: 'root',
         agent: 'oracle',
         outcome: 'succeeded',
         time: { created: 2, idle: 3 },
       },
       {
+        id: 'ok',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 4, idle: 5 },
+      },
+      {
         id: 'stopped',
         parentID: 'root',
         agent: 'oracle',
         outcome: 'interrupted',
-        time: { created: 4, idle: 5 },
+        time: { created: 6, idle: 7 },
       },
     );
     let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
@@ -2352,8 +2359,9 @@ describe('clickable sidebar sessions', () => {
       await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
       await screen.renderOnce();
       lines = screen.captureCharFrame().split('\n');
-      expect(lines.find((line) => line.includes('ora-1'))).toContain('• ora-1');
-      expect(lines.find((line) => line.includes('ora-2'))).toContain('⚰ ora-2');
+      expect(lines.find((line) => line.includes('ora-1'))).toBeUndefined();
+      expect(lines.find((line) => line.includes('ora-2'))).toContain('• ora-2');
+      expect(lines.find((line) => line.includes('ora-3'))).toContain('⚰ ora-3');
       expect(lines.filter((line) => line.includes('⚰'))).toHaveLength(1);
     } finally {
       screen?.renderer.destroy();
@@ -2371,7 +2379,12 @@ describe('clickable sidebar sessions', () => {
     const navigated: unknown[] = [];
     const data = fakeHostData(
       { id: 'root', agent: 'orchestrator', time: { created: 1 } },
-      { id: 'child', parentID: 'root', agent: 'oracle', time: { created: 2 } },
+      {
+        id: 'child',
+        parentID: 'root',
+        agent: 'oracle',
+        time: { created: 2, busy: 3 },
+      },
     );
     data.running.add('child');
     let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
@@ -2411,7 +2424,8 @@ describe('clickable sidebar sessions', () => {
       }
       data.running.delete('child');
       const child = data.sessions.get('child') as HostSessionInfo;
-      child.time.idle = 3;
+      expect(child.time.idle).toBeUndefined();
+      expect(child.outcome).toBeUndefined();
       const refreshed = mounted.nextRefresh();
       data.emit('session.execution.succeeded');
       await refreshed;
@@ -2424,6 +2438,7 @@ describe('clickable sidebar sessions', () => {
         ['session', { sessionID: 'child' }],
         ['session', { sessionID: 'child' }],
       ]);
+      child.time.idle = 4;
       child.outcome = 'succeeded';
       for (const dispose of mounted.disposers.splice(0)) dispose();
       expect(data.listeners.get('session.execution.succeeded')?.size).toBe(0);
