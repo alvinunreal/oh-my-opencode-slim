@@ -256,13 +256,6 @@ describe('marketplace synchronous lease lifecycle', () => {
     const root = tempRoot();
     const paths = getMarketplacePaths(root);
     try {
-      const owner = acquireMarketplaceLease(paths, {
-        staleMs: 10,
-        timeoutMs: 5_000,
-        retryMs: 1,
-      });
-      owner.release();
-
       for (const options of [
         { staleMs: 0 },
         { staleMs: Number.NaN },
@@ -275,6 +268,7 @@ describe('marketplace synchronous lease lifecycle', () => {
         expect(() => acquireMarketplaceLease(paths, options)).toThrow(
           MarketplaceValidationError,
         );
+        expect(existsSync(paths.lockDir)).toBe(false);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

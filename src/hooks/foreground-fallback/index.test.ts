@@ -12160,6 +12160,7 @@ describe('fallback restoration', () => {
     chain?: string[];
     unarmedHandoff?: boolean;
     quotaCooldownFilePath?: string;
+    v1?: boolean;
   }) {
     const info: {
       model:
@@ -12192,7 +12193,7 @@ describe('fallback restoration', () => {
       retryDelayMs: 0,
       input: {
         directory: '/test',
-        hostFlavor: 'v2',
+        hostFlavor: options?.v1 ? undefined : 'v2',
         client,
         experimental_v2: { switchModel },
       } as never,
@@ -12639,6 +12640,14 @@ describe('fallback restoration', () => {
         (call) => (call[0] as { path: { id: string } }).path.id === sid,
       ),
     ).toBe(true);
+  });
+
+  test('v1 host idle never restores through the v2 path', async () => {
+    const f = fixture({ v1: true });
+    await f.retry();
+    f.switchModel.mockClear();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).not.toHaveBeenCalled();
   });
 
   test('T7: v1 replay retains the failed model and variant', async () => {
