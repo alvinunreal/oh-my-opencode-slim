@@ -4,6 +4,7 @@ Slim requires **OpenCode 2.3.0 or newer**. Upgrade OpenCode before switching
 to this Slim release. For npm installations, use
 `npm install -g @opencode/cli@latest`. Then rerun the Slim installer to
 register it under OpenCode's `plugins` configuration.
+On OpenCode 1.x, pin `oh-my-opencode-slim@3.0.7` in the `plugin` list instead.
 
 OpenCode runs subagents in the background and reports each settled child
 period to its parent. [OpenCode 2.3 release notes](https://opencode.ai/changelog/v2.3.0)

@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { MINIMUM_OPENCODE_VERSION } from './config/opencode-version';
 
 type PackageManifest = {
   dependencies?: Record<string, string>;
+  engines?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   version?: string;
@@ -24,6 +26,12 @@ const openTuiSolidManifest = await readManifest(
 );
 
 describe('dependency compatibility contract', () => {
+  test('declares the same minimum OpenCode version as the runtime', () => {
+    expect(rootManifest.engines?.opencode).toBe(
+      `>=${MINIMUM_OPENCODE_VERSION}`,
+    );
+  });
+
   test('keeps OpenCode plugin and SDK on one exact version', () => {
     const pluginVersion = rootManifest.dependencies?.['@opencode-ai/plugin'];
     const sdkVersion = rootManifest.dependencies?.['@opencode-ai/sdk'];
