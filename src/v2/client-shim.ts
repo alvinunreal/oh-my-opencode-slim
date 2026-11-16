@@ -20,7 +20,6 @@ import { isRecord } from '../utils/guards';
 import {
   INTERNAL_INITIATOR_METADATA_KEY,
   isInternalInitiatorPart,
-  TERMINAL_DELTA_METADATA_KEY,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
 import { withTimeout } from '../utils/session';
@@ -29,10 +28,6 @@ import {
   recordInternalAdmission,
 } from './internal-admissions';
 import type { V2Context } from './types';
-
-const HISTORY_PAGE_SIZE = 100;
-const MAX_HISTORY_PAGES = 10;
-const HISTORY_READ_TIMEOUT_MS = 4_000;
 
 /** v2 model reference translated from a v1 prompt body. */
 export interface V2GenerateModelRef {
@@ -48,10 +43,6 @@ export interface ExperimentalV2 {
     sessionID: string,
     model: V2GenerateModelRef,
   ) => Promise<unknown>;
-  /** Queued prompts preserve caller-chosen message IDs in session.context. */
-  queuedPromptIdentity?: true;
-  /** Real host wait; not a snapshot, and not abortable by the 2.0.5 adapter. */
-  waitForSessionIdle?: (sessionID: string) => Promise<void>;
   /** Live host model registry (`ctx.model`): `list()` resolves the full
    * catalog ⊕ config view with per-model capabilities. Absent on hosts
    * without the domain. */
@@ -264,25 +255,7 @@ function internalInitiatorMetadataFromBody(
   const parts = Array.isArray(body.parts) ? body.parts : [];
   const internalParts = parts.filter((part) => isInternalInitiatorPart(part));
   if (internalParts.length === 0) return undefined;
-  // The completed-job run fence must survive the outbound metadata
-  // reduction; the existing parent-history consumer reads this exact key.
-  // Forward that key alone. Host persistence and inbound consumption are
-  // not proven by this shim.
-  const terminalDelta = internalParts
-    .map((part) =>
-      isRecord(part.metadata)
-        ? part.metadata[TERMINAL_DELTA_METADATA_KEY]
-        : undefined,
-    )
-    // First match: current producers attach one fence list to a single
-    // internal part. Merge if a producer ever splits fences across parts.
-    .find((value) => value !== undefined);
-  return {
-    [INTERNAL_INITIATOR_METADATA_KEY]: true,
-    ...(terminalDelta !== undefined
-      ? { [TERMINAL_DELTA_METADATA_KEY]: terminalDelta }
-      : {}),
-  };
+  return { [INTERNAL_INITIATOR_METADATA_KEY]: true };
 }
 
 /**
@@ -427,8 +400,7 @@ export function createSessionListShim(
   };
 }
 
-/** Build a v1-compatible input. Optional host idle-wait and one-shot generation
- * share experimental_v2; absent capabilities are never replaced with stubs. */
+/** Build a v1-compatible input without stubbing absent host capabilities. */
 export function buildPluginInput(
   ctx: V2Context,
   extras?: ExperimentalV2,
@@ -521,77 +493,6 @@ export function buildPluginInput(
                   message.type === 'compaction' &&
                   message.status === 'completed',
               );
-              // Compaction removes continuation baselines from context. Keep
-              // the terminal gate's identity fence by reading persisted history
-              // instead of attributing the newest answer without its baseline.
-              if (
-                cut &&
-                typeof args.historyBoundary === 'string' &&
-                args.historyBoundary.length > 0 &&
-                !raw.some((message) => message.id === args.historyBoundary) &&
-                typeof s.messages === 'function'
-              ) {
-                const history: Record<string, unknown>[] = [];
-                const cursors = new Set<string>();
-                const deadline = performance.now() + HISTORY_READ_TIMEOUT_MS;
-                const budgetError =
-                  '[v2] session.messages history read budget exceeded';
-                let pages = 0;
-                let cursor: string | undefined;
-                do {
-                  const remainingMs = deadline - performance.now();
-                  if (pages >= MAX_HISTORY_PAGES || remainingMs <= 0) {
-                    throw new Error(budgetError);
-                  }
-                  pages++;
-                  const page = await withTimeout(
-                    s.messages({
-                      sessionID: sessionIDOf(args),
-                      limit: HISTORY_PAGE_SIZE,
-                      order: 'desc',
-                      ...(cursor ? { cursor } : {}),
-                    }),
-                    remainingMs,
-                    budgetError,
-                  );
-                  if (performance.now() >= deadline) {
-                    throw new Error(budgetError);
-                  }
-                  if (
-                    !isRecord(page) ||
-                    !Array.isArray(page.data) ||
-                    page.data.length > HISTORY_PAGE_SIZE ||
-                    !page.data.every(isRecord)
-                  ) {
-                    throw new Error(
-                      '[v2] session.messages did not return a valid history page',
-                    );
-                  }
-                  history.push(...page.data);
-                  cursor =
-                    page.data.length > 0 &&
-                    isRecord(page.cursor) &&
-                    typeof page.cursor.next === 'string' &&
-                    page.cursor.next.length > 0
-                      ? page.cursor.next
-                      : undefined;
-                  if (
-                    page.data.some(
-                      (message) => message.id === args.historyBoundary,
-                    )
-                  ) {
-                    break;
-                  }
-                  if (cursor && cursors.has(cursor)) {
-                    throw new Error('[v2] session.messages repeated a cursor');
-                  }
-                  if (cursor) cursors.add(cursor);
-                } while (cursor);
-                return {
-                  data: history.reverse().map(toV1Message),
-                  page: { source: 'session.messages', complete: !cursor },
-                };
-              }
               const tail = hasLimit
                 ? raw.slice(Math.max(0, raw.length - Math.floor(limit)))
                 : raw;
@@ -903,7 +804,6 @@ export function buildPluginInput(
   };
 
   const directory = resolveV2Directory(ctx);
-  const wait = typeof s.wait === 'function' ? s.wait.bind(s) : undefined;
   const switchModel = s.switchModel?.bind(s);
   return {
     client,
@@ -916,21 +816,14 @@ export function buildPluginInput(
     worktree: directory,
     experimental_workspace: { register() {} },
     $: typeof Bun !== 'undefined' ? Bun.$ : undefined,
-    ...(extras?.modelDomain || wait || switchModel || (s.prompt && s.context)
+    ...(extras?.modelDomain || switchModel
       ? {
           experimental_v2: {
-            ...(s.prompt && s.context ? { queuedPromptIdentity: true } : {}),
             ...(extras?.modelDomain ? { modelDomain: extras.modelDomain } : {}),
             ...(switchModel
               ? {
                   switchModel: (sessionID: string, model: V2GenerateModelRef) =>
                     switchModel({ sessionID, model }),
-                }
-              : {}),
-            ...(wait
-              ? {
-                  waitForSessionIdle: (sessionID: string) =>
-                    wait({ sessionID }),
                 }
               : {}),
           },
