@@ -1598,17 +1598,11 @@ describe('plugin reload generation cleanup', () => {
     }
   });
 
-  test('a stale compaction mark cleared by the next user message leaves reminders intact', async () => {
+  test('an ordinary user message leaves reminders intact', async () => {
     const hooks = await createHooks();
     const sessionID = 'stale-mark-session';
     try {
       await registerOrchestrator(hooks, sessionID);
-      await hooks['experimental.session.compacting']?.(
-        { sessionID },
-        { context: [] },
-      );
-      // The compaction dies before its transform; the next ordinary user
-      // turn arrives and must not lose its reminders.
       await hooks['chat.message']?.(
         { sessionID, agent: 'orchestrator' } as never,
         {} as never,

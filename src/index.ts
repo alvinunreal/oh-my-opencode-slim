@@ -43,27 +43,19 @@ import {
 import type { createAbsolutePathRescueHook } from './hooks/absolute-path-rescue';
 import type { createApplyPatchHook } from './hooks/apply-patch';
 import type { createCacheMonitorHook } from './hooks/cache-monitor';
-import { stripTaggedContents } from './hooks/cache-safe-injection';
 import type { createChatHeadersHook } from './hooks/chat-headers';
 import { isCommandEnabled } from './hooks/command-hook-utils';
-import {
-  COUNCIL_INJECT_METADATA_KEY,
-  createCouncilInjectHook,
-} from './hooks/council-inject';
+import { createCouncilInjectHook } from './hooks/council-inject';
 import type { createCouncilSeatHook } from './hooks/council-seats';
 import type { createDeepworkCommandHook } from './hooks/deepwork';
 import {
   createDeepworkGoalHook,
   createDeepworkHeadGate,
-  GOAL_POINTER_METADATA_KEY,
 } from './hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from './hooks/foreground-fallback';
 import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { createMessageTransformView } from './hooks/message-transform-view';
-import {
-  createPhaseReminderHook,
-  PHASE_REMINDER_METADATA_KEY,
-} from './hooks/phase-reminder';
+import { createPhaseReminderHook } from './hooks/phase-reminder';
 import type { createReflectCommandHook } from './hooks/reflect';
 import type { createSearchPathGuardHook } from './hooks/search-path-guard';
 import { SessionLifecycle } from './hooks/session-lifecycle';
@@ -74,10 +66,7 @@ import type { createInterviewService } from './interview/service';
 import { retryMarketplaceLeases } from './marketplace/lease';
 import type { MarketplaceRegistryImplementation } from './marketplace/registry-runtime';
 import type { MarketplaceService } from './marketplace/service';
-import {
-  missingMarketplaceSkills,
-  skillIdsFromResponse,
-} from './marketplace/skills';
+import { missingMarketplaceSkills } from './marketplace/skills';
 import { resolveDesiredMarketplacePackageIds } from './marketplace/status';
 import { createBuiltinMcps, getOverriddenBuiltinMcpKeys } from './mcp';
 import type { createAcpRunTool } from './tools/acp-run';
@@ -131,9 +120,7 @@ import {
 import type { SessionTeamBundle } from './v2/session-presets';
 
 /**
- * Best-effort log to opencode's app logger.
- * Wrapped in try/catch to avoid deadlocking on opencode v1.4.8–v1.4.9
- * where client.app.log() during init triggers a middleware cycle.
+ * Best-effort log to opencode's app logger; logging errors are ignored.
  */
 async function appLog(
   ctx: Parameters<Plugin>[0],
@@ -339,7 +326,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
     },
   });
-  const compactingSessionIds = new Set<string>();
   const ownedTuiActivitySessions = new Map<string, string>();
   // Busy/retry arrived before the session's agent was known. chat.message
   // latches the agent and flushes these so the spinner still starts. The
@@ -711,10 +697,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       webfetch = createWebfetchTool(ctx);
     }
     sessionLifecycle = new SessionLifecycle(log);
-    sessionLifecycle.onSessionDeleted((sessionID) => {
-      compactingSessionIds.delete(sessionID);
-    });
-
     // Initialize hooks and wrapPostToolHook helper for error isolation
 
     // Wrap tool.execute.after handlers with per-hook error isolation.
@@ -934,13 +916,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    // v2 hosts skip wait_for_user: the native `question` tool covers the
-    // blocking boundary there. task_revive remains a v1-only recovery tool;
-    // v2 resumes retained sessions through native subagent(sessionID, prompt).
-    // v1 registration is unchanged; the generic disabled_tools filter below
-    // still removes either tool when listed. The interview tool follows the
-    // interviewEnabled master switch, disabled_commands and disabled_tools; a
-    // tool-level off skips the implementation import below.
+    // The interview tool follows the master switch, disabled_commands and
+    // disabled_tools; a tool-level off skips the implementation import.
     const shouldRegisterInterview =
       runtime.interviewEnabled &&
       !runtime.disabledCommands.has('interview') &&
@@ -1097,26 +1074,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // package IDs are ignored. This is distinct from an empty per-preset
   // activation list, which keeps the service running with nothing selected.
   const marketplaceEnabled = runtime.marketplaceEnabled;
-  let marketplaceSkillReader = async (): Promise<readonly string[]> =>
-    skillIdsFromResponse(
-      // The v1 SDK omits /skill, but its transport preserves host auth and in-process routing.
-      await (
-        ctx.client as unknown as {
-          _client: {
-            get(input: {
-              url: string;
-              query: { directory: string };
-              throwOnError: true;
-            }): Promise<unknown>;
-          };
-        }
-      )._client.get({
-        url: '/skill',
-        query: { directory: ctx.directory },
-        throwOnError: true,
-      }),
-      'name',
-    );
+  let marketplaceSkillReader = async (): Promise<readonly string[]> => {
+    throw new Error('Native skill inventory unavailable');
+  };
   const readMarketplaceSkillIds = async (): Promise<readonly string[]> => {
     try {
       return await withTimeout(
@@ -1937,7 +1897,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
       // User-authored MCP entries own their key (issue #1290): reconcile
       // the live export from the built-in set (not a one-way prune) so a
-      // removed override comes back and v1/v2 registration both see it.
+      // removed override comes back on the next registration.
       // Merge user-wins for opencodeConfig.mcp: built-ins only fill keys
       // the user did not set.
       const effectiveMcps: Record<string, unknown> = structuredClone(
@@ -1978,7 +1938,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           companionStartupAbort?.abort();
           marketplaceLeaseAbort.abort();
         }
-        // V1 token streams have no work in this fan-out.
+        // Text deltas have no work in this fan-out.
         const streamEventType = (input.event as { type?: string } | undefined)
           ?.type;
         if (streamEventType === 'message.part.delta') {
@@ -2349,16 +2309,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? { 'chat.headers': chatHeadersHook['chat.headers'] }
       : {}),
 
-    'chat.params': async () => {
-      if (marketplaceEnabled) await registryBridge.verifyMarketplaceSkills();
-    },
-
-    // v1 compaction requests use the same message transform as normal turns.
-    // v2 handles compaction in its separate session.compaction bridge.
-    'experimental.session.compacting': async ({ sessionID }) => {
-      compactingSessionIds.add(sessionID);
-    },
-
     // Track which agent each session uses (needed for serve-mode prompt
     // injection)
     'chat.message': async (
@@ -2390,13 +2340,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         parts?: unknown[];
       },
     ) => {
-      // A fresh user message proves no compaction transform is coming for a
-      // pending mark (the host runs compacting → transform back to back):
-      // drop it so a stale mark can never strip reminders from an ordinary
-      // turn. Fails safe — worst case the summary keeps the boilerplate,
-      // which is the pre-change behavior.
-      compactingSessionIds.delete(input.sessionID);
-
       // #1079: internal admissions (lifecycle wakes, terminal
       // notifications) must not overwrite the user's tracked selection.
       // Without this filter, a synthetic orchestrator wake flips a
@@ -2414,11 +2357,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           isInternalInitiatorPart(part) ||
           isNativeBackgroundTaskNotification(part),
       );
-      // v1 chat.message sees the internal parts but historically never
-      // recorded the message id, so the later message.updated could not
-      // classify the same admission (#1079 Oracle r2). Record it here
-      // so assistant replies (parentID) and message.updated share the
-      // registry the v2 shim already maintains.
+      // Record internal admissions so message.updated and assistant replies
+      // (parentID) use the v2 shim's shared registry (#1079).
       if (partsInternal && typeof messageID === 'string') {
         recordInternalAdmission(input.sessionID, messageID);
       }
@@ -2532,10 +2472,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       input: { sessionID?: string; agent?: unknown },
       output: { system: string[] },
     ): Promise<void> => {
-      // Request-scoped agent when the host provides one (the v2 context
-      // bridge forwards `event.agent`). v1 hosts only pass sessionID, so
-      // there we fall back to the session's tracked agent — which is the
-      // SESSION agent, not the request agent: auxiliary LLM requests
+      // Prefer the request-scoped agent forwarded by the v2 context bridge.
+      // Otherwise fall back to the tracked SESSION agent: auxiliary LLM requests
       // (title generation, compaction) run in the same session under
       // their own agent and must not receive orchestrator instructions.
       const requestAgent =
@@ -2619,12 +2557,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         collapseActiveInterviewHistory?.(typedOutput.messages);
         view = createMessageTransformView(typedOutput.messages);
       }
-      // Claim the mark synchronously: overlapping requests for this session
-      // must not both strip reminders after their first asynchronous step.
-      const compacting = sessionID
-        ? compactingSessionIds.delete(sessionID)
-        : false;
-
       for (const message of view.userMessages) {
         for (const part of message.parts) {
           if (part.type !== 'text' || typeof part.text !== 'string') {
@@ -2642,11 +2574,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // auto routing keys on the model that will actually serve this
       // request: vision-capable models keep image parts inline (native
       // read); only non-vision chains fall back to the observer relay.
-      // On v2 the context bridge passes the request model as `hints.model`
+      // The context bridge passes the request model as `hints.model`
       // (the host resolves it before the context hook, and a per-request
       // router may swap it) — that beats the session's last-recorded model.
-      // v1 hosts have no such seam, so the fallback chain and session
-      // metadata remain the source there.
       const hintModel = hints?.model
         ? { providerID: hints.model.providerID, id: hints.model.id }
         : undefined;
@@ -2665,7 +2595,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const acceptsImages =
         turnModelRef && hasImageParts
           ? await modelAcceptsImageInput(turnModelRef, {
-              client: ctx.client,
               modelDomain: (
                 ctx as {
                   experimental_v2?: ModelImageCapabilityDeps;
@@ -2730,13 +2659,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           typedOutput as never,
           createMessageTransformView(typedOutput.messages),
         );
-      }
-      if (compacting) {
-        stripTaggedContents(typedOutput.messages, [
-          PHASE_REMINDER_METADATA_KEY,
-          COUNCIL_INJECT_METADATA_KEY,
-          GOAL_POINTER_METADATA_KEY,
-        ]);
       }
     },
 

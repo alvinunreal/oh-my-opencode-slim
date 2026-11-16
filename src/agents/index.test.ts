@@ -1411,14 +1411,14 @@ describe('generated default permission availability', () => {
     expect(oracle.task_reply).toBe('deny');
   });
 
-  test('native lifecycle registers only task_cancel and task_status defaults', () => {
+  test('native lifecycle registers task-control defaults', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { mode: 'native' } }),
+      runtimeFor({ backgroundJobs: { mode: 'native' } }, 'v2'),
+      { hostFlavor: 'v2' },
     );
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
-    expect(Object.hasOwn(orchestrator, 'task_reply')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'task_revive')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'wait_for_user')).toBe(false);
   });
@@ -1470,13 +1470,6 @@ describe('generated default permission availability', () => {
       reply: false,
       report: false,
     },
-    {
-      hostFlavor: 'v1',
-      mode: 'native',
-      disabled: [],
-      reply: false,
-      report: false,
-    },
   ] as const)(
     '$hostFlavor $mode reply/report grants follow actual tool availability ($disabled)',
     ({ hostFlavor, mode, disabled, reply, report }) => {
@@ -1499,7 +1492,7 @@ describe('generated default permission availability', () => {
       for (const name of ['explorer', 'reviewer']) {
         expect(permissionsOf(agents, name).task_reply).toBe('deny');
         expect(permissionsOf(agents, name).task_report).toBe(
-          report || hostFlavor === 'v1' ? 'allow' : 'deny',
+          report ? 'allow' : 'deny',
         );
       }
     },
@@ -3092,7 +3085,7 @@ describe('observer dispatch instruction injection', () => {
       agents: { reviewer: { model: 'openai/gpt-5.5' } },
       council: councilConfig(),
     };
-    const agents = createAgents(runtimeFor(config), { hostFlavor: 'v2' });
+    const agents = createAgents(runtimeFor(config, 'v2'), { hostFlavor: 'v2' });
     for (const name of [
       'oracle',
       'explorer',
@@ -3108,15 +3101,10 @@ describe('observer dispatch instruction injection', () => {
       (agent) => agent.name === 'councillor-alpha',
     );
     expect(councillor?.config.permission).toMatchObject({ task: 'deny' });
-    const v1 = createAgents(runtimeFor(config), { hostFlavor: 'v1' });
-    const v1Permission = v1.find((agent) => agent.name === 'oracle')?.config
-      .permission;
-    expect(v1Permission).toBeDefined();
-    expect(v1Permission).not.toHaveProperty('task');
   });
 
-  test('advisory prompts gain the dispatch line only on v2 with observer enabled', () => {
-    const enabled = createAgents(runtimeFor({ disabled_agents: [] }), {
+  test('advisory prompts gain the dispatch line with observer enabled', () => {
+    const enabled = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
       hostFlavor: 'v2',
     });
     const oracleOn = enabled.find((a) => a.name === 'oracle');
@@ -3124,16 +3112,8 @@ describe('observer dispatch instruction injection', () => {
       'dispatch @observer with the file path',
     );
 
-    // v1 never gains the line, even with observer enabled: the host has no
-    // depth limit and children keep their pre-PR toolsets.
-    const v1 = createAgents(runtimeFor({ disabled_agents: [] }));
-    const oracleV1 = v1.find((a) => a.name === 'oracle');
-    expect(oracleV1?.config.prompt).not.toContain(
-      'dispatch @observer with the file path',
-    );
-
     const disabledSet = createAgents(
-      runtimeFor({ disabled_agents: ['observer'] }),
+      runtimeFor({ disabled_agents: ['observer'] }, 'v2'),
       { hostFlavor: 'v2' },
     );
     const oracleOff = disabledSet.find((a) => a.name === 'oracle');

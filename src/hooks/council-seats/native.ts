@@ -29,7 +29,6 @@ import type { PluginInput } from '@opencode-ai/plugin';
 
 import {
   attributeHostRoundToTranscript,
-  classifyTerminalEvidence,
   fetchChildTranscript,
   latestInputAtOf,
   terminalTextOf,
@@ -117,8 +116,6 @@ export function createNativeSeatResolver(
 ): SeatResultResolver {
   const budget = options.timeoutMs ?? DEFAULT_NATIVE_SEAT_TIMEOUT_MS;
   const clock = options.now ?? Date.now;
-  const v2 =
-    (input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
   const directory = input.directory;
 
   return async (parentSessionID, seats) => {
@@ -179,78 +176,36 @@ export function createNativeSeatResolver(
           );
         }
 
-        if (v2) {
-          const state = attributeHostRoundToTranscript(
-            hostRoundStateOf(info),
-            transcript,
-          );
-          const round = composeHostRound(state, childInputAt);
-          if (round.verdict === 'unreadable') {
-            return ambiguous(round.reason ?? 'host state unreadable', label);
-          }
-          if (round.verdict === 'incomplete') {
-            return {
-              kind: 'running',
-              reason: SEAT_REASONS.running,
-              ...(label ? { label } : {}),
-            };
-          }
-          if (round.verdict === 'error' || round.verdict === 'interrupted') {
-            return {
-              kind: 'error',
-              reason: SEAT_REASONS.error,
-              ...(label ? { label } : {}),
-            };
-          }
-          const text = terminalTextOf(transcript);
-          return text && text.trim() !== ''
-            ? { kind: 'completed', text, ...(label ? { label } : {}) }
-            : {
-                kind: 'empty',
-                reason: SEAT_REASONS.empty,
-                ...(label ? { label } : {}),
-              };
+        const state = attributeHostRoundToTranscript(
+          hostRoundStateOf(info),
+          transcript,
+        );
+        const round = composeHostRound(state, childInputAt);
+        if (round.verdict === 'unreadable') {
+          return ambiguous(round.reason ?? 'host state unreadable', label);
         }
-
-        const verdict = classifyTerminalEvidence(transcript);
-        switch (verdict.verdict) {
-          case 'completed': {
-            const text = verdict.text?.trim() ?? '';
-            return text !== ''
-              ? { kind: 'completed', text, ...(label ? { label } : {}) }
-              : {
-                  kind: 'empty',
-                  reason: SEAT_REASONS.empty,
-                  ...(label ? { label } : {}),
-                };
-          }
-          case 'error':
-            return {
-              kind: 'error',
-              reason: SEAT_REASONS.error,
-              ...(label ? { label } : {}),
-            };
-          case 'retry':
-            // `textless` is a finished turn without an answer; every other
-            // retry reason is a still-open round.
-            return verdict.reason === 'textless'
-              ? {
-                  kind: 'empty',
-                  reason: SEAT_REASONS.empty,
-                  ...(label ? { label } : {}),
-                }
-              : {
-                  kind: 'running',
-                  reason: SEAT_REASONS.running,
-                  ...(label ? { label } : {}),
-                };
-          case 'absent':
-            return {
-              kind: 'running',
-              reason: SEAT_REASONS.running,
-              ...(label ? { label } : {}),
-            };
+        if (round.verdict === 'incomplete') {
+          return {
+            kind: 'running',
+            reason: SEAT_REASONS.running,
+            ...(label ? { label } : {}),
+          };
         }
+        if (round.verdict === 'error' || round.verdict === 'interrupted') {
+          return {
+            kind: 'error',
+            reason: SEAT_REASONS.error,
+            ...(label ? { label } : {}),
+          };
+        }
+        const text = terminalTextOf(transcript);
+        return text && text.trim() !== ''
+          ? { kind: 'completed', text, ...(label ? { label } : {}) }
+          : {
+              kind: 'empty',
+              reason: SEAT_REASONS.empty,
+              ...(label ? { label } : {}),
+            };
       }),
     );
   };

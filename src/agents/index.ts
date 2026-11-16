@@ -746,7 +746,6 @@ function resolveSkillRules(
  * follow this set — generated denies are always retained. */
 function registeredDefaultToolNames(
   runtime: RuntimeConfig,
-  hostFlavor?: string,
 ): ReadonlySet<string> {
   const disabledTools = new Set(runtime.disabledTools);
   const registered = new Set<string>();
@@ -755,11 +754,7 @@ function registeredDefaultToolNames(
   };
   const taskControls =
     runtime.backgroundJobsMode === 'native'
-      ? [
-          'task_cancel',
-          'task_status',
-          ...(hostFlavor === 'v2' ? ['task_reply', 'task_report'] : []),
-        ]
+      ? ['task_cancel', 'task_status', 'task_reply', 'task_report']
       : [];
   for (const toolName of taskControls) register(toolName);
   if (runtime.interviewEnabled && !runtime.disabledCommands.has('interview')) {
@@ -805,7 +800,6 @@ function applyDefaultPermissions(
   registeredTools: ReadonlySet<string>,
   configuredSkills: readonly string[] | undefined,
   runtime: RuntimeConfig,
-  hostFlavor?: string,
   isPrimary = false,
   subagentScope?: readonly string[],
 ): void {
@@ -870,7 +864,7 @@ function applyDefaultPermissions(
             subagentScope.map((name) => [name, 'allow'] as const),
           ),
         }
-      : hostFlavor === 'v2' && !isPrimary
+      : !isPrimary
         ? { ...TASK_NO_NESTED_DISPATCH }
         : undefined);
 
@@ -882,16 +876,14 @@ function applyDefaultPermissions(
       existing.task_report ??
       (isPrimary ||
       existing['*'] === 'deny' ||
-      (hostFlavor === 'v2' && !registeredTools.has('task_report'))
+      !registeredTools.has('task_report')
         ? 'deny'
         : 'allow'),
     // Stance defaults above: an explicit `task` entry wins, then the
     // compiled scope, then the nested-dispatch deny for non-primaries —
     // the compiled v2 permission base allows every unmatched action, so an
     // absent entry would let any child spawn once the host depth limit is
-    // raised. The nested-dispatch deny applies to v2 non-primaries only
-    // (v1 stays untouched); the compiled scope is emitted on every host
-    // flavor (v1 and v2 both evaluate per-name `task` maps).
+    // raised.
     ...(taskStance !== undefined ? { task: taskStance } : {}),
     question: questionPerm,
     ...pluginDefaultPermissions,
@@ -989,7 +981,7 @@ function createAgentViews(
   // build no permissions at all, matching their skipped factory prompts).
   const registeredTools = inferenceOnly
     ? EMPTY_REGISTERED_TOOLS
-    : registeredDefaultToolNames(runtime, options?.hostFlavor);
+    : registeredDefaultToolNames(runtime);
   // Skill grants as the routing block shows them: same resolver as the
   // enforced permissions, so the orchestrator never briefs a skill the
   // delegate cannot load. String-shorthand permissions bypass the resolver.
@@ -1012,12 +1004,7 @@ function createAgentViews(
     // The bare councillor is only meaningful as part of configured Council Mode.
     disabled.add('councillor');
   }
-  // Observer dispatch requires a v2 host and an enabled observer. The v1 host
-  // enables a child's task tool whenever its permission carries ANY task rule — with
-  // no depth limit — so emitting stances there would change every advisor's
-  // toolset for nothing.
-  const nestedDispatchEnabled =
-    options?.hostFlavor === 'v2' && !disabled.has('observer');
+  const nestedDispatchEnabled = !disabled.has('observer');
   // Explicitly disabling the council agent disables the whole chain: the
   // injected procedure dispatches seats and then delegates synthesis to
   // the council agent, so seats/pointer/hook without it would dangle.
@@ -1087,7 +1074,7 @@ function createAgentViews(
         );
       }
       if (!inferenceOnly && !nestedDispatchEnabled) {
-        // v1 omits object stances; v2 denies dispatch without an observer.
+        // Deny nested dispatch without an observer.
         const permission = agent.config.permission as
           | Record<string, unknown>
           | undefined;
@@ -1097,11 +1084,7 @@ function createAgentViews(
           typeof permission.task === 'object'
         ) {
           const rest = { ...permission };
-          if (options?.hostFlavor === 'v2') {
-            rest.task = { ...TASK_NO_NESTED_DISPATCH };
-          } else {
-            delete rest.task;
-          }
+          rest.task = { ...TASK_NO_NESTED_DISPATCH };
           agent.config.permission = rest as typeof agent.config.permission;
         }
       }
@@ -1269,7 +1252,6 @@ function createAgentViews(
         registeredTools,
         override?.skills,
         runtime,
-        options?.hostFlavor,
       );
     }
     return agent;
@@ -1287,7 +1269,6 @@ function createAgentViews(
         registeredTools,
         override?.skills,
         runtime,
-        options?.hostFlavor,
       );
     }
     return agent;
@@ -1295,21 +1276,15 @@ function createAgentViews(
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
     if (!inferenceOnly) {
-      applyDefaultPermissions(
-        agent,
-        registeredTools,
-        undefined,
-        runtime,
-        options?.hostFlavor,
-      );
+      applyDefaultPermissions(agent, registeredTools, undefined, runtime);
     }
     return agent;
   });
 
   // Build dynamic councillor agents from council config (flatten mode).
   // Each councillor becomes a dispatchable subagent with its own model,
-  // so the orchestrator can delegate to them with the host delegation tool
-  // (`task()` on v1, `subagent()` on v2) with native panes at depth 1.
+  // so the orchestrator can delegate to them via `subagent()` with native
+  // panes at depth 1.
   // Only a *configured* color is inherited: councillor override first, then
   // council override. No default fallback — unconfigured councillors stay
   // colorless so the host TUI palette keeps assigning distinct colors.
@@ -1331,13 +1306,7 @@ function createAgentViews(
         agent.config.permission,
         registeredTools,
       );
-      applyDefaultPermissions(
-        agent,
-        registeredTools,
-        undefined,
-        runtime,
-        options?.hostFlavor,
-      );
+      applyDefaultPermissions(agent, registeredTools, undefined, runtime);
     }
     return agent;
   });
@@ -1447,7 +1416,6 @@ function createAgentViews(
       registeredTools,
       orchestratorOverride?.skills,
       runtime,
-      options?.hostFlavor,
       true,
       orchestratorScope,
     );

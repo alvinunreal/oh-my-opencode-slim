@@ -586,27 +586,6 @@ describe('nested-dispatch default', () => {
     expect(permission.task).toEqual({ '*': 'deny' });
   });
 
-  test('v1 hosts carry no nested-dispatch entries at all', () => {
-    const agents = createAgents(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          reviewer: {
-            model: 'openai/gpt-6',
-            prompt: 'You are the custom reviewer agent.',
-          },
-        },
-      }),
-    );
-    for (const agent of agents) {
-      const permission = (agent.config.permission ?? {}) as Record<
-        string,
-        unknown
-      >;
-      expect(permission.task).toBeUndefined();
-    }
-  });
-
   test('the orchestrator is exempt from the nested-dispatch default', () => {
     const agents = createAgents(runtimeFor({}));
     const orchestrator = agents.find((agent) => agent.name === 'orchestrator');

@@ -263,7 +263,6 @@ describe('cache-safety: pipeline drift guard', () => {
       'collapseActiveInterviewHistory?.(typedOutput.messages);',
     );
     expect(source).toContain('let view = createMessageTransformView(');
-    expect(source).toContain('stripTaggedContents(typedOutput.messages, [');
 
     // One handler definition plus the three remaining dispatch calls above.
     const literalCount = source.split(
