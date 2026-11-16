@@ -2352,7 +2352,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    const featureGates = resolveFeatureGates(preFlightConfig, 'v2');
+    const featureGates = resolveFeatureGates(preFlightConfig);
     const presetRoutingEnabled = featureGates.presetRouting;
 
     log('[v2] setup invoked', {
@@ -2756,33 +2756,27 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       };
       try {
         if (typeof ctx.mcp?.transform !== 'function') {
-          log(
-            '[v2] ctx.mcp.transform unavailable; skipping MCP snapshot (v1 host embedded v2 core)',
-          );
-          // Degrade gracefully: v1 hosts with embedded v2 core don't provide
-          // full v2 context. This is expected and non-fatal.
-          hostMcpSnapshot = {};
-        } else {
-          const reg = await ctx.mcp.transform((draft) => {
-            const configured = draft.list();
-            if (!Array.isArray(configured)) {
-              throw new Error('MCP configuration draft returned no inventory');
-            }
-            hostMcpSnapshot = Object.fromEntries(configured);
-            for (const [name, config] of Object.entries(mcps)) {
-              // User/host-configured namespaces own their key (issue #1290):
-              // never inject a built-in over an existing entry.
-              if (Object.hasOwn(hostMcpSnapshot, name)) continue;
-              draft.set(name, adaptMcpServer(config));
-            }
-            if (pendingAgentDraft) finalizeAgentDraft(pendingAgentDraft);
-            if (agentPassDeferred && permissionSnapshotReady) {
-              agentPassDeferred = false;
-              requestAgentRebuild();
-            }
-          });
-          disposers.push(() => reg.dispose());
+          throw new Error('ctx.mcp.transform is unavailable');
         }
+        const reg = await ctx.mcp.transform((draft) => {
+          const configured = draft.list();
+          if (!Array.isArray(configured)) {
+            throw new Error('MCP configuration draft returned no inventory');
+          }
+          hostMcpSnapshot = Object.fromEntries(configured);
+          for (const [name, config] of Object.entries(mcps)) {
+            // User/host-configured namespaces own their key (issue #1290):
+            // never inject a built-in over an existing entry.
+            if (Object.hasOwn(hostMcpSnapshot, name)) continue;
+            draft.set(name, adaptMcpServer(config));
+          }
+          if (pendingAgentDraft) finalizeAgentDraft(pendingAgentDraft);
+          if (agentPassDeferred && permissionSnapshotReady) {
+            agentPassDeferred = false;
+            requestAgentRebuild();
+          }
+        });
+        disposers.push(() => reg.dispose());
       } catch (err) {
         throw new Error(
           'Unable to snapshot configured MCP namespaces: this host cannot ' +
@@ -3326,14 +3320,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         });
       }
 
-      // Skip session hook registration if ctx.session is unavailable (v1 host
-      // embedded v2 core with limited context). On full v2 contexts, session
-      // hooks are required and registration failures fail setup.
-      if (!ctx.session) {
-        log(
-          '[v2] ctx.session unavailable; skipping session hooks (v1 host embedded v2 core)',
-        );
-      } else {
+      if (ctx.session) {
         // Native per-admission prompt hook (v2): `session.prompt` fires once
         // per admitted input with the eventual inbox User messageID — the
         // identity v1 chat.message consumers key on. With it registered the
@@ -4048,8 +4035,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         } catch (err) {
           log('[v2] event.subscribe failed', String(err));
         }
-      } // end if (ctx.session) check
-
+      } else {
+        throw new Error('ctx.session is unavailable');
+      }
       // ── Health check: surface silent zero-registration failures ──
       // Every bridge is fail-soft; without this, a fully broken registration
       // would look like a successful load with an empty session.

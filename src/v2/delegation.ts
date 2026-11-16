@@ -1,8 +1,6 @@
 /** Normalize native v2 delegation for shared tool guards and inference policy.
  * The host remains the sole owner of child jobs and completion delivery. */
 
-import { type DelegationVocabulary, delegationVocabulary } from './adapters';
-
 export const DELEGATION_TOOL_V2 = 'subagent';
 const DELEGATION_TOOL_V1 = 'task';
 
@@ -56,18 +54,7 @@ export function v1ArgsToSubagent(
   return out;
 }
 
-/** Host-aware delegation wording for model-visible guidance: the native
- * delegation tool plus its agent-selector and existing-session parameters,
- * derived from `delegationVocabulary` so the v1/v2 mapping has a single
- * source: v2 → `subagent` / `agent` / `sessionID`; v1 and any unknown
- * flavor → `task` / `subagent_type` / `task_id`. The control tools (`task_*`)
- * share the same identifier param (`controlParamName`). The host's model
- * param is vocabulary-internal and never reaches model-visible guidance. */
-export type DelegationWording = Omit<DelegationVocabulary, 'modelParam'>;
-
-export function delegationWording(
-  hostFlavor: string | undefined,
-): DelegationWording {
-  const { tool, agentParam, resumeParam } = delegationVocabulary(hostFlavor);
-  return { tool, agentParam, resumeParam };
+/** Host delegation tool and its agent-selector and session parameters. */
+export function delegationWording() {
+  return { tool: 'subagent', agentParam: 'agent', resumeParam: 'sessionID' };
 }

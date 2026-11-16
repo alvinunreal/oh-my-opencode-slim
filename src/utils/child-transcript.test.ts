@@ -6,7 +6,6 @@ import {
   attributeHostRoundToTranscript,
   classifyAssistantTurnEvidence,
   classifyMigratedV1Round,
-  classifyTerminalEvidence,
   diagnosticTail,
   fetchChildTranscript,
   latestInputAtOf,
@@ -468,43 +467,6 @@ describe('classifyAssistantTurnEvidence', () => {
     );
     // Whole-string trim only: inner padding between parts is preserved.
     expect(evidence).toEqual({ kind: 'ready', text: 'first  \n\nsecond' });
-  });
-});
-
-describe('classifyTerminalEvidence', () => {
-  test('a role-less message after the baseline is unrecognized, never an answer', () => {
-    const response = {
-      data: [
-        message({ id: 'base', role: 'user' }),
-        {
-          info: { id: 'odd', time: { completed: 5 } },
-          parts: [{ type: 'text', text: 'the answer' }],
-        },
-      ],
-    };
-    expect(
-      classifyTerminalEvidence(response, { baselineMessageID: 'base' }),
-    ).toEqual({ verdict: 'retry', reason: 'unrecognized segment shape' });
-  });
-
-  test('a compaction round after the baseline is not the answer', () => {
-    const summary = message({
-      id: 'sum',
-      finish: 'stop',
-      completed: 9,
-      parts: [{ type: 'text', text: 'SUMMARY' }],
-    });
-    const response = {
-      data: [
-        message({ id: 'base', role: 'user' }),
-        message({ id: 'main', finish: 'stop', completed: 5 }),
-        message({ id: 'cut', role: 'user', parts: [{ type: 'compaction' }] }),
-        { ...summary, info: { ...summary.info, summary: true } },
-      ],
-    };
-    expect(
-      classifyTerminalEvidence(response, { baselineMessageID: 'base' }),
-    ).toEqual({ verdict: 'completed', text: 'the answer' });
   });
 });
 

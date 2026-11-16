@@ -247,7 +247,7 @@ export class RuntimeConfig {
     pluginConfig: ResolvedPluginConfig,
     hostFlavor?: string,
   ): void {
-    const featureGates = resolveFeatureGates(pluginConfig, hostFlavor);
+    const featureGates = resolveFeatureGates(pluginConfig);
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
     this.hostFlavor = hostFlavor;
     this.featureGatesCache = featureGates;
@@ -282,10 +282,7 @@ export class RuntimeConfig {
    * current config generation; unseeded instances expose the defaults.
    */
   get featureGates(): Readonly<FeatureGates> {
-    this.featureGatesCache ??= resolveFeatureGates(
-      this.pluginConfig,
-      this.hostFlavor,
-    );
+    this.featureGatesCache ??= resolveFeatureGates(this.pluginConfig);
     return this.featureGatesCache;
   }
 
@@ -494,11 +491,6 @@ export class RuntimeConfig {
    */
   get backgroundJobsMode(): FeatureGates['backgroundJobsMode'] {
     return this.featureGates.backgroundJobsMode;
-  }
-
-  /** True only for the managed lifecycle (`mode: "managed"`). */
-  get backgroundJobsEnabled(): boolean {
-    return this.featureGates.managedJobs;
   }
 
   get interviewEnabled(): boolean {

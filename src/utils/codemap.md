@@ -20,7 +20,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 - **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the OpenCode session-status map with absent/unknown distinction and reduces the `session.get` outcome/idleAt projection to terminal/pending/unknown verdicts for v2 recovery triage (`hostRoundStateOf`).
 - **Session Info Read** (`session-info-read.ts`): `raceEvidenceDeadline` bounds a host read for its waiter without cancelling the underlying read; tests can inject its timer seam.
 - **Session Metadata** (`session-metadata.ts`): Bounded session → agent/directory map with LRU eviction and active orchestrator protection
-- **Child Transcript** (`child-transcript.ts`): Child session transcript evidence extraction and terminal evidence classification. A marker-free migrated v1 history retains its v1 closure for untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it. Diagnostic tails enforce UTF-8 budgets in one pass.
+- **Child Transcript** (`child-transcript.ts`): Extracts transcripts and classifies rounds through `classifyAssistantTurnEvidence`, `classifyCurrentDeliveredRound`, and `classifyMigratedV1Round`. A marker-free migrated v1 history retains its v1 closure for untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it. Diagnostic tails enforce UTF-8 budgets in one pass.
 - **Host Transcript Attribution** (`child-transcript.ts`, `attributeHostRoundToTranscript`): Validates parsed host terminal evidence against assistant creation/completion after the latest delivered input; newer activity stays pending and unreadable timestamps stay unknown. Recovery and untracked reads retain the shared host-round parser/composer.
 - **TestTimers** (`test-timers.ts`): Test-only deterministic timer harness (manual clock, injected `setTimeout`/`clearTimeout` seams, zero-duration `tick` drain); wire into timer-seam components, see AGENTS.md "Test Time"
 - **JSDOM Probe** (`jsdom.ts`): JSDOM runtime detection without making it a prerequisite
@@ -60,7 +60,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 ### Child Transcript Flow
 1. fetchChildTranscript() retrieves child session messages via SDK
 2. classifyAssistantTurnEvidence() evaluates each turn for completion
-3. verdictFromEvidence() produces terminal evidence verdict
+3. Host outcome and transcript attribution compose the current-round verdict; migrated v1 history uses classifyMigratedV1Round()
 
 ### Logging Flow
 1. The first plugin instance in a process calls initLogger() — the sink is

@@ -659,7 +659,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       activePresetName,
     );
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
-    const delegation = delegationWording(hostFlavor);
+    const delegation = delegationWording();
     // Slash-command hooks are lifecycle-independent, but disabled commands
     // need neither a handler nor its captured state.
     const commandOptions = {
@@ -1753,7 +1753,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     name: 'oh-my-opencode-slim',
     // v2-only extension hook: re-read the plugin config and resolve the
     // inference/runtime profiles for new child sessions + the sidebar.
-    // Unknown to v1 hosts, consumed by src/v2/setup.ts.
+    // Consumed by src/v2/setup.ts.
     'v2.refreshProfiles': refreshProfilesFromDisk,
     'v2.resolveDelegatedModel': resolveV2DelegatedModel,
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => {

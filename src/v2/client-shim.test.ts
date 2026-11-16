@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isUserMessageWithParts } from '../hooks/types';
-import { classifyTerminalEvidence } from '../utils/child-transcript';
+import { readUntrackedEvidence } from '../tools/untracked-task-observation';
 import { createInternalAgentTextPart } from '../utils/internal-initiator';
 import { buildPluginInput } from './client-shim';
 import type { V2Context } from './types';
@@ -1672,15 +1672,14 @@ describe('v2 client shim foreground-fallback integration', () => {
         ],
       } as never),
     );
-    const result = await input.client.session.messages({
-      path: { id: 'child' },
+    const { round } = await readUntrackedEvidence({ input }, 'child', {
+      outcome: 'succeeded',
+      time: { idle: 6 },
     });
-    expect(
-      classifyTerminalEvidence(result, {
-        runStartedAt: 1,
-        terminalOutcomeConfirmed: true,
-      }),
-    ).toEqual({ verdict: 'completed', text: 'CHILD_OK' });
+    expect({ verdict: round?.verdict, text: round?.text }).toEqual({
+      verdict: 'completed',
+      text: 'CHILD_OK',
+    });
   });
 
   test('messages preserves assistant error and finish state for failed turns', async () => {

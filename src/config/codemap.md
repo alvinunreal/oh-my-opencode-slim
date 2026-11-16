@@ -25,7 +25,7 @@ The config system follows a layered architecture:
 | Abstraction | Purpose | Location |
 |-------------|---------|----------|
 | `PluginConfig` | Root configuration object with agents, presets, and feature flags | schema.ts |
-| `FeatureGates` | Frozen host-aware optional-subsystem projection: V1 defaults to managed, V2 to native; explicit V2 managed is rejected before construction | feature-gates.ts |
+| `FeatureGates` | Frozen optional-subsystem projection; defaults to native and rejects a direct managed-mode seed | feature-gates.ts |
 | `AgentOverrideConfig` | Per-agent configuration (model, temperature, skills, MCPs) | schema.ts |
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |

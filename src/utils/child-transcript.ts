@@ -195,33 +195,6 @@ function isCompactionRound(message: TranscriptMessage): boolean {
   );
 }
 
-export type TerminalEvidenceVerdict =
-  | { verdict: 'completed'; text: string }
-  | { verdict: 'error'; text: string; aborted?: true }
-  | { verdict: 'absent' }
-  | { verdict: 'retry'; reason: string };
-
-function verdictFromEvidence(
-  evidence: ChildTerminalEvidence,
-): TerminalEvidenceVerdict {
-  switch (evidence.kind) {
-    case 'ready':
-      return { verdict: 'completed', text: evidence.text };
-    case 'error':
-      return {
-        verdict: 'error',
-        text: evidence.errorText,
-        ...(evidence.aborted ? { aborted: true } : {}),
-      };
-    case 'pending':
-      return { verdict: 'retry', reason: 'pending' };
-    case 'textless':
-      return { verdict: 'retry', reason: 'textless' };
-    default:
-      return { verdict: 'retry', reason: 'unrecognized segment shape' };
-  }
-}
-
 /** Host-ordered entries of a v1-style messages response, or why they are
  * unusable. */
 function transcriptEntries(
@@ -252,103 +225,6 @@ function transcriptEntries(
       return { reason: 'malformed transcript parts' };
   }
   return response.data;
-}
-
-/** A valid absence is not unknown evidence. Never scan through a user prompt
- * or pending assistant placeholder to recover the previous attempt's answer. */
-export function classifyTerminalEvidence(
-  response: unknown,
-  options: {
-    baselineMessageID?: string;
-    /** An admitted queued user input, not a pre-send history watermark. */
-    promptMessageID?: string;
-    runStartedAt?: number;
-    terminalOutcomeConfirmed?: boolean;
-  } = {},
-): TerminalEvidenceVerdict {
-  const all = transcriptEntries(response);
-  if (!Array.isArray(all)) return { verdict: 'retry', reason: all.reason };
-  if (options.promptMessageID) {
-    const prompt = all.findIndex(
-      (message) =>
-        message.info?.id === options.promptMessageID &&
-        message.info?.role === 'user',
-    );
-    if (prompt < 0)
-      return { verdict: 'retry', reason: 'queued prompt not delivered' };
-    const nextPrompt = all.findIndex(
-      (message, index) => index > prompt && message.info?.role === 'user',
-    );
-    const turn = all.slice(prompt, nextPrompt < 0 ? undefined : nextPrompt);
-    let target = turn.length - 1;
-    while (target > 0 && turn[target].info?.role !== 'assistant') target--;
-    if (target === 0)
-      return { verdict: 'retry', reason: 'queued prompt has no answer yet' };
-    return verdictFromEvidence(
-      classifyAssistantTurnEvidence(turn, target, 0, true),
-    );
-  }
-  if (options.baselineMessageID) {
-    const baseline = all.findIndex(
-      (message) => message.info?.id === options.baselineMessageID,
-    );
-    if (baseline < 0)
-      return { verdict: 'retry', reason: 'baseline message missing' };
-    const segment = all.slice(baseline + 1);
-    let target = segment.length - 1;
-    // Compaction rounds are skipped in place: the anchor and indices hold.
-    while (target >= 0) {
-      const role = segment[target].info?.role;
-      if (
-        !isCompactionRound(segment[target]) &&
-        (typeof role !== 'string' || role === 'assistant' || role === 'user')
-      )
-        break;
-      target -= 1;
-    }
-    if (target < 0) return { verdict: 'absent' };
-    if (segment[target].info?.role === 'user') {
-      return segment.some((message) => message.info?.role === 'assistant')
-        ? { verdict: 'retry', reason: 'user message after last assistant' }
-        : { verdict: 'absent' };
-    }
-    return verdictFromEvidence(
-      classifyAssistantTurnEvidence(
-        all,
-        baseline + 1 + target,
-        baseline,
-        !options.terminalOutcomeConfirmed,
-      ),
-    );
-  }
-  let target = all.length - 1;
-  while (
-    target >= 0 &&
-    (all[target].info?.role === 'system' || isCompactionRound(all[target]))
-  )
-    target--;
-  const trailing = all[target];
-  if (!trailing || trailing.info?.role === 'user') return { verdict: 'absent' };
-  if (trailing.info?.role !== 'assistant')
-    return {
-      verdict: 'retry',
-      reason: 'no baseline; cannot attribute a historical assistant turn',
-    };
-  const completedAt = trailing.info?.time?.completed;
-  if (
-    options.runStartedAt !== undefined &&
-    typeof completedAt === 'number' &&
-    completedAt < options.runStartedAt
-  )
-    return { verdict: 'absent' };
-  return verdictFromEvidence(
-    classifyAssistantTurnEvidence(
-      all,
-      target,
-      -1,
-      !options.terminalOutcomeConfirmed,
-    ),
-  );
 }
 
 function isHostAbortError(error: unknown): boolean {
