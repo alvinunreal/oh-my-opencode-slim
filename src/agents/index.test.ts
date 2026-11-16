@@ -2835,7 +2835,7 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
   test('accepts backgroundJobs config', () => {
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: {
-        maxSessionsPerAgent: 2,
+        mode: 'native',
       },
     });
 

@@ -2,8 +2,67 @@ import { describe, expect, test } from 'bun:test';
 import {
   resolveFeatureGates,
   UnsupportedHostConfigError,
+  validateExplicitHostConfig,
 } from './feature-gates';
 import type { PluginConfig } from './schema';
+
+test('explicit positive managed limits are refused with their full paths', () => {
+  const cases = [
+    [
+      { concurrency: { providerConcurrency: { openai: 2 } } },
+      'concurrency.providerConcurrency.openai',
+      2,
+    ],
+    [
+      { concurrency: { modelConcurrency: { 'openai/model': 3 } } },
+      'concurrency.modelConcurrency.openai/model',
+      3,
+    ],
+    [
+      { concurrency: { defaultConcurrency: 4 } },
+      'concurrency.defaultConcurrency',
+      4,
+    ],
+    [{ wallClockTimeoutMs: 900000 }, 'wallClockTimeoutMs', 900000],
+  ] as const;
+  for (const [backgroundJobs, key, value] of cases) {
+    const validate = () =>
+      validateExplicitHostConfig({ backgroundJobs }, 'v2', '/config/slim.json');
+    expect(validate).toThrow(UnsupportedHostConfigError);
+    expect(validate).toThrow('/config/slim.json');
+    expect(validate).toThrow(`backgroundJobs.${key}`);
+    expect(validate).toThrow(String(value));
+    expect(validate).toThrow('then run /reload');
+  }
+});
+
+test('reports every positive managed limit in one error', () => {
+  const validate = () =>
+    validateExplicitHostConfig(
+      {
+        backgroundJobs: {
+          wallClockTimeoutMs: 900000,
+          concurrency: {
+            defaultConcurrency: 4,
+            providerConcurrency: { openai: 2 },
+            modelConcurrency: { 'openai/model': 3 },
+          },
+        },
+      },
+      'v2',
+      '/config/slim.json',
+    );
+
+  expect(validate).toThrow('/config/slim.json');
+  expect(validate).toThrow('backgroundJobs.wallClockTimeoutMs = 900000');
+  expect(validate).toThrow('backgroundJobs.concurrency.defaultConcurrency = 4');
+  expect(validate).toThrow(
+    'backgroundJobs.concurrency.providerConcurrency.openai = 2',
+  );
+  expect(validate).toThrow(
+    'backgroundJobs.concurrency.modelConcurrency.openai/model = 3',
+  );
+});
 
 describe('resolveFeatureGates', () => {
   test('defaults every optional subsystem on with managed background jobs on v1 / undefined host', () => {

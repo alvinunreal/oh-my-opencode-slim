@@ -235,7 +235,8 @@ The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
 lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
-child progress reporting. V2 rejects the V1-only `"managed"` mode.
+child progress reporting. V2 applies the old `"managed"` mode as `"native"`
+with a warning.
 With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
 bindings and all OMOS task tools are disabled, while the configured global
 preset still selects the agent settings registered at startup.

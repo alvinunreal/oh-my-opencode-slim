@@ -26,7 +26,7 @@ import {
 } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
 import {
-  isSupportedOpenCodeVersion,
+  classifyOpenCodeVersion,
   MINIMUM_OPENCODE_VERSION,
   parseOpenCodeVersion,
 } from '../config/opencode-version';
@@ -2239,13 +2239,16 @@ function assertSupportedV2Host(ctx: V2Context): void {
   const rawVersion = ctx?.app?.version;
   const version =
     typeof rawVersion === 'string' ? parseOpenCodeVersion(rawVersion) : null;
-  if (!version) {
-    log('[v2] host version is not semver; skipping minimum check', {
+  const classification = classifyOpenCodeVersion(
+    typeof rawVersion === 'string' ? rawVersion : '',
+  );
+  if (classification === 'unknown') {
+    log('[v2] host version is preview or not semver; skipping minimum check', {
       version: rawVersion,
     });
     return;
   }
-  if (!isSupportedOpenCodeVersion(version)) {
+  if (classification === 'unsupported') {
     throw new Error(
       `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_OPENCODE_VERSION} or newer. Update with npm install -g @opencode/cli@latest.`,
     );
@@ -2285,7 +2288,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     // setup still needs the directory for config loading and tool adapters.
     const directory = resolveV2Directory(ctx);
     // Validate the host-specific config before claiming a location or wiring
-    // any registration. Unsupported managed mode must fail setup, not degrade.
+    // any registration. Unsupported positive limits must fail setup, not degrade.
     const startupConfigSnapshot = readPluginConfigSnapshot(directory, {
       hostFlavor: 'v2',
     });

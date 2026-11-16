@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { isSupportedOpenCodeVersion } from '../config/opencode-version';
+import { classifyOpenCodeVersion } from '../config/opencode-version';
 
 const VERSION_COMMAND_TIMEOUT_MS = 2000;
 
@@ -117,14 +117,12 @@ function getOpenCodePaths(
 
 export function findOpenCode(
   environment: NodeJS.ProcessEnv = process.env,
-): { path: string; version: string; hostFlavor: 'v1' | 'v2' } | null {
+): { path: string; version: string } | null {
   const paths = [
     resolvePathCommand('opencode', environment) ?? 'opencode',
     ...getOpenCodePaths(environment),
   ];
-  let unsupported:
-    | { path: string; version: string; hostFlavor: 'v1' | 'v2' }
-    | undefined;
+  let unsupported: { path: string; version: string } | undefined;
   for (const path of new Set(paths)) {
     if (!path) continue;
     try {
@@ -137,13 +135,8 @@ export function findOpenCode(
       });
       if (result.status === 0) {
         const version = result.stdout.trim();
-        const major = version.match(/(?:^|\s)v?(\d+)\./)?.[1];
-        const host = {
-          path,
-          version,
-          hostFlavor: Number(major) >= 2 ? 'v2' : 'v1',
-        } as const;
-        if (isSupportedOpenCodeVersion(version)) return host;
+        const host = { path, version };
+        if (classifyOpenCodeVersion(version) !== 'unsupported') return host;
         unsupported ??= host;
       }
     } catch {

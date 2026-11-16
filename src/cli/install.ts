@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import {
-  isSupportedOpenCodeVersion,
+  classifyOpenCodeVersion,
   MINIMUM_OPENCODE_VERSION,
 } from '../config/opencode-version';
 import { getExistingLiteConfigPath } from '../config/paths';
@@ -101,7 +101,7 @@ async function askToStarRepo(config: InstallConfig): Promise<void> {
   }
 }
 
-function checkOpenCodeInstalled(
+export function checkOpenCodeInstalled(
   host: ReturnType<typeof findOpenCode>,
 ): boolean {
   if (!host) {
@@ -134,12 +134,18 @@ function checkOpenCodeInstalled(
     return false;
   }
   const version = host.version.replace(/^opencode\s+/i, '');
-  if (!isSupportedOpenCodeVersion(version)) {
+  const classification = classifyOpenCodeVersion(host.version);
+  if (classification === 'unsupported') {
     printError(
       `OpenCode ${version} is unsupported. Update to OpenCode ${MINIMUM_OPENCODE_VERSION} or newer with ` +
         'npm install -g @opencode/cli@latest.',
     );
     return false;
+  }
+  if (classification === 'unknown') {
+    console.log(
+      `${SYMBOLS.warn} Cannot verify OpenCode version ${version}; continuing.`,
+    );
   }
   const pathInfo = ` (${DIM}${host.path}${RESET})`;
   printSuccess(`OpenCode ${version} detected${pathInfo}`);

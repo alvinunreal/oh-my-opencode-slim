@@ -419,7 +419,7 @@ const AGENTS = [
   'observer',
   'council',
 ];
-function pluginConfig(mode: Mode | 'managed') {
+function pluginConfig(mode: Mode) {
   return {
     preset: 'local-lifecycle',
     presets: {
@@ -548,11 +548,7 @@ class Host {
       OPENCODE_DISABLE_FFF: 'true',
     };
   }
-  async configure(
-    installed: string,
-    mode: Mode | 'managed',
-    customConfig?: RecordValue,
-  ) {
+  async configure(installed: string, mode: Mode, customConfig?: RecordValue) {
     for (const directory of [
       'home',
       'tmp',
@@ -1832,11 +1828,66 @@ async function strictManaged(
   model: Model,
   results: Evidence[],
 ) {
-  const host = new Host(root, model);
-  await host.configure(installed, 'managed');
+  const migratedRoot = path.join(root, 'migrated');
+  const migrated = new Host(migratedRoot, model);
+  await migrated.configure(installed, 'native', {
+    ...pluginConfig('native'),
+    backgroundJobs: {
+      mode: 'managed',
+      wallClockTimeoutMs: 0,
+      concurrency: {
+        defaultConcurrency: 0,
+        providerConcurrency: { openai: 0 },
+      },
+    },
+  });
   await checkCase(
     results,
-    'explicit managed on v2: clear startup refusal',
+    'managed and inert settings migrate on v2',
+    async () => {
+      try {
+        await migrated.start();
+        const plugins = await poll(
+          'active migrated plugin inventory',
+          async () => {
+            const list = await migrated.request<PluginInfo[]>('/api/plugin');
+            return list.some(
+              (plugin) =>
+                plugin.id === 'oh-my-opencode-slim' &&
+                plugin.state.status === 'active',
+            )
+              ? list
+              : undefined;
+          },
+        );
+        await writeFile(
+          path.join(migratedRoot, 'plugins.json'),
+          JSON.stringify(plugins, null, 2),
+        );
+        await migrated.stop();
+        const logs = await logTexts(migratedRoot);
+        assert.match(logs, /removed-key/);
+        for (const key of ['mode', 'wallClockTimeoutMs', 'concurrency']) {
+          assert(
+            logs.includes(`backgroundJobs.${key}`),
+            `Missing migration warning for ${key}`,
+          );
+        }
+        return { status: 'active', warnings: true };
+      } finally {
+        await migrated.stop();
+      }
+    },
+  );
+  const refusedRoot = path.join(root, 'refused');
+  const host = new Host(refusedRoot, model);
+  await host.configure(installed, 'native', {
+    ...pluginConfig('native'),
+    backgroundJobs: { concurrency: { providerConcurrency: { openai: 2 } } },
+  });
+  await checkCase(
+    results,
+    'positive managed limit on v2: clear startup refusal',
     async () => {
       try {
         await host.start();
@@ -1854,23 +1905,35 @@ async function strictManaged(
               plugin.id === 'oh-my-opencode-slim' &&
               plugin.state.status === 'active',
           ),
-          'Explicit managed plugin remained active',
+          'Plugin with a positive limit remained active',
         );
         const inventoryError = plugins
           .map((plugin) => plugin.state.error)
           .filter((error): error is string => typeof error === 'string')
           .join('\n');
         await writeFile(
-          path.join(root, 'plugins.json'),
+          path.join(refusedRoot, 'plugins.json'),
           JSON.stringify(plugins, null, 2),
         );
         // Host stdout is flushed by stop(); combine it with plugin logs before
         // deciding whether the refusal names the unsupported setting.
         await host.stop();
-        const diagnostic = [inventoryError, await logTexts(root)].join('\n');
+        const diagnostic = [inventoryError, await logTexts(refusedRoot)].join(
+          '\n',
+        );
+        assert(
+          diagnostic.includes(
+            path.join(
+              refusedRoot,
+              'config',
+              'opencode',
+              'oh-my-opencode-slim.json',
+            ),
+          ),
+        );
         assert.match(
           diagnostic,
-          /Unsupported backgroundJobs\.mode "managed" on OpenCode v2/,
+          /backgroundJobs\.concurrency\.providerConcurrency\.openai = 2/,
         );
         return { status: 'failed', clearDiagnostic: true };
       } finally {
@@ -2016,7 +2079,7 @@ async function main() {
       'Build candidate dist before running the harness',
     );
     const version = await command(
-      [HOST, '--version'],
+      [HOST, '--standalone', '--version'],
       REPO,
       path.join(root, 'version.log'),
       { PATH: process.env.PATH, HOME: root },

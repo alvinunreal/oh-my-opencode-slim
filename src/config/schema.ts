@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import { MarketplacePackageIdSchema } from '../marketplace/id-schema';
-import {
-  AGENT_THEME_COLORS,
-  DEFAULT_CHILD_INPUT_WAKE_KINDS,
-  STRING_ONLY_PERMISSION_KEYS,
-} from './constants';
+import { AGENT_THEME_COLORS, STRING_ONLY_PERMISSION_KEYS } from './constants';
 import { CouncilConfigSchema } from './council-schema';
 import { ProviderModelIdSchema } from './model-id-schema';
 
@@ -515,39 +511,6 @@ export const InterviewConfigSchema = z.object({
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
 
-const ConcurrencyLimitSchema = z.number().int().min(0).max(1000);
-
-const BackgroundTaskConcurrencyConfigSchema = z
-  .object({
-    defaultConcurrency: z
-      .number()
-      .int()
-      .min(0)
-      .max(1000)
-      .default(0)
-      .describe(
-        'Maximum concurrently running native background tasks. 0 disables the default cap.',
-      ),
-    providerConcurrency: z
-      .record(z.string().min(1), ConcurrencyLimitSchema)
-      .default({})
-      .describe(
-        'Per-provider concurrency caps keyed by provider ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that provider.',
-      ),
-    modelConcurrency: z
-      .record(z.string().min(1), ConcurrencyLimitSchema)
-      .default({})
-      .describe(
-        'Per-model concurrency caps keyed by provider/model ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that model.',
-      ),
-  })
-  .strict()
-  .default({
-    defaultConcurrency: 0,
-    providerConcurrency: {},
-    modelConcurrency: {},
-  });
-
 const BackgroundJobsConfigStrictSchema = z.object({
   strategy: z
     .never({
@@ -556,10 +519,10 @@ const BackgroundJobsConfigStrictSchema = z.object({
     })
     .optional(),
   mode: z
-    .enum(['managed', 'native', 'off'])
+    .enum(['native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "managed" (default on V1 hosts) runs the OMOS managed lifecycle; it is unsupported and rejected on OpenCode v2. "native" (default on OpenCode v2 hosts) skips every board-shaped component and relies on host delegation, with four OMOS tools: task_status and task_cancel for host reads and stop requests, plus independent task_reply for the orchestrator and task_report for child subagents. Cancellation reports request acceptance, not confirmed interruption. "off" registers no OMOS task tools; on v2 it also disables session-preset routing and leaves the host delegation executor untouched. Agent inference settings still register normally.',
+      'Background-task lifecycle mode. "native" (default on OpenCode v2) relies on host delegation, with task_status, task_cancel, task_reply and task_report. Cancellation reports request acceptance, not confirmed interruption. "off" registers no Slim task tools and disables session-preset routing on v2. Agent inference settings still register normally.',
     ),
   enabled: z
     .never({
@@ -567,14 +530,11 @@ const BackgroundJobsConfigStrictSchema = z.object({
     })
     .optional(),
   maxSessionsPerAgent: z
-    .number()
-    .int()
-    .min(1)
-    .max(10)
-    .default(2)
-    .describe(
-      'Per-parent retention cap for reusable or retained-stopped background sessions of each agent (1–10), not a running-task concurrency limit. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 2.',
-    ),
+    .never({
+      error:
+        'backgroundJobs.maxSessionsPerAgent was removed with the managed lifecycle',
+    })
+    .optional(),
   maxContextLines: z
     .never({
       error:
@@ -612,56 +572,53 @@ const BackgroundJobsConfigStrictSchema = z.object({
     })
     .optional(),
   wallClockTimeoutMs: z
-    .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
-    .default(0)
-    .describe(
-      'Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. On expiry the plugin asks the host to stop the child and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.',
-    ),
-  stopConfirmationMs: z
-    .number()
-    .int()
-    .min(1_000)
-    .max(60_000)
-    .default(5_000)
-    .describe(
-      'Terminal-gate grace period for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 5,000 (5 seconds).',
-    ),
-  concurrency: BackgroundTaskConcurrencyConfigSchema.describe(
-    'Plugin concurrency admission limits. V1 managed lifecycle only; unsupported and rejected on OpenCode v2, even when every limit is zero. Configure delegation limits through the native host instead.',
-  ),
-  sameProviderPolicy: z
-    .record(z.string().min(1), z.literal('foreground'))
-    .default({})
-    .describe(
-      'Opt-in per-provider policy for native background tasks on the V1 managed lifecycle (inert when backgroundJobs.mode is "off"): when the parent session and child agent resolve to a provider listed here as "foreground", the background task request is converted to foreground execution. Unlisted providers keep background behavior. OpenCode v2 subagents always run in the background, so this key is v1-only; an explicit value on v2 emits an unsupported-host warning and is ignored. Default {} (no conversion).',
-    ),
-  waitForUserGuard: z
-    .boolean()
-    .default(true)
-    .describe(
-      'Intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Default enabled.',
-    ),
-  childInputWake: z
-    .boolean()
-    .default(true)
-    .describe(
-      'When true, a background child ask wakes its parent with the ask content. V1 managed only; ignored with a warning on OpenCode v2 hosts. Default enabled.',
-    ),
-  childInputWakeKinds: z
-    .object({
-      permission: z.boolean().default(false).catch(false),
-      question: z.boolean().default(true).catch(true),
+    .never({
+      error:
+        'backgroundJobs.wallClockTimeoutMs was removed with the managed lifecycle',
     })
-    .catch({ ...DEFAULT_CHILD_INPUT_WAKE_KINDS })
-    .describe(
-      'Which background child ask kinds may wake the parent (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Permission asks default off (#1504): their replies carry no host wake and are resolved by the UI or an external responder, so a parent turn is wasted. Question asks default on.',
-    ),
+    .optional(),
+  stopConfirmationMs: z
+    .never({
+      error:
+        'backgroundJobs.stopConfirmationMs was removed with the managed lifecycle',
+    })
+    .optional(),
+  concurrency: z
+    .never({
+      error:
+        'backgroundJobs.concurrency was removed with the managed lifecycle',
+    })
+    .optional(),
+  sameProviderPolicy: z
+    .never({
+      error:
+        'backgroundJobs.sameProviderPolicy was removed with the managed lifecycle',
+    })
+    .optional(),
+  waitForUserGuard: z
+    .never({
+      error:
+        'backgroundJobs.waitForUserGuard was removed with the managed lifecycle',
+    })
+    .optional(),
+  childInputWake: z
+    .never({
+      error:
+        'backgroundJobs.childInputWake was removed with the managed lifecycle',
+    })
+    .optional(),
+  childInputWakeKinds: z
+    .never({
+      error:
+        'backgroundJobs.childInputWakeKinds was removed with the managed lifecycle',
+    })
+    .optional(),
   pruneEvictedSessions: z
-    .boolean()
-    .default(false)
-    .describe(
-      'When true, removes the host child session when a retention trim evicts its terminal or retained-stopped record, only for background children this plugin launched itself (never foreground, unattributed placeholder, adopted, or restored sessions) and only after a host read confirms the session still belongs to the record parent. Never fires for parent deletion or explicit drops. v1 hosts only for now (v2 has no live session-status map, so every prune is skipped). Default disabled.',
-    ),
+    .never({
+      error:
+        'backgroundJobs.pruneEvictedSessions was removed with the managed lifecycle',
+    })
+    .optional(),
   continueOnIdle: z
     .never({
       error: 'backgroundJobs.continueOnIdle was removed',
@@ -686,78 +643,6 @@ function emitBackgroundJobsDiagnostic(message: string): void {
   console.warn(`[oh-my-opencode-slim] ${message}`);
 }
 
-/** Unwraps `.default()` layers; returns the shape when the schema is an object schema. */
-function objectShapeOf(
-  schema: z.ZodTypeAny,
-): Record<string, z.ZodTypeAny> | undefined {
-  let current = schema;
-  while (current instanceof z.ZodDefault) {
-    current = current.unwrap() as z.ZodTypeAny;
-  }
-  return current instanceof z.ZodObject
-    ? (current.shape as Record<string, z.ZodTypeAny>)
-    : undefined;
-}
-
-/**
- * Drops invalid keys, recursing into object-typed keys so one bad nested
- * value never discards its valid siblings. Two intentional bounds: `z.record`
- * fields (providerConcurrency / modelConcurrency / sameProviderPolicy) stay
- * atomic — one bad entry drops the whole record, not the entry; and inside a
- * `.strict()` object an unknown key is not dropped at this level — the parent
- * safeParse fails and the whole nested block is dropped. The shape argument
- * keeps validation and sanitization on one shared definition (zero drift),
- * and the own-property guard keeps inherited names (`constructor`, …) from
- * being mistaken for schema keys.
- */
-function sanitizeRecordByShape(
-  config: Record<string, unknown>,
-  shape: Record<string, z.ZodTypeAny>,
-): { result: Record<string, unknown>; dropped: string[] } {
-  const dropped: string[] = [];
-  let out = config;
-  const copyOnce = () => {
-    if (out === config) out = { ...config };
-  };
-  for (const [key, value] of Object.entries(config)) {
-    if (!Object.hasOwn(shape, key)) continue;
-    const keySchema = shape[key];
-    // Removed keys declared as `z.never()` must reach the parser so the
-    // config is rejected with a "was removed" error; dropping them here
-    // would silently strip the key instead of rejecting it.
-    let unwrapped: z.ZodTypeAny = keySchema;
-    while (
-      unwrapped instanceof z.ZodOptional ||
-      unwrapped instanceof z.ZodDefault
-    ) {
-      unwrapped = unwrapped.unwrap() as z.ZodTypeAny;
-    }
-    if (unwrapped instanceof z.ZodNever) continue;
-    let next = value;
-    let nestedDropped: string[] = [];
-    if (isPlainConfigObject(value)) {
-      const nestedShape = objectShapeOf(keySchema);
-      if (nestedShape) {
-        const nested = sanitizeRecordByShape(value, nestedShape);
-        nestedDropped = nested.dropped;
-        if (nested.result !== value) {
-          copyOnce();
-          next = nested.result;
-          out[key] = next;
-        }
-      }
-    }
-    if (!keySchema.safeParse(next).success) {
-      dropped.push(key);
-      copyOnce();
-      delete out[key];
-    } else {
-      for (const k of nestedDropped) dropped.push(`${key}.${k}`);
-    }
-  }
-  return { result: out, dropped };
-}
-
 /** Issue #1291: drop invalid `backgroundJobs` keys instead of rejecting the whole config layer. */
 export function sanitizeBackgroundJobsConfig(value: unknown): unknown {
   if (value === undefined) return value;
@@ -767,14 +652,16 @@ export function sanitizeBackgroundJobsConfig(value: unknown): unknown {
     );
     return {};
   }
-  const { result, dropped } = sanitizeRecordByShape(
-    value,
-    BackgroundJobsConfigStrictSchema.shape as Record<string, z.ZodTypeAny>,
-  );
-  if (dropped.length === 0) return value;
+  if (
+    !Object.hasOwn(value, 'mode') ||
+    BackgroundJobsConfigStrictSchema.shape.mode.safeParse(value.mode).success
+  )
+    return value;
   emitBackgroundJobsDiagnostic(
-    `${BACKGROUND_JOBS_INVALID_VALUE_MESSAGE} (dropped backgroundJobs keys: ${dropped.join(', ')})`,
+    `${BACKGROUND_JOBS_INVALID_VALUE_MESSAGE} (dropped backgroundJobs keys: mode)`,
   );
+  const result = { ...value };
+  delete result.mode;
   return result;
 }
 

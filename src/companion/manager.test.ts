@@ -1482,7 +1482,7 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].preset.current).toBe('old');
   });
 
-  it('keeps the last-known preset state when a v2 edit reintroduces a retired mode', () => {
+  it('keeps the last-known preset state when a v2 edit adds a positive limit', () => {
     const projectDir = path.join(TEST_DIR, 'retired-mode-project');
     const projectConfigDir = path.join(projectDir, '.opencode');
     mkdirSync(projectConfigDir, { recursive: true });
@@ -1526,7 +1526,7 @@ describe('CompanionManager', () => {
       projectConfigPath,
       JSON.stringify({
         preset: 'cheap',
-        backgroundJobs: { mode: 'managed' },
+        backgroundJobs: { wallClockTimeoutMs: 900000 },
       }),
     );
     for (let i = 0; i < 4; i++) {
