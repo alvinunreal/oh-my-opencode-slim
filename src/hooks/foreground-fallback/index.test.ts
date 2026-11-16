@@ -160,41 +160,6 @@ const retryEvent = (
   decision,
 });
 
-// Message events used for v2 turn and model bookkeeping.
-const redoEvents = {
-  user: (sessionID: string, id: string, modelID = 'a') => ({
-    type: 'message.updated',
-    properties: {
-      info: {
-        id,
-        sessionID,
-        role: 'user',
-        model: { providerID: 'test', modelID },
-      },
-      parts: [{ type: 'text', text: `turn ${id}` }],
-    },
-  }),
-  assistant: (
-    sessionID: string,
-    modelID = 'a',
-    error?: unknown,
-    messageID = `assistant-${sessionID}-${modelID}`,
-  ) => ({
-    type: 'message.updated',
-    properties: {
-      info: {
-        id: messageID,
-        sessionID,
-        role: 'assistant',
-        agent: 'orchestrator',
-        providerID: 'test',
-        modelID,
-        ...(error === undefined ? {} : { error }),
-      },
-    },
-  }),
-};
-
 function makeOptions(
   overrides: Partial<ForegroundFallbackOptions> = {},
 ): ForegroundFallbackOptions {
@@ -552,43 +517,6 @@ describe('foreground fallback redo harness', () => {
     });
     expect(event.decision).toEqual({ retry: true, delay: 0 });
   });
-  test('a re-emitted older user message cannot replace a newer admission', async () => {
-    const { mocks } = createMockClient();
-    const manager = timedManager({
-      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
-      v2RetryEnabled: true,
-      input: { directory: '/test', hostFlavor: 'v2' } as never,
-    });
-    manager.noteExternalTurn('reemitted', 'turn-1', 'test/a');
-    manager.noteExternalTurn('reemitted', 'turn-2', 'test/b');
-    recordInternalAdmission('reemitted', 'internal-notice');
-    await manager.handleEvent(redoEvents.user('reemitted', 'internal-notice'));
-    await manager.handleEvent({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          type: 'text',
-          text: SLIM_INTERNAL_INITIATOR_MARKER,
-          sessionID: 'reemitted',
-          messageID: 'internal-part',
-        },
-      },
-    });
-    await manager.handleEvent(redoEvents.user('reemitted', 'internal-part'));
-    await manager.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id: 'turn-1',
-          sessionID: 'reemitted',
-          role: 'user',
-          model: { providerID: 'test', modelID: 'a' },
-        },
-      },
-    });
-    expect(mocks.messages).not.toHaveBeenCalled();
-    expect((manager as any).sessionModel.get('reemitted')).toBe('test/b');
-  });
 });
 
 describe('foreground fallback redo: host retry budget', () => {
@@ -687,7 +615,7 @@ describe('foreground fallback redo: host retry budget', () => {
     expect(switchModel).toHaveBeenCalledTimes(2);
 
     manager.registerSessionAgent(sid, 'orchestrator');
-    await manager.handleEvent(redoEvents.assistant(sid, 'a'));
+    manager.noteExternalTurn(sid, 'test/a');
     for (let attempt = 0; attempt < 2; attempt++) {
       const host = retryEvent(sid, 'a', { retry: true, delay: 77 });
       await manager.handleV2Retry(host, switchModel);
@@ -727,17 +655,7 @@ describe('foreground fallback redo: host retry budget', () => {
       },
       spentSwitch,
     );
-    await spent.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'spent-primary',
-          role: 'assistant',
-          providerID: 'p1',
-          modelID: 'a',
-        },
-      },
-    });
+    spent.noteExternalTurn('spent-primary', 'p1/a');
     const retry = {
       sessionID: 'spent-primary',
       agent: 'orchestrator',
@@ -1458,7 +1376,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     const { manager, mocks, switchModel, durable } = fixture();
     durable.id = 'b';
     durable.variant = 'high';
-    manager.noteExternalTurn('stale-model', undefined, 'test/b');
+    manager.noteExternalTurn('stale-model', 'test/b');
     await manager.handleEvent(started('stale-model'));
     await manager.handleEvent(failed('stale-model'));
     await settle();
@@ -2230,8 +2148,7 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
         prompt: { text: 'prompt that fails admission' },
       });
 
-      // Admission fails: message.updated is NEVER emitted for msg-admit-fail
-      // Now old switch finishes
+      // The failed admission never reaches chat.message; the old switch finishes.
       resolveSwitch();
       await pending;
 
@@ -3443,13 +3360,20 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     );
     (mgr as any).sessionRetryEnabled.set('gone', true);
     coordinator.dispatchSessionDeleted('gone');
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: { role: 'user', sessionID: 'live', agent: 'orchestrator' },
+    const event = {
+      type: 'session.step.started',
+      data: {
+        sessionID: 'live',
+        assistantMessageID: 'assistant-live',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
       },
-    });
-    expect((mgr as any).sessionAgent.has('live')).toBe(false);
+    };
+    await mgr.handleEvent(event);
+    expect((mgr as any).v2Steps.has('live')).toBe(false);
+    (mgr as any).sessionRetryEnabled.set('keep', true);
+    await mgr.handleEvent(event);
+    expect((mgr as any).v2Steps.has('live')).toBe(true);
   });
 });
 
@@ -3469,34 +3393,11 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
     >;
     (mgr as any).activeFallback.set('session', 'backup/b');
     marks.set('session', new Map([['primary', Date.now()]]));
-    mgr.noteExternalTurn('session', 'same', 'backup/b');
-    mgr.noteExternalTurn('session', 'unknown');
+    mgr.noteExternalTurn('session', 'backup/b');
+    mgr.noteExternalTurn('session');
     expect(marks.has('session')).toBe(true);
-    mgr.noteExternalTurn('session', 'new', 'primary/a');
+    mgr.noteExternalTurn('session', 'primary/a');
     expect(marks.has('session')).toBe(false);
-  });
-
-  test.each([
-    'initialDelayUsed',
-    'sessionRetries',
-    'quotaExhaustedProviders',
-    'chainExhaustion',
-  ])('%s entry is removed on an external turn', (mapName) => {
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        },
-      }),
-    );
-    const target = (mgr as any)[mapName];
-    expect(target).toBeDefined();
-    seedMap(target, 'gone');
-    seedMap(target, 'keep');
-    (mgr as any).noteExternalTurn('gone', 'msg-1');
-    expect(target.has('gone')).toBe(false);
-    expect(target.has('keep')).toBe(true);
   });
 });
 
@@ -4953,7 +4854,7 @@ describe('fallback restoration', () => {
   test('v2 ignores a stale origin observed on a new prompt', async () => {
     const f = fixture();
     await f.retry();
-    f.manager.noteExternalTurn(sid, undefined, 'primary/a');
+    f.manager.noteExternalTurn(sid, 'primary/a');
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
     expect(f.switchModel).toHaveBeenCalledTimes(2);

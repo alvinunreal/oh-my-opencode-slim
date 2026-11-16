@@ -1038,36 +1038,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     );
   }
 
-  function resolveTuiVariantForModel(
-    agentName: string,
-    model: string,
-  ): string | undefined {
-    const configEntry = runtime.agents()[agentName];
-    const defaultVariant =
-      typeof configEntry?.variant === 'string'
-        ? configEntry.variant
-        : undefined;
-    // Sidebar is a current-generation surface: variants come from the
-    // published chain table, so refreshed models resolve their variants too.
-    const chain = foregroundFallbackChains[agentName];
-    if (chain) {
-      const match = chain.find((entry) => entry.id === model);
-      return (
-        match?.variant ?? (chain[0]?.id === model ? defaultVariant : undefined)
-      );
-    }
-
-    if (
-      typeof configEntry?.model === 'string' &&
-      configEntry.model === model &&
-      defaultVariant
-    ) {
-      return defaultVariant;
-    }
-
-    return undefined;
-  }
-
   let registryBridge: RegistryFactoryBridge;
   // Marketplace kill switch (P2): when disabled, no service, no store, no
   // management tools, and no marketplace activation surface. Selected
@@ -2092,75 +2062,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           }
         }
 
-        if (event.type === 'message.updated') {
-          const info = event.properties?.info;
-          const providerID =
-            typeof info?.providerID === 'string'
-              ? info.providerID
-              : typeof info?.model?.providerID === 'string'
-                ? info.model.providerID
-                : undefined;
-          const modelID =
-            typeof info?.modelID === 'string'
-              ? info.modelID
-              : typeof info?.model?.modelID === 'string'
-                ? info.model.modelID
-                : undefined;
-          // Track each session's current model so background task admission
-          // can resolve the model a model-less subagent will inherit.
-          if (
-            typeof info?.sessionID === 'string' &&
-            info.summary !== true &&
-            providerID &&
-            modelID
-          ) {
-            const model = `${providerID}/${modelID}`;
-            // Accounting/fallback follows the model actually executing.
-            // External selection tracking does not: a synthetic wake's
-            // message.updated must not poison Plan/Build metadata (#1079).
-            const internalAdmission =
-              (typeof info.id === 'string' &&
-                isInternalAdmission(info.sessionID, info.id)) ||
-              (typeof info.parentID === 'string' &&
-                isInternalAdmission(info.sessionID, info.parentID));
-            if (!internalAdmission) {
-              sessionMetadata.setModel(info.sessionID, model);
-              companionManager?.onSessionModelChanged({
-                sessionId: info.sessionID,
-                model,
-              });
-            }
-          }
-          if (
-            typeof info?.agent === 'string' &&
-            typeof info.sessionID === 'string' &&
-            providerID &&
-            modelID
-          ) {
-            const agentName = resolveRuntimeAgentName(runtime, info.agent);
-            const model = `${providerID}/${modelID}`;
-            const observedVariant = (info as { variant?: unknown }).variant;
-            if (runtime.sidebarEnabled) {
-              recordTuiAgentModel(
-                {
-                  agentName,
-                  model,
-                  ...(typeof observedVariant === 'string'
-                    ? { variant: observedVariant }
-                    : {
-                        fallbackVariant:
-                          resolveTuiVariantForModel(agentName, model) ?? null,
-                      }),
-                  sessionID: info.sessionID,
-                },
-                (info?.sessionID &&
-                  sessionMetadata.getDirectory(info.sessionID)) ??
-                  ctx.directory,
-              );
-            }
-          }
-        }
-
         if (event.type === 'session.created') {
           const createdSessionId = event.properties?.info?.id;
           const createdSessionDir = event.properties?.info?.directory;
@@ -2357,8 +2258,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           isInternalInitiatorPart(part) ||
           isNativeBackgroundTaskNotification(part),
       );
-      // Record internal admissions so message.updated and assistant replies
-      // (parentID) use the v2 shim's shared registry (#1079).
+      // Record internal admissions for the v2 shim's shared registry (#1079).
       if (partsInternal && typeof messageID === 'string') {
         recordInternalAdmission(input.sessionID, messageID);
       }
@@ -2373,8 +2273,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const model = input.model ?? output?.message?.model;
         foregroundFallback?.noteExternalTurn(
           input.sessionID,
-          // v2 retains its retry budget across external prompts.
-          undefined,
           model ? `${model.providerID}/${model.modelID}` : undefined,
         );
       }

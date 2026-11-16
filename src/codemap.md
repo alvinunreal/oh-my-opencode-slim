@@ -142,7 +142,7 @@ Key event flows:
      activity state
 
 2. **Message Updates**:
-   - `message.updated` → record agent/model usage in TUI state
+   - `message.updated` → cache usage telemetry
 
 3. **Tool Execution**:
    - `tool.execute.before` → apply patch, path guards, and council seat resolution

@@ -2370,18 +2370,6 @@ describe('plugin TUI agent activity', () => {
     await chat('gpt-6');
     await busy('ora-m');
     await chat('gpt-6-luna');
-    await hooks?.event?.({
-      event: {
-        type: 'message.updated',
-        properties: {
-          info: {
-            sessionID: 'ora-m',
-            providerID: 'openai',
-            modelID: 'gpt-6-sol',
-          },
-        },
-      },
-    } as never);
 
     const raw = JSON.parse(readFileSync(getTuiStatePath(projectDir), 'utf8'));
     expect(raw.sessionDetails['ora-m']).toEqual({ status: 'busy' });
@@ -3916,59 +3904,6 @@ describe('plugin foreground fallback host gating', () => {
         readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
           ?.orchestrator?.model,
       ).toBe('openai/gpt-c');
-    } finally {
-      await hooks.dispose?.();
-    }
-  });
-
-  test('message updates preserve the selected variant until the model or variant changes', async () => {
-    const configPath = `${projectDir}/oh-my-opencode-slim.json`;
-    const config = await Bun.file(configPath).json();
-    config.agents.orchestrator.variant = 'medium';
-    config.agents.orchestrator.model = [
-      'openai/gpt-b',
-      { id: 'openai/gpt-c', variant: 'low' },
-    ];
-    await Bun.write(configPath, JSON.stringify(config));
-    const hooks = await createHooks('v1');
-    const sessionID = 'selected-variant';
-    const info = {
-      sessionID,
-      role: 'assistant',
-      agent: 'orchestrator',
-      providerID: 'openai',
-      modelID: 'gpt-b',
-    };
-    const observation = () =>
-      readTuiSnapshot(projectDir).sessionModels?.[sessionID]?.orchestrator;
-    try {
-      await hooks['chat.message']?.(
-        {
-          sessionID,
-          agent: 'orchestrator',
-          model: { providerID: 'openai', modelID: 'gpt-b' },
-          variant: 'high',
-        } as never,
-        {} as never,
-      );
-      await hooks.event?.({
-        event: { type: 'message.updated', properties: { info } },
-      } as never);
-      expect(observation()).toEqual({ model: 'openai/gpt-b', variant: 'high' });
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: { info: { ...info, variant: 'low' } },
-        },
-      } as never);
-      expect(observation()?.variant).toBe('low');
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: { info: { ...info, modelID: 'gpt-c' } },
-        },
-      } as never);
-      expect(observation()).toEqual({ model: 'openai/gpt-c', variant: 'low' });
     } finally {
       await hooks.dispose?.();
     }

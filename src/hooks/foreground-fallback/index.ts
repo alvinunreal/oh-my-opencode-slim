@@ -14,12 +14,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { responseError, stringifyError } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
-import {
-  createInternalAgentTextPart,
-  isInternalInitiatorPart,
-  isNativeBackgroundTaskNotification,
-  SLIM_INTERNAL_INITIATOR_MARKER,
-} from '../../utils/internal-initiator';
+import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
 import { getClient } from '../../utils/opencode-client';
 import {
@@ -34,7 +29,6 @@ import {
 } from '../../utils/session';
 import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
-import { isInternalAdmission } from '../../v2/internal-admissions';
 import {
   isNoRouteAnchor,
   noRouteModel,
@@ -691,10 +685,7 @@ export class ForegroundFallbackManager {
   >();
   /** sessionID → last observed model string ("providerID/modelID") */
   private readonly sessionModel = new Map<string, string>();
-  /** sessionID → confirmed fallback model.
-   *  Kept separate from sessionModel because synthetic admissions may emit
-   *  message.updated events for another model without changing the model
-   *  serving the user's active turn. */
+  /** sessionID → confirmed fallback model. */
   private readonly activeFallback = new Map<string, string>();
   private readonly descent = new Map<string, FallbackDescent>();
   private readonly restoredFrom = new Map<string, FallbackDescent>();
@@ -704,7 +695,7 @@ export class ForegroundFallbackManager {
   private readonly restoring = new Set<string>();
   /** Provider failure timestamps survive internal returns to the primary. */
   private readonly downProviders = new Map<string, Map<string, number>>();
-  /** sessionID → agent name (populated from message.updated info.agent field) */
+  /** sessionID → agent name observed from the host. */
   private readonly sessionAgent = new Map<string, string>();
   /** True when a SessionLifecycle coordinator owns deletion cleanup. */
   private hasCoordinator = false;
@@ -911,26 +902,12 @@ export class ForegroundFallbackManager {
   }
 
   /** Model switches persist across external turns. */
-  noteExternalTurn(
-    sessionID: string,
-    messageID: string | undefined,
-    model?: string,
-  ): void {
-    if (messageID && this.observedUserMessageIds.get(sessionID)?.has(messageID))
-      return;
+  noteExternalTurn(sessionID: string, model?: string): void {
     if (model !== undefined && this.activeFallback.get(sessionID) !== model) {
       this.activeFallback.delete(sessionID);
       this.downProviders.delete(sessionID);
       this.sessionModel.set(sessionID, model);
     }
-    if (!messageID) return;
-    this.rememberUserMessage(sessionID, messageID);
-    this.requestRejected.delete(sessionID);
-    this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
-    this.initialDelayUsed.delete(sessionID);
-    this.sessionRetries.delete(sessionID);
-    this.quotaExhaustedProviders.delete(sessionID);
-    this.chainExhaustion.delete(sessionID);
   }
 
   noteV2Prompt(sessionID: string): void {
@@ -952,29 +929,6 @@ export class ForegroundFallbackManager {
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
-  private isKnownUserMessage(
-    sessionID: string,
-    messageID: string,
-    parts: unknown[],
-  ): boolean {
-    if (this.observedUserMessageIds.get(sessionID)?.has(messageID)) return true;
-    // v1 chat.message records internal admissions before message.updated.
-    // Recognize them before treating the notification as an external turn.
-    if (isInternalAdmission(sessionID, messageID)) {
-      this.rememberUserMessage(sessionID, messageID);
-      return true;
-    }
-    const marked = parts.some(
-      (part) =>
-        isInternalInitiatorPart(part) ||
-        isNativeBackgroundTaskNotification(part) ||
-        (isRecord(part) &&
-          typeof part.text === 'string' &&
-          part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER)),
-    );
-    if (marked) this.rememberUserMessage(sessionID, messageID);
-    return marked;
-  }
   private isCurrentTurn(sessionID: string, epoch: number): boolean {
     return !this.disposed && (this.turnEpoch.get(sessionID) ?? 0) === epoch;
   }
@@ -1314,14 +1268,6 @@ export class ForegroundFallbackManager {
         await this.handleV2StepEnded(event);
         break;
 
-      case 'message.updated':
-        await this.handleMessageUpdated(event);
-        break;
-
-      case 'message.part.updated':
-        this.handleMessagePartUpdated(event);
-        break;
-
       case 'session.status':
         await this.handleSessionStatus(event);
         break;
@@ -1332,10 +1278,6 @@ export class ForegroundFallbackManager {
 
       case 'session.created':
         this.handleSessionCreated(event);
-        break;
-
-      case 'subagent.session.created':
-        this.handleSubagentSessionCreated(event);
         break;
 
       case 'session.deleted':
@@ -1447,83 +1389,6 @@ export class ForegroundFallbackManager {
     }
   }
 
-  private handleMessagePartUpdated(event: { properties?: unknown }): void {
-    const part = (
-      event.properties as { part?: Record<string, unknown> } | undefined
-    )?.part;
-    if (!part) return;
-    const isInternalPart =
-      isInternalInitiatorPart(part) ||
-      (typeof part.text === 'string' &&
-        part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER));
-    if (
-      isInternalPart &&
-      typeof part.sessionID === 'string' &&
-      typeof part.messageID === 'string'
-    ) {
-      this.rememberUserMessage(part.sessionID, part.messageID);
-    }
-  }
-
-  private async handleMessageUpdated(event: {
-    properties?: unknown;
-  }): Promise<void> {
-    const info = (
-      event.properties as { info?: Record<string, unknown> } | undefined
-    )?.info;
-    if (!info) return;
-    const sessionID = info.sessionID as string | undefined;
-    if (!sessionID) return;
-    if (info.role === 'user') {
-      this.handleUserMessageTurn(event, sessionID, info);
-      return;
-    }
-    this.handleAssistantMessageUpdate(sessionID, info);
-  }
-
-  private handleUserMessageTurn(
-    event: { properties?: unknown },
-    sessionID: string,
-    info: Record<string, unknown>,
-  ): void {
-    const props = event.properties as { parts?: unknown[] } | undefined;
-    const parts = Array.isArray(props?.parts)
-      ? props.parts
-      : Array.isArray(info.parts)
-        ? info.parts
-        : [];
-    if (
-      typeof info.id === 'string' &&
-      !this.isKnownUserMessage(sessionID, info.id, parts)
-    ) {
-      let model: string | undefined;
-      if (isRecord(info.model)) {
-        const providerID = info.model.providerID;
-        const modelID = info.model.modelID ?? info.model.id;
-        if (typeof providerID === 'string' && typeof modelID === 'string') {
-          model = `${providerID}/${modelID}`;
-        }
-      }
-      this.noteExternalTurn(sessionID, info.id, model);
-    }
-    if (typeof info.agent === 'string') {
-      this.registerSessionAgent(sessionID, info.agent);
-    }
-  }
-
-  private handleAssistantMessageUpdate(
-    sessionID: string,
-    info: Record<string, unknown>,
-  ): void {
-    if (
-      info.role !== 'user' &&
-      typeof info.providerID === 'string' &&
-      typeof info.modelID === 'string'
-    ) {
-      const model = `${info.providerID}/${info.modelID}`;
-      this.sessionModel.set(sessionID, model);
-    }
-  }
   private async handleSessionStatus(event: {
     properties?: unknown;
   }): Promise<void> {
@@ -1558,16 +1423,6 @@ export class ForegroundFallbackManager {
     )?.info;
     if (info?.id && info.parentID) {
       this.sessionParent.set(info.id, info.parentID);
-    }
-  }
-
-  private handleSubagentSessionCreated(event: { properties?: unknown }): void {
-    // Some builds of OpenCode include the agent name here.
-    const props = event.properties as
-      | { sessionID?: string; agentName?: unknown }
-      | undefined;
-    if (props?.sessionID && typeof props.agentName === 'string') {
-      this.registerSessionAgent(props.sessionID, props.agentName);
     }
   }
 
@@ -2248,9 +2103,8 @@ export class ForegroundFallbackManager {
     );
     // Callers pre-check via hasFallbackChain; keep as defensive guard only.
     if (!chain.length) return;
-    // When the agent is known but no model was captured (common for
-    // subagent error events that fire before message.updated), infer
-    // the current model as the chain's first entry. Without this, the
+    // When the agent is known but no model was captured, infer the current
+    // model as the chain's first entry. Without this, the
     // fallback would incorrectly re-select the primary model as the
     // "next" fallback target.
     if (!currentModel && agentName && chain.length > 0) {

@@ -343,13 +343,10 @@ export function mapV2EventToV1(
         });
       } else {
         if (type === 'session.execution.failed') {
-          // The v1 `session.error` consumers classify the payload
-          // themselves (foreground-fallback `isFailoverError`,
-          // event-router failover deferral), so the host's error field
-          // passes through verbatim; a missing error degrades to a
-          // best-effort message that classifies as non-failover. Emitted
-          // BEFORE the idle pair so the error-then-idle ordering the
-          // event-router expects is preserved on the synthesized stream.
+          // session.error marks the session inactive for the TUI and
+          // companion status; the host error passes through verbatim (a
+          // missing error degrades to a best-effort message). Emitted before
+          // the idle pair to keep the error-then-idle order.
           out.push({
             type: 'session.error',
             properties: {

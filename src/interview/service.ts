@@ -9,7 +9,6 @@ import {
   isInternalInitiatorPart,
   log,
 } from '../utils';
-import { parseModelReference } from '../utils/session';
 import {
   appendInterviewAnswers,
   claimInterviewDocument,
@@ -261,7 +260,6 @@ export function createInterviewService(
   const interviewsById = new Map<string, InterviewRecord>();
   const activeSyncs = new Map<string, Promise<InterviewState>>();
   const sessionBusy = new Map<string, boolean>();
-  const sessionModel = new Map<string, string>();
   const browserOpened = new Set<string>(); // Track interviews that have opened browser
   let resolveBaseUrl: (() => Promise<string>) | null = null;
   let onStateChange:
@@ -1156,7 +1154,6 @@ export function createInterviewService(
         repairTurn.serviceInitiated = true;
         repairTurn.turnOpen = false;
         repairTurn.repairTurnStarted = false;
-        const model = sessionModel.get(sessionID);
         try {
           await sessionRuntime.continue(
             sessionID,
@@ -1168,7 +1165,6 @@ export function createInterviewService(
                   printState,
                 )
               : buildPatchMissingRepairPrompt(maxQuestions, printState),
-            model ? (parseModelReference(model) ?? undefined) : undefined,
           );
         } catch (error) {
           sessionBusy.set(sessionID, false);
@@ -1341,7 +1337,6 @@ export function createInterviewService(
       const promptWithPatchNote = memory.lastPatchError
         ? `${prompt}\n\nThe last spec patch failed: ${memory.lastPatchError}. Re-base the patch on the current spec before submitting the next state.`
         : prompt;
-      const model = sessionModel.get(sessionID);
       turnFor(sessionID).serviceInitiated = true;
       serviceInitiated = true;
       if (interview.completed) {
@@ -1353,11 +1348,7 @@ export function createInterviewService(
         interview.completed = false;
         reopenedCompletion = true;
       }
-      await sessionRuntime.continue(
-        sessionID,
-        promptWithPatchNote,
-        model ? (parseModelReference(model) ?? undefined) : undefined,
-      );
+      await sessionRuntime.continue(sessionID, promptWithPatchNote);
       promptSent = true;
     } finally {
       if (!promptSent) {
@@ -1695,25 +1686,6 @@ export function createInterviewService(
       return;
     }
 
-    if (event.type === 'message.updated') {
-      const info = properties as
-        | {
-            info?: {
-              sessionID?: string;
-              providerID?: string;
-              modelID?: string;
-            };
-          }
-        | undefined;
-      const sessionID = info?.info?.sessionID;
-      const providerID = info?.info?.providerID;
-      const modelID = info?.info?.modelID;
-      if (sessionID && providerID && modelID) {
-        sessionModel.set(sessionID, `${providerID}/${modelID}`);
-      }
-      return;
-    }
-
     if (event.type === 'session.deleted') {
       const deletedSessionId =
         ((properties.info as { id?: string } | undefined)?.id ??
@@ -1724,7 +1696,6 @@ export function createInterviewService(
       }
 
       sessionBusy.delete(deletedSessionId);
-      sessionModel.delete(deletedSessionId);
       turnState.delete(deletedSessionId);
       const outputDir = createInterviewDirectoryPath(
         ctx.directory,
