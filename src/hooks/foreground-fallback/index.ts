@@ -2029,17 +2029,12 @@ export class ForegroundFallbackManager {
     failingModel: string,
   ): boolean {
     if (!isSpentQuotaError(error)) return false;
-    const model = this.sessionModel.get(sessionID);
     const { chain } = this.resolveChain(
       this.sessionAgent.get(sessionID),
-      model,
+      failingModel,
       sessionID,
     );
-    const failing = failingModel;
-    const exhausted = this.markQuotaExhausted(sessionID, failing, error);
-    // A late error from a model we already switched away from records its
-    // provider but must not drive another switch off the replacement.
-    if (model !== undefined && failing !== model) return true;
+    const exhausted = this.markQuotaExhausted(sessionID, failingModel, error);
     const viable = chain.some(
       (entry) => !exhausted?.has(parseModelReference(entry)?.providerID ?? ''),
     );
@@ -2048,7 +2043,7 @@ export class ForegroundFallbackManager {
       '[foreground-fallback] spent quota on every chain provider; surfacing',
       {
         sessionID,
-        model: failing,
+        model: failingModel,
         exhausted: [...(exhausted ?? [])].sort(),
       },
     );
