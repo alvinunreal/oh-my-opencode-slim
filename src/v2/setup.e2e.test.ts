@@ -5541,6 +5541,7 @@ describe('createV2Setup e2e', () => {
     test('an unresolvable parent model still refuses before the executor', async () => {
       const t = await setupInherit();
       try {
+        // Another session's observed model must not stand in for the parent's.
         await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
         await expect(t.launch()).rejects.toThrow(
           'Inherited subagent parent model unavailable',
