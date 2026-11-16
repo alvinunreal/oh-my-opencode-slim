@@ -79,7 +79,7 @@ conservatively passes the path through. Disable with
 | Tool | Description |
 |------|-------------|
 | `task_status` | Read a child's state and latest result by exact session ID |
-| `task_report` | (V2 native) Send a bounded progress update or blocker from a running subagent to its owning parent; queue-only |
+| `task_report` | (V2 native) Steer a bounded progress update or blocker from a running subagent to its owning parent |
 | `task_reply` | Answer a child's pending control request by exact session ID and request ID. On V2 it is a permission-only host bridge; answer questions in the host UI |
 | `task_cancel` | Ask the host to interrupt the child's active execution while retaining its session |
 
@@ -104,9 +104,10 @@ On V2 native, a child can use `task_report` for a material milestone,
 consequential finding, blocker, or decision request. The recipient is always
 read from the child session's host-owned `parentID`; callers cannot choose
 another session. Reports enter the host's serialized inbox with
-`delivery: "queue"` and `resume: false`: the tool confirms that the host queued
-the report, not that the parent read it, started a turn, or woke. The parent can
-reply by continuing the same child session with the native V2
+`delivery: "steer"`. The tool requests a wake (`resume: true`) unless the
+parent's outcome is `interrupted`; a busy parent consumes reports at a step
+boundary. Acceptance does not confirm that the parent read the report. The
+parent can reply by continuing the same child session with the native V2
 `subagent(sessionID, prompt)` tool.
 
 Continue a completed, errored, or interrupted child through

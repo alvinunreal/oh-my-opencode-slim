@@ -10004,6 +10004,7 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'sessionModel',
     'sessionParent',
     'activeFallback',
+    'restoredFrom',
     'downProviders',
     'sessionAgent',
     'separateCompaction',
@@ -10133,6 +10134,7 @@ describe('ForegroundFallbackManager dispose cleanup', () => {
     'observedUserMessageIds',
     'separateCompaction',
     'downProviders',
+    'restoredFrom',
     'authGrace',
   ])('%s is cleared on dispose', (mapName) => {
     const mgr = new ForegroundFallbackManager(
@@ -12144,6 +12146,8 @@ describe('fallback restoration', () => {
   const sid = 'restore-session';
   const ttl = 30 * 60 * 1000;
   const origin = { providerID: 'primary', id: 'a', variant: 'high' };
+  const backup = { providerID: 'backup', id: 'b' };
+  const outage = { status: 503, message: 'provider unavailable' };
   const rejection = { type: 'provider.content-filter', message: 'blocked' };
   const idle = (activityAt = clock.now()) => ({
     type: 'session.idle',
@@ -12160,6 +12164,7 @@ describe('fallback restoration', () => {
     chain?: string[];
     unarmedHandoff?: boolean;
     quotaCooldownFilePath?: string;
+    retryDelayMs?: number;
     v1?: boolean;
   }) {
     const info: {
@@ -12173,7 +12178,7 @@ describe('fallback restoration', () => {
       agent: 'orchestrator',
       parentID: options?.parentID,
     };
-    const { client, session } = createMockClient({
+    const { client, session, mocks } = createMockClient({
       getData: info,
       promptAsyncImpl: options?.promptAsyncImpl,
     });
@@ -12190,7 +12195,7 @@ describe('fallback restoration', () => {
       enabled: false,
       v2RetryEnabled: true,
       maxRetries: 0,
-      retryDelayMs: 0,
+      retryDelayMs: options?.retryDelayMs ?? 0,
       input: {
         directory: '/test',
         hostFlavor: options?.v1 ? undefined : 'v2',
@@ -12248,7 +12253,68 @@ describe('fallback restoration', () => {
       retry,
       refuse,
       session,
+      mocks,
     };
+  }
+
+  async function startStep(
+    manager: ForegroundFallbackManager,
+    assistantMessageID: string,
+    model: { providerID: string; id: string; variant?: string },
+  ) {
+    await manager.handleEvent({
+      type: 'session.step.started',
+      data: {
+        sessionID: sid,
+        assistantMessageID,
+        agent: 'orchestrator',
+        model,
+      },
+    });
+  }
+
+  async function toolStep(
+    manager: ForegroundFallbackManager,
+    assistantMessageID?: string,
+  ) {
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID: sid, assistantMessageID, finish: 'tool-calls' },
+    });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  }
+
+  async function restoreWithInFlightStep(f: ReturnType<typeof fixture>) {
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    // The host can start this step before the event subscriber restores.
+    await startStep(f.manager, 'in-flight', backup);
+  }
+
+  async function restoreWithPendingAck(f: ReturnType<typeof fixture>) {
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await startStep(f.manager, 'before-restore', backup);
+    await clock.advance(ttl);
+    const applied = deferred<void>();
+    const ack = Promise.withResolvers<void>();
+    const lookup = deferred<{ data: typeof f.info }>();
+    const get = f.session.get;
+    f.session.get = mock(() => lookup.promise);
+    f.switchModel.mockImplementationOnce(async (_sessionID, model) => {
+      f.info.model = model;
+      applied.resolve();
+      await ack.promise;
+    });
+    const pending = toolStep(f.manager, 'before-restore');
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    f.session.get = get;
+    lookup.resolve({ data: f.info });
+    await applied.promise;
+    return { ack, pending };
   }
 
   async function replay(error: unknown = rejection) {
@@ -12293,6 +12359,582 @@ describe('fallback restoration', () => {
     });
     return { manager, changed };
   }
+
+  test('mid-turn restores after the original outage deadline even after another switch', async () => {
+    const f = fixture({
+      chain: ['primary/a', 'primary/y', 'backup/b', 'third/c'],
+    });
+    const sibling = { providerID: 'primary', id: 'y' };
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual(sibling);
+    await clock.advance(ttl / 2);
+    await f.retry(sibling, rejection);
+    await f.retry(backup, { message: 'usage limit reached' });
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(clock.pending()).toBe(0);
+    await clock.advance(ttl / 2 - 1);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    await clock.advance(1);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID: sid, finish: 'length' },
+    });
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+  });
+
+  test('mid-turn does not probe a spent quota even after a later outage', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, { message: 'usage limit reached' });
+    await f.retry(backup, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('mid-turn does not probe permanent billing failures', async () => {
+    const initial = fixture();
+    await initial.manager.handleEvent(busy());
+    await initial.retry(origin, { status: 402, message: 'payment required' });
+    await clock.advance(ttl);
+    await toolStep(initial.manager);
+    expect(initial.switchModel).toHaveBeenCalledTimes(1);
+    expect(initial.info.model).toEqual(backup);
+    initial.manager.dispose();
+
+    const f = fixture({ chain: ['primary/a', 'primary/y', 'backup/b'] });
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await f.retry(
+      { providerID: 'primary', id: 'y' },
+      { status: 402, message: 'payment required' },
+    );
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+  });
+
+  test('mid-turn does not probe a request rejection even after a later outage', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry();
+    await f.retry(backup, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('mid-turn repeated outages start a fresh deadline without timers', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual(backup);
+    await toolStep(f.manager);
+    await clock.advance(ttl - 1);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(clock.pending()).toBe(0);
+    await clock.advance(1);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(4);
+    expect(f.info.model).toEqual(origin);
+  });
+
+  test('mid-turn preserves a manually selected fallback variant', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    f.info.model = { ...backup, variant: 'manual' };
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    expect(f.info.model).toEqual({ ...backup, variant: 'manual' });
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+  });
+
+  test('F1 queued fallback success retains attribution for the next fallback refusal', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await startStep(f.manager, 'fallback-n', backup);
+    await clock.advance(ttl);
+    await toolStep(f.manager, 'fallback-n');
+    expect(f.info.model).toEqual(origin);
+    await startStep(f.manager, 'fallback-n1', backup);
+    await toolStep(f.manager, 'fallback-n1');
+    await f.refuse('fallback-n2', backup);
+    expect(await f.manager.pendingRefusalOutcome(sid, 'fallback-n2')).toBe(
+      'primary/a',
+    );
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('F2 spent quota on the origin provider disables a later mid-turn probe', async () => {
+    const f = fixture({ chain: ['primary/a', 'primary/y', 'backup/b'] });
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await f.retry(
+      { providerID: 'primary', id: 'y' },
+      { message: 'usage limit reached' },
+    );
+    expect(f.info.model).toEqual(backup);
+    await toolStep(f.manager);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.info.model).toEqual(backup);
+  });
+
+  test('mid-turn restore holds the event pump until the switch is acknowledged', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await startStep(f.manager, 'before-restore', backup);
+    await clock.advance(ttl);
+    const applied = deferred<void>();
+    const ack = deferred<void>();
+    f.switchModel.mockImplementationOnce(async (_sessionID, model) => {
+      f.info.model = model;
+      applied.resolve();
+      await ack.promise;
+    });
+    let settled = false;
+    const processing = f.manager
+      .handleEvent({
+        type: 'session.step.ended',
+        data: {
+          sessionID: sid,
+          assistantMessageID: 'before-restore',
+          finish: 'tool-calls',
+        },
+      })
+      .then(() => {
+        settled = true;
+      });
+    try {
+      await applied.promise;
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(settled).toBe(false);
+    } finally {
+      ack.resolve();
+      await processing;
+    }
+    expect(settled).toBe(true);
+    expect(f.info.model).toEqual(origin);
+  });
+
+  test('N1 retry hook during restore ACK keeps the original and spent-quota evidence', async () => {
+    const f = fixture();
+    const { ack, pending } = await restoreWithPendingAck(f);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: { message: 'usage limit reached' },
+      decision: { retry: false },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+    const callsBeforeAck = f.switchModel.mock.calls.length;
+    ack.resolve();
+    await pending;
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(callsBeforeAck).toBe(2);
+    expect(f.info.model).toEqual(origin);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+    f.manager.dispose();
+
+    const failed = fixture();
+    const waiting = await restoreWithPendingAck(failed);
+    waiting.ack.reject(new Error('restore rejected'));
+    await waiting.pending;
+    expect((failed.manager as any).restoredFrom.has(sid)).toBe(false);
+    expect(failed.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+  });
+
+  test.each(['pending', 'successful'] as const)(
+    'late native quota on B persists across a %s restore ACK without retrying cooled A',
+    async (ackState) => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), `omos-restored-quota-${ackState}-`),
+      );
+      const quotaCooldownFilePath = path.join(
+        root,
+        'omos-quota-cooldowns.json',
+      );
+      const f = fixture({
+        chain: ['primary/a', 'backup/b'],
+        quotaCooldownFilePath,
+      });
+      const { ack, pending } = await restoreWithPendingAck(f);
+      const internals = f.manager as unknown as {
+        sessionModel: Map<string, string>;
+        sessionTried: Map<string, Set<string>>;
+        recordV2QuotaCooldown: (...args: unknown[]) => Promise<void>;
+      };
+      internals.sessionModel.set(sid, 'primary/a');
+      internals.sessionTried.set(sid, new Set(['backup/b']));
+
+      const writeEntered = deferred<void>();
+      const writeGate = deferred<void>();
+      const originalWrite = internals.recordV2QuotaCooldown.bind(f.manager);
+      internals.recordV2QuotaCooldown = async (...args) => {
+        writeEntered.resolve(undefined);
+        await writeGate.promise;
+        await originalWrite(...args);
+      };
+      const quotaError = {
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 60 * 60 * 1000,
+        message: 'Individual quota reached; quota resets in 1h.',
+      };
+      const event = {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: backup,
+        error: quotaError,
+        decision: { retry: false },
+      };
+      const quotaWrite = f.manager.handleV2Retry(event, f.switchModel);
+
+      try {
+        await writeEntered.promise;
+        expect(internals.sessionModel.get(sid)).toBe('primary/a');
+        expect(internals.sessionTried.get(sid)?.has('backup/b')).toBe(true);
+        const overlappingDecision = { retry: false };
+        await f.manager.handleV2Retry(
+          {
+            sessionID: sid,
+            agent: 'orchestrator',
+            model: backup,
+            error: {
+              type: 'provider.rate-limit',
+              status: 429,
+              message: 'rate limit',
+            },
+            decision: overlappingDecision,
+          },
+          f.switchModel,
+        );
+        expect(f.manager.isFallbackInProgress(sid)).toBe(true);
+        expect(overlappingDecision).toEqual({ retry: false });
+        expect(f.switchModel).toHaveBeenCalledTimes(2);
+        expect(
+          await recordQuotaCooldown(
+            'primary',
+            'a',
+            5 * 60 * 60 * 1000,
+            clock.now(),
+            { filePath: quotaCooldownFilePath },
+          ),
+        ).toBe(true);
+        if (ackState === 'successful') {
+          ack.resolve();
+          await pending;
+        }
+      } finally {
+        writeGate.resolve(undefined);
+      }
+      await quotaWrite;
+      if (ackState === 'pending') {
+        ack.resolve();
+        await pending;
+      }
+
+      expect(event.decision).toEqual({ retry: false });
+      expect(f.switchModel).toHaveBeenCalledTimes(2);
+      expect(internals.sessionModel.get(sid)).toBe('primary/a');
+      expect(
+        isQuotaModelCooling('backup', 'b', clock.now(), quotaCooldownFilePath),
+      ).toBe(true);
+      expect(
+        isQuotaModelCooling('primary', 'a', clock.now(), quotaCooldownFilePath),
+      ).toBe(true);
+      expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+      f.manager.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    },
+  );
+
+  test('manual selection during restored quota persistence prevents stale bookkeeping', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-restored-quota-manual-'),
+    );
+    const quotaCooldownFilePath = path.join(root, 'omos-quota-cooldowns.json');
+    const f = fixture({
+      chain: ['primary/a', 'backup/b', 'third/c'],
+      quotaCooldownFilePath,
+    });
+    const { ack, pending } = await restoreWithPendingAck(f);
+    const internals = f.manager as unknown as {
+      sessionModel: Map<string, string>;
+      recordV2QuotaCooldown: (...args: unknown[]) => Promise<void>;
+    };
+    const writeEntered = deferred<void>();
+    const writeGate = deferred<void>();
+    const originalWrite = internals.recordV2QuotaCooldown.bind(f.manager);
+    internals.recordV2QuotaCooldown = async (...args) => {
+      writeEntered.resolve(undefined);
+      await writeGate.promise;
+      await originalWrite(...args);
+    };
+    const decision = { retry: false };
+    const quotaWrite = f.manager.handleV2Retry(
+      {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: backup,
+        error: {
+          type: 'provider.rate-limit',
+          status: 429,
+          retryAfterMs: 60 * 60 * 1000,
+          message: 'Individual quota reached; quota resets in 1h.',
+        },
+        decision,
+      },
+      f.switchModel,
+    );
+
+    try {
+      await writeEntered.promise;
+      f.info.model = { providerID: 'third', id: 'c' };
+      f.manager.observeContinuationModel(sid, 'third/c');
+    } finally {
+      writeGate.resolve(undefined);
+    }
+    await quotaWrite;
+    ack.resolve();
+    await pending;
+
+    expect(decision).toEqual({ retry: false });
+    expect(internals.sessionModel.get(sid)).toBe('third/c');
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect((f.manager as any).descent.has(sid)).toBe(false);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(
+      isQuotaModelCooling('backup', 'b', clock.now(), quotaCooldownFilePath),
+    ).toBe(true);
+    f.manager.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test('F3 late request rejection excludes the failed fallback on the next outage', async () => {
+    const provider = fixture({ retryDelayMs: 250 });
+    await restoreWithInFlightStep(provider);
+    expect(provider.info.model).toEqual(origin);
+    const providerEvent = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: outage,
+      decision: { retry: false, delay: 900 },
+    };
+    await provider.manager.handleV2Retry(providerEvent, provider.switchModel);
+    expect(providerEvent.decision).toEqual({ retry: true, delay: 250 });
+    expect(provider.info.model).toEqual(origin);
+    expect(provider.switchModel).toHaveBeenCalledTimes(2);
+    expect(provider.manager.getActiveFallback(sid)).toBeUndefined();
+    provider.manager.dispose();
+
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: rejection,
+      decision: { retry: false },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('F3 late spent quota excludes the failed provider on the next outage', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: { message: 'usage limit reached' },
+      decision: { retry: false },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('F4 interrupted run drops attribution on a new external prompt', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    for (const event of mapV2EventToV1({
+      type: 'session.execution.interrupted',
+      data: { sessionID: sid, reason: 'abort' },
+    }))
+      await f.manager.handleEvent(event);
+    const bridge = createSessionPromptBridge(
+      async () => {},
+      (sessionID, messageID) =>
+        f.manager.observeExternalPromptIntent(sessionID, messageID),
+    );
+    bridge.observePromptIntent({
+      sessionID: sid,
+      messageID: 'new-external',
+      prompt: { text: 'continue on the selected model' },
+    } as never);
+    f.info.model = backup;
+    await f.retry(backup, outage);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(f.info.model).toEqual({ providerID: 'primary', id: 'a' });
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('primary/a');
+  });
+
+  test('mid-turn success clears attribution of the previous fallback', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    await startStep(f.manager, 'original-success', origin);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'original-success',
+        finish: 'stop',
+      },
+    });
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual(backup);
+    await f.retry(backup, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('mid-turn consumes attribution on a nonmatching retry', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    await f.retry(backup, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+    expect(f.switchModel).toHaveBeenCalledTimes(4);
+  });
+
+  test('mid-turn late refusal respects a manual variant selected after restoration', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    f.info.model = { ...origin, variant: 'manual' };
+    await f.manager.handleEvent({
+      type: 'session.step.failed',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'in-flight',
+        finish: 'content-filter',
+        error: rejection,
+      },
+    });
+    expect(
+      await f.manager.pendingRefusalOutcome(sid, 'in-flight'),
+    ).toBeUndefined();
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).not.toHaveBeenCalled();
+    expect(f.info.model).toEqual({ ...origin, variant: 'manual' });
+  });
+
+  test('mid-turn late root refusal continues on the origin and excludes the rejected fallback', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    await f.manager.handleEvent({
+      type: 'session.step.failed',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'in-flight',
+        finish: 'content-filter',
+        error: rejection,
+      },
+    });
+    expect(await f.manager.pendingRefusalOutcome(sid, 'in-flight')).toBe(
+      'primary/a',
+    );
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const request = f.mocks.promptAsync.mock.calls[0]?.[0] as {
+      body: { agent: string; model?: unknown; parts: unknown[] };
+    };
+    expect(request.body.agent).toBe('orchestrator');
+    expect(request.body.model).toBeUndefined();
+    expect(isInternalInitiatorPart(request.body.parts[0])).toBe(true);
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('mid-turn late refusal does not continue on a quota-cooled restored origin', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-restored-refusal-'),
+    );
+    const quotaCooldownFilePath = path.join(root, 'omos-quota-cooldowns.json');
+    const f = fixture({
+      chain: ['primary/a', 'backup/b', 'third/c'],
+      quotaCooldownFilePath,
+    });
+
+    try {
+      await restoreWithInFlightStep(f);
+      expect(f.info.model).toEqual(origin);
+      expect(
+        await recordQuotaCooldown(
+          'primary',
+          'a',
+          5 * 60 * 60 * 1000,
+          clock.now(),
+          { filePath: quotaCooldownFilePath },
+        ),
+      ).toBe(true);
+      await f.manager.handleEvent({
+        type: 'session.step.failed',
+        data: {
+          sessionID: sid,
+          assistantMessageID: 'in-flight',
+          finish: 'content-filter',
+          error: rejection,
+        },
+      });
+
+      expect(f.switchModel).toHaveBeenCalledTimes(2);
+      expect(f.mocks.promptAsync).not.toHaveBeenCalled();
+      expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+      expect(f.info.model).toEqual(origin);
+      expect(await f.manager.pendingRefusalOutcome(sid, 'in-flight')).toBe(
+        undefined,
+      );
+    } finally {
+      f.manager.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
   test('T1: v2 restores the first origin and variant after multiple switches', async () => {
     const f = fixture();
@@ -12459,6 +13101,47 @@ describe('fallback restoration', () => {
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
 
+  test('quota cooling preserves the transient descent through mid-turn and idle restore checks', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-restore-midturn-'),
+    );
+    const quotaCooldownFilePath = path.join(root, 'omos-quota-cooldowns.json');
+    const resetAfterMs = 5 * 60 * 60 * 1000;
+    const f = fixture({
+      chain: ['primary/a', 'backup/b'],
+      quotaCooldownFilePath,
+    });
+
+    try {
+      await f.manager.handleEvent(busy());
+      await f.retry(origin, outage);
+      expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+      expect(
+        await recordQuotaCooldown('primary', 'a', resetAfterMs, clock.now(), {
+          filePath: quotaCooldownFilePath,
+        }),
+      ).toBe(true);
+      const storeBytes = await fs.readFile(quotaCooldownFilePath, 'utf8');
+
+      await clock.advance(ttl);
+      await startStep(f.manager, 'quota-cooled-tool', backup);
+      await toolStep(f.manager, 'quota-cooled-tool');
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
+      expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+      expect((f.manager as any).descent.get(sid)).toBeDefined();
+      expect(await fs.readFile(quotaCooldownFilePath, 'utf8')).toBe(storeBytes);
+
+      await f.manager.handleEvent(idle(clock.now()));
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
+      expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+      expect((f.manager as any).descent.get(sid)).toBeDefined();
+      expect(await fs.readFile(quotaCooldownFilePath, 'utf8')).toBe(storeBytes);
+    } finally {
+      f.manager.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test('v2 keeps a quota-cooled origin unrestored after the provider mark expires', async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), 'omos-quota-restore-'),
@@ -12536,6 +13219,7 @@ describe('fallback restoration', () => {
           { filePath: quotaCooldownFilePath },
         ),
       ).toBe(true);
+      const storeBytes = await fs.readFile(quotaCooldownFilePath, 'utf8');
       lookup.resolve({ data: f.info });
       await restoring;
 
@@ -12547,6 +13231,7 @@ describe('fallback restoration', () => {
       expect(f.manager.isQuotaModelCooling(sid, 'primary', 'a')).toBe(true);
       expect(f.manager.restoreTarget(sid)).toBeUndefined();
       expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+      expect(await fs.readFile(quotaCooldownFilePath, 'utf8')).toBe(storeBytes);
     } finally {
       f.manager.dispose();
       await fs.rm(root, { recursive: true, force: true });

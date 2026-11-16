@@ -262,35 +262,9 @@ export function acquirePidFileLock(
 }
 
 /**
- * Retries {@link acquirePidFileLock} up to `attempts` times, blocking
- * `RETRY_INTERVAL_MS` between attempts. Synchronous (Atomics.wait parks the
- * JS thread); prefer {@link acquirePidFileLockWithRetryAsync} on a main
- * thread. Returns a release function, or null when the lock stayed held for
- * every attempt (roughly `attempts * RETRY_INTERVAL_MS`).
- */
-export function acquirePidFileLockWithRetry(
-  file: string,
-  attempts: number,
-  maxAgeMs?: number,
-): PidFileLockRelease | null {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const release = acquirePidFileLock(file, maxAgeMs);
-    if (release) return release;
-    Atomics.wait(
-      new Int32Array(new SharedArrayBuffer(4)),
-      0,
-      0,
-      RETRY_INTERVAL_MS,
-    );
-  }
-  return null;
-}
-
-/**
- * Async variant of {@link acquirePidFileLockWithRetry}: waits via setTimeout
- * so the JS thread is never blocked (safe on the main thread). Retries until
- * `timeoutMs` has elapsed. Returns a release function, or null when the lock
- * stayed held for the whole budget.
+ * Retries {@link acquirePidFileLock} until `timeoutMs` has elapsed. Waits via
+ * setTimeout so the JS thread is never blocked. Returns a release function, or
+ * null when the lock stayed held for the whole budget.
  */
 export async function acquirePidFileLockWithRetryAsync(
   file: string,

@@ -745,9 +745,118 @@ describe('v2 tui preset plugin', () => {
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 
+    test('does not write an attachment when Companion is disabled', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: false },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'data');
+      process.env.XDG_DATA_HOME = dataHome;
+      let cleanup: (() => void | Promise<void>) | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        );
+        expect(
+          fs.existsSync(
+            path.join(
+              dataHome,
+              'opencode',
+              'storage',
+              'oh-my-opencode-slim',
+              'tui-attach',
+            ),
+          ),
+        ).toBe(false);
+      } finally {
+        await cleanup?.();
+      }
+    });
+
+    test('writes and removes the current TUI attachment when enabled', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'enabled-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      let cleanup: (() => void | Promise<void>) | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        );
+        expect(JSON.parse(fs.readFileSync(attachment, 'utf8'))).toMatchObject({
+          pid: process.pid,
+          cwd: projectDir,
+        });
+      } finally {
+        await cleanup?.();
+      }
+      expect(fs.existsSync(attachment)).toBe(false);
+    });
+
+    test('a throwing slot disposer still removes the Companion attachment', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'throwing-disposer-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      const setup = makeSetupCtx();
+      (
+        setup.ctx.ui as {
+          slot: (...args: unknown[]) => () => void;
+        }
+      ).slot = () => () => {
+        throw new Error('test slot cleanup failure');
+      };
+      const cleanup = await tui2Plugin.setup(
+        setup.ctx as unknown as V2TuiPluginContext,
+      );
+      if (!cleanup) throw new Error('expected TUI cleanup');
+      try {
+        expect(fs.existsSync(attachment)).toBe(true);
+        await expect(cleanup()).rejects.toThrow('test slot cleanup failure');
+        expect(fs.existsSync(attachment)).toBe(false);
+      } finally {
+        await cleanup().catch(() => {});
+      }
+    });
+
     test('viewer TUI does not check for updates', async () => {
-      writeUserConfig({ sidebar: false });
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+      });
       process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER = '1';
+      const attachmentDirectory = path.join(
+        configHome,
+        'viewer-data',
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+      );
+      process.env.XDG_DATA_HOME = path.join(configHome, 'viewer-data');
       const originalFetch = globalThis.fetch;
       let requests = 0;
       globalThis.fetch = (async () => {
@@ -763,6 +872,7 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_500);
         for (let i = 0; i < 30; i += 1) await Promise.resolve();
         expect(requests).toBe(0);
+        expect(fs.existsSync(attachmentDirectory)).toBe(false);
       } finally {
         cleanup?.();
         jest.useRealTimers();
@@ -852,10 +962,16 @@ describe('v2 tui preset plugin', () => {
             return {
               sessionID: input.sessionID,
               status: 'bound',
-              presetName: 'server-alpha',
+              presetName:
+                input.sessionID === 'root-a' ? 'server-alpha' : 'server-gamma',
               affects: 'future-children-only',
               team: {
-                agentModels: { oracle: 'saved/team-a' },
+                agentModels: {
+                  oracle:
+                    input.sessionID === 'root-a'
+                      ? 'saved/team-a'
+                      : 'saved/team-c',
+                },
                 agentVariants: {},
                 inheritance: {},
               },
@@ -2423,7 +2539,7 @@ describe('v2 tui preset plugin', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true });
       fs.writeFileSync(
         path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ multiplexer: { type: 'tmux' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
       );
       process.env.TMUX_PANE = '%1';
       const originalArgv = process.argv;
@@ -2461,7 +2577,7 @@ describe('v2 tui preset plugin', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true });
       fs.writeFileSync(
         path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ multiplexer: { type: 'tmux' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -2965,7 +3081,7 @@ describe('v2 tui preset plugin', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true });
       fs.writeFileSync(
         path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ multiplexer: { type: 'tmux' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3005,7 +3121,7 @@ describe('v2 tui preset plugin', () => {
       );
       fs.writeFileSync(
         configPath,
-        JSON.stringify({ multiplexer: { type: 'none' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'none' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3048,11 +3164,11 @@ describe('v2 tui preset plugin', () => {
         // Disabled at startup: no wiring and no host subscriptions.
         expect(subscriptions.size).toBe(0);
 
-        // v2 hot-reloads config; enabling panes must rebuild the wiring on the
-        // next sidebar poll instead of staying unavailable until restart.
+        // v2 hot-reloads config; enabling panes must rebuild the wiring
+        // without waiting for a restart.
         fs.writeFileSync(
           configPath,
-          JSON.stringify({ multiplexer: { type: 'tmux' } }),
+          JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
         );
         // Drive the real config notification instead of waiting on a guessed
         // poll interval (the sidebar-off interval is intentionally 5s).
@@ -3227,7 +3343,7 @@ describe('v2 tui preset plugin', () => {
       );
       fs.writeFileSync(
         configPath,
-        JSON.stringify({ multiplexer: { type: 'none' } }),
+        JSON.stringify({ sidebar: false, multiplexer: { type: 'none' } }),
       );
       process.env.TMUX_PANE = '%1';
 
@@ -3278,7 +3394,7 @@ describe('v2 tui preset plugin', () => {
         // while it is still waiting.
         fs.writeFileSync(
           configPath,
-          JSON.stringify({ multiplexer: { type: 'tmux' } }),
+          JSON.stringify({ sidebar: false, multiplexer: { type: 'tmux' } }),
         );
         const notified = await notifyConfigChanged(
           projectDir,

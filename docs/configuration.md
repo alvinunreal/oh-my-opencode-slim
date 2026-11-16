@@ -137,10 +137,16 @@ Click the `OMO-Slim` heading to collapse or expand its sidebar section. It
 starts expanded; the choice lasts for the current TUI window only. An idle
 agent has a `•` before its name. While an agent session reports `busy` or
 `retry`, an animated Braille indicator replaces the bullet in the same spot.
-The bullet returns after every active session for that agent becomes idle or
-is deleted.
+An idle agent with clickable session history shows `✦` instead of the bullet.
+The bullet returns when there is no active session or available history.
+The sidebar shows up to two most recently finished sessions per agent and
+parent; running sessions are always shown.
 
-In an expanded agent list, `⚰` marks a stopped session (no terminal result); only `task_revive` can continue it. Expanded subagent rows show the session's title, truncated to the sidebar's width, when the host knows one; before a title is generated or on hosts without title data they fall back to the numbered alias.
+In an expanded agent list, `⚰` marks an interrupted session; use
+`subagent(sessionID)` to continue it. Expanded subagent rows show the session's
+title, truncated to the sidebar's width, when the host knows one; before a
+title is generated or on hosts without title data they fall back to the
+numbered alias.
 
 ---
 
@@ -668,7 +674,7 @@ process, not once per session).
 
 OpenCode owns child execution, continuation, delivery, and restart recovery.
 Slim defaults to `backgroundJobs.mode: "native"`, which enables exact-ID
-`task_status`, `task_cancel`, permission-only `task_reply`, queue-only
+`task_status`, `task_cancel`, permission-only `task_reply`, child
 `task_report`, and session preset binding. Use `"off"` to disable Slim's
 task controls and session bindings.
 
@@ -758,7 +764,9 @@ returns at the deadline; reading or restarting does not extend it.
 Automatic restoration to the original model also respects its quota deadline,
 even after a temporary provider-failure mark expires. The session keeps its
 confirmed fallback while the origin is cooling, retaining the original model
-and variant for a later eligible restoration.
+and variant for a later eligible restoration. This applies at both idle and
+mid-turn restoration boundaries. A late backup quota observation remains
+attributed to the backup, not the restored origin.
 
 The configuration directory is the sharing domain, not an account identity.
 Variants of one provider/model share its deadline; other models and providers

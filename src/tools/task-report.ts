@@ -16,6 +16,7 @@ type SessionInfo = {
   id?: string;
   parentID?: string;
   agent: string;
+  outcome?: string;
 };
 
 function unwrapSessionInfo(response: unknown, label: string): SessionInfo {
@@ -54,7 +55,7 @@ export function createTaskReportTool(options: {
 }): Record<'task_report', ToolDefinition> {
   const task_report = tool({
     description:
-      'Queue a bounded progress update or blocker for the calling child’s verified parent. The host does not wake the parent; processing is not confirmed.',
+      'Send a bounded progress update or blocker to the calling child’s verified parent. Use for material milestones, consequential findings, blockers, or decisions the parent must make. Requests a wake unless the parent was interrupted; processing is not confirmed.',
     args: {
       kind: z
         .enum(['progress', 'escalation'])
@@ -103,10 +104,7 @@ export function createTaskReportTool(options: {
       }
       if (options.isDisposed?.()) throw new Error('Plugin is disposing');
 
-      // Queue-only delivery: the update lands in the host inbox and never
-      // resumes the parent. The parent's own state (busy, idle, interrupted,
-      // pending asks) is never inspected — the host owns when the parent
-      // consumes the update.
+      const dormant = parent.outcome === 'interrupted';
       const updateID = randomUUID();
       const message = [
         `<subagent-update id="${updateID}" kind="${args.kind}">`,
@@ -126,13 +124,15 @@ export function createTaskReportTool(options: {
       const response = await promptAsync({
         path: { id: parent.id },
         query: { directory: options.input.directory },
-        delivery: 'queue',
-        resume: false,
+        delivery: 'steer',
+        resume: !dormant,
         body,
       });
       assertPromptAccepted(response);
 
-      return `Update ${updateID} queued for the parent without waking it. The host accepted the update; processing is not confirmed.`;
+      return dormant
+        ? `Update ${updateID} accepted for the parent without waking it; processing is not confirmed.`
+        : `Update ${updateID} accepted for the parent; wake requested, processing is not confirmed.`;
     },
   });
 
