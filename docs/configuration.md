@@ -137,10 +137,16 @@ Click the `OMO-Slim` heading to collapse or expand its sidebar section. It
 starts expanded; the choice lasts for the current TUI window only. An idle
 agent has a `•` before its name. While an agent session reports `busy` or
 `retry`, an animated Braille indicator replaces the bullet in the same spot.
-The bullet returns after every active session for that agent becomes idle or
-is deleted.
+An idle agent with clickable session history shows `✦` instead of the bullet.
+The bullet returns when there is no active session or available history.
+The sidebar shows up to two most recently finished sessions per agent and
+parent; running sessions are always shown.
 
-In an expanded agent list, `⚰` marks a stopped session (no terminal result); only `task_revive` can continue it. Expanded subagent rows show the session's title, truncated to the sidebar's width, when the host knows one; before a title is generated or on hosts without title data they fall back to the numbered alias.
+In an expanded agent list, `⚰` marks an interrupted session; use
+`subagent(sessionID)` to continue it. Expanded subagent rows show the session's
+title, truncated to the sidebar's width, when the host knows one; before a
+title is generated or on hosts without title data they fall back to the
+numbered alias.
 
 ---
 

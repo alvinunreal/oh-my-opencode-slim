@@ -15,8 +15,8 @@ interface ReusableSessionSelection {
 }
 
 /**
- * Per-session alias/status projection for the clickable sidebar. Entries only
- * exist for sessions present in `activeSessions`; they never activate a
+ * Per-session alias/status projection for the clickable sidebar. Host overlays
+ * may include idle parent aliases for attribution; entries never activate a
  * session by themselves. The key is always the full sessionID — never an
  * alias — and the parent link lives exclusively in `sessionParents`.
  */
