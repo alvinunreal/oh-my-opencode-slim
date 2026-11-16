@@ -15,7 +15,7 @@
   </p>
 
   <p>
-    🐾 <b>畜産動物たちに捧げます。</b> <sub>ずっと無料です。Slim で時間が浮いたら、<a href="https://ohmyopencodeslim.com/donate">あなたの地域で動物を助ける団体に寄付してください</a>。</sub>
+    <b>Slim は無料です。</b> <sub>役に立ったら、<a href="https://ohmyopencodeslim.com/donate">動物福祉への支援</a>をご検討ください。</sub>
   </p>
 
   <p>
@@ -730,17 +730,13 @@ bunx oh-my-opencode-slim@latest companion install
 
 ---
 
-## 🐾 畜産動物たちのために
+## 動物福祉への支援
 
-Slim は無料の MIT ライセンスで、工場式畜産の動物たちに捧げています。毎年 800 億頭を超える陸上動物と、推定 1 兆匹以上の魚が食用に殺されています。その多くは、ケージや過密な畜舎、水槽の中で一生を過ごします。
+Slim は無料の MIT ライセンスで、今後もそれは変わりません。代金の代わりに、役立つと感じた方には動物福祉への支援をお願いしています。推薦団体は畜産動物の飼育環境の改善に取り組んでおり、いずれも [Animal Charity Evaluators](https://animalcharityevaluators.org) による独立した評価を受けています。寄付は団体に直接届きます。
 
-Slim で時間が浮いたら、その一部を動物たちに返してください。
-
-- **[寄付する](https://ohmyopencodeslim.com/donate)**：あなたの地域で活動する [Animal Charity Evaluators](https://animalcharityevaluators.org) 推薦団体の寄付ページが開きます。
-- **[すべての団体を見る](https://ohmyopencodeslim.com/animals)**：別の団体を選んだり、選んだ理由を読んだりできます。
-- **仕事で Slim を使っていますか？** ライセンス上の義務はありません。会社として毎年の寄付をお願いします。
-
-寄付は団体に直接届き、私たちは受け取りません。
+- **[寄付する](https://ohmyopencodeslim.com/donate)**：お住まいの地域で活動する推薦団体の寄付ページが開きます。
+- **[すべての団体](https://ohmyopencodeslim.com/animals)**：各団体を比較し、選定理由を確認できます。
+- **商用利用**：ライセンス上の義務はありません。Slim を利用する企業には、年に一度の寄付をお願いしています。
 
 ---
 

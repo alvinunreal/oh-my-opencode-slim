@@ -15,7 +15,7 @@
   </p>
 
   <p>
-    🐾 <b>Dedicated to farmed animals.</b> <sub>Free forever. If Slim saves you time, <a href="https://ohmyopencodeslim.com/donate">donate to a charity helping them where you live</a>.</sub>
+    <b>Slim is free.</b> <sub>If it's useful to you, consider <a href="https://ohmyopencodeslim.com/donate">supporting animal welfare</a>.</sub>
   </p>
 
   <p>
@@ -1031,17 +1031,13 @@ Use this section as a map: start with installation, then jump to features, confi
 
 ---
 
-## 🐾 For Farmed Animals
+## Supporting Animal Welfare
 
-Slim is free and MIT licensed, and it is dedicated to the animals on factory farms. More than 80 billion land animals and an estimated trillion or more fish are killed for food every year, most after lives in cages, crowded sheds and tanks.
+Slim is free and MIT licensed, and will remain so. In place of payment, we ask users who find it useful to support animal welfare. The recommended charities work to improve conditions for farmed animals. Each is independently evaluated by [Animal Charity Evaluators](https://animalcharityevaluators.org), and donations go directly to them.
 
-If Slim saves you time, give some of it back to them:
-
-- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of an [Animal Charity Evaluators](https://animalcharityevaluators.org) recommended charity working in your region.
-- **[See all charities](https://ohmyopencodeslim.com/animals)**: pick another one, or read why we chose them.
-- **Using Slim at work?** The license asks nothing of you. We ask that your company make a yearly donation.
-
-The money goes to the charity, not to us.
+- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of a recommended charity active in your region.
+- **[All charities](https://ohmyopencodeslim.com/animals)**: compare the options and see why they were selected.
+- **Commercial use**: the license carries no obligation. Companies that rely on Slim are asked to make an annual donation.
 
 ---
 
