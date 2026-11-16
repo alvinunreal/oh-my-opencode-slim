@@ -1,5 +1,4 @@
 import { describe, expect, spyOn, test } from 'bun:test';
-import { DEFAULT_CHILD_INPUT_WAKE_KINDS } from './constants';
 import * as effectiveOverrides from './effective-agent-overrides';
 import { RuntimeConfig } from './runtime';
 import type { PluginConfig } from './schema';
@@ -295,16 +294,12 @@ describe('RuntimeConfig', () => {
     expect(off.backgroundJobsMode).toBe('off');
     expect(off.interviewEnabled).toBe(false);
     expect(off.sidebarEnabled).toBe(false);
-    // Sibling backgroundJobs keys stay readable (parsed; inert at runtime).
-    expect(off.backgroundJobs.mode).toBe('off');
-
     RuntimeConfig.reset(DIRECTORY);
     const partial = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: { mode: 'off', maxSessionsPerAgent: 4 },
+      backgroundJobs: { mode: 'off' },
       interview: { maxQuestions: 5 },
     });
     expect(partial.backgroundJobsEnabled).toBe(false);
-    expect(partial.backgroundJobs.maxSessionsPerAgent).toBe(4);
     expect(partial.interviewEnabled).toBe(true);
     expect(partial.sidebarEnabled).toBe(true);
     expect(partial.liveConfigRefresh).toBe(true);
@@ -339,7 +334,7 @@ describe('RuntimeConfig', () => {
     RuntimeConfig.reset(DIRECTORY);
     const managed = RuntimeConfig.init(DIRECTORY, {
       backgroundJobs: { mode: 'managed' },
-    });
+    } as unknown as PluginConfig);
     expect(managed.backgroundJobsMode).toBe('managed');
     expect(managed.backgroundJobsEnabled).toBe(true);
   });
@@ -365,8 +360,6 @@ describe('RuntimeConfig', () => {
       managedJobs: false,
       presetRouting: true,
     });
-    expect(v2.backgroundJobs.mode).toBe('native');
-    expect(v2.backgroundJobs.maxSessionsPerAgent).toBe(2);
     expect(v1Gates.backgroundJobsMode).toBe('managed');
     expect(RuntimeConfig.get(DIRECTORY)).toBe(v2);
     expect(RuntimeConfig.get(DIRECTORY).featureGates).toBe(v2.featureGates);
@@ -391,7 +384,7 @@ describe('RuntimeConfig', () => {
     expect(() =>
       RuntimeConfig.init(
         DIRECTORY,
-        { backgroundJobs: { mode: 'managed' } },
+        { backgroundJobs: { mode: 'managed' } } as unknown as PluginConfig,
         'v2',
       ),
     ).toThrow(/Unsupported backgroundJobs\.mode "managed"/);
@@ -400,7 +393,7 @@ describe('RuntimeConfig', () => {
     expect(() =>
       RuntimeConfig.createDetached(
         DIRECTORY,
-        { backgroundJobs: { mode: 'managed' } },
+        { backgroundJobs: { mode: 'managed' } } as unknown as PluginConfig,
         'v2',
       ),
     ).toThrow(/Unsupported backgroundJobs\.mode "managed"/);
@@ -615,18 +608,6 @@ describe('RuntimeConfig', () => {
       main_pane_size: 60,
       equalize_panes: true,
     });
-    expect(runtime.backgroundJobs.maxSessionsPerAgent).toBe(2);
-    // The job board is never rendered on any host, so there is no
-    // boardInjection switch to read.
-    expect(
-      'boardInjection' in (runtime.backgroundJobs as Record<string, unknown>),
-    ).toBe(false);
-    expect(runtime.backgroundJobs.pruneEvictedSessions).toBe(false);
-    expect(runtime.backgroundJobs.concurrency).toEqual({
-      defaultConcurrency: 0,
-      providerConcurrency: {},
-      modelConcurrency: {},
-    });
     expect(runtime.fallback).toEqual({
       enabled: true,
       maxRetries: 3,
@@ -674,7 +655,6 @@ describe('RuntimeConfig', () => {
       fallback: { enabled: false, maxRetries: 5 },
       webfetch: { enabled: false },
       acpAgents: { myAcp: { command: 'echo' } },
-      backgroundJobs: { maxSessionsPerAgent: 7 },
       multiplexer: { type: 'tmux', layout: 'main-vertical' },
     });
     expect(runtime.updateCheckerEnabled).toBe(false);
@@ -697,45 +677,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.fallback.maxRetries).toBe(5);
     expect(runtime.featureGates.webfetch).toBe(false);
     expect(runtime.acpAgents.myAcp.command).toBe('echo');
-    expect(runtime.backgroundJobs.maxSessionsPerAgent).toBe(7);
     expect(runtime.multiplexer.type).toBe('tmux');
-  });
-
-  test('backgroundJobs folds childInputWake off into all-false kinds', () => {
-    resetRegistry();
-    const runtime = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: {
-        childInputWake: false,
-        childInputWakeKinds: { question: true },
-      },
-    });
-    expect(runtime.backgroundJobs.childInputWake).toBe(false);
-    expect(runtime.backgroundJobs.childInputWakeKinds).toEqual({
-      permission: false,
-      question: false,
-    });
-  });
-
-  test('backgroundJobs passes childInputWakeKinds through when enabled', () => {
-    resetRegistry();
-    const runtime = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: {
-        childInputWake: true,
-        childInputWakeKinds: { permission: true, question: false },
-      },
-    });
-    expect(runtime.backgroundJobs.childInputWakeKinds).toEqual({
-      permission: true,
-      question: false,
-    });
-  });
-
-  test('backgroundJobs ships the default child-input wake kinds', () => {
-    resetRegistry();
-    const runtime = RuntimeConfig.init(DIRECTORY, {});
-    expect(runtime.backgroundJobs.childInputWakeKinds).toEqual(
-      DEFAULT_CHILD_INPUT_WAKE_KINDS,
-    );
   });
 
   test('runtimeChains derives from array models, alias-aware', () => {

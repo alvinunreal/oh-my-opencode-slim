@@ -22,6 +22,10 @@ import omoTui, {
   resolveRouteSessionId,
 } from '../tui';
 import {
+  type HostSessionViews,
+  overlayHostSessions,
+} from '../tui-host-sessions';
+import {
   KILL_ALL_COMMAND_ID,
   KILL_ALL_KEYBIND,
   killAllRunningSubagents,
@@ -65,7 +69,7 @@ type V2SlotApi = (claim: {
  */
 export interface V2PresetTuiContext extends V2PresetManagerContext {
   data?: V2PresetManagerContext['data'] & {
-    session?: {
+    session?: HostSessionViews['session'] & {
       list?: () => Array<{
         id?: string;
         parentID?: string;
@@ -211,9 +215,8 @@ function buildPresetLayer(
  * Emergency `omo.kill_all` keymap command: abort every running subagent
  * of the conversation the current route shows (alt+w, also
  * palette + `/killall`). No picker, no confirmation — instant, fail-soft.
- * Targets come from the shared tui-state snapshot projection; the aborts
- * go through the shared `src/tui-kill.ts` helper; the existing idle
- * pipeline does all reconciliation.
+ * Targets come from the host session overlay on the tui-state snapshot;
+ * interrupts go through the shared `src/tui-kill.ts` helper.
  */
 function buildKillAllCommand(
   ctx: V2PresetTuiContext & {
@@ -289,6 +292,7 @@ async function runOpenSubagentFlow(ctx: V2PresetTuiContext): Promise<void> {
 async function runKillAllFlow(ctx: {
   client?: unknown;
   location?: { directory: string };
+  data?: { session?: HostSessionViews['session'] };
   ui?: {
     router?: { current?: () => unknown };
     toast?: { show?: (toast: { message: string }) => void };
@@ -298,9 +302,14 @@ async function runKillAllFlow(ctx: {
     const directory = ctx.location?.directory ?? process.cwd();
     const route = ctx.ui?.router?.current?.() as TuiRouteView | undefined;
     const visible = route ? resolveRouteSessionId(route) : undefined;
+    const snapshot = overlayHostSessions(
+      readTuiSnapshot(directory),
+      { visibleSessionID: visible, session: ctx.data?.session },
+      0,
+    );
     const result = await killAllRunningSubagents(
       ctx.client,
-      readTuiSnapshot(directory),
+      snapshot,
       visible,
       directory,
     );

@@ -26,8 +26,8 @@ function nativeSyntheticRecord(
   };
 }
 
-/** exact2.3 reconcile can return the FIRST record for a reused id even when
- * the new payload differs. Keep the envelope identical; mutate only payload. */
+/** exact2.3 reconcile returns the FIRST record for a reused id; keep the
+ * envelope identical and mutate only payload bytes. */
 function staleSyntheticRecord(
   input: Record<string, unknown>,
   patch: Record<string, unknown>,
@@ -44,12 +44,15 @@ function createContext(
     child?: Record<string, unknown>;
     parent?: Record<string, unknown>;
     onSynthetic?: (input: Record<string, unknown>) => void;
+    onGet?: (sessionID: string) => void;
     syntheticResult?: (input: Record<string, unknown>) => unknown;
     syntheticThrows?: Error;
+    getThrows?: { child?: Error; parent?: Error };
     omitGet?: boolean;
     omitSynthetic?: boolean;
     omitChildRecord?: boolean;
-    deferredGet?: boolean;
+    omitParentRecord?: boolean;
+    deferGet?: 'child' | 'parent';
   } = {},
 ) {
   const sessions: Record<string, Record<string, unknown>> = {
@@ -67,6 +70,7 @@ function createContext(
     },
   };
   if (options.omitChildRecord) delete sessions.child;
+  if (options.omitParentRecord) delete sessions.parent;
   const state = {
     getCalls: [] as string[],
     promptCalls: [] as unknown[],
@@ -74,7 +78,7 @@ function createContext(
     syntheticInputs: [] as Record<string, unknown>[],
   };
   let resolveGet: ((value: unknown) => void) | undefined;
-  const getGate = options.deferredGet
+  const gate = options.deferGet
     ? new Promise<unknown>((resolve) => {
         resolveGet = resolve;
       })
@@ -102,7 +106,12 @@ function createContext(
         : {
             get: async ({ sessionID }: { sessionID: string }) => {
               state.getCalls.push(sessionID);
-              return getGate ?? sessions[sessionID];
+              options.onGet?.(sessionID);
+              const thrown =
+                options.getThrows?.[sessionID as 'child' | 'parent'];
+              if (thrown) throw thrown;
+              if (gate && sessionID === options.deferGet) return gate;
+              return sessions[sessionID];
             },
           }),
       prompt: async (input: unknown) => {
@@ -138,98 +147,218 @@ const reportArgs = {
   message: 'The focused implementation is complete.',
 };
 
+const execute = (
+  tool: ReturnType<typeof createTaskReportTool>,
+  args: Record<string, unknown> = reportArgs,
+) => tool.task_report.execute(args, { sessionID: 'child' } as never);
+
 describe('task_report', () => {
-  test('queues a native synthetic update with internal metadata and no user prompt or model switch', async () => {
-    const { input, state } = createContext({});
-    const { task_report } = createTaskReportTool({ input });
+  test('contract: idle escalation steers and requests a wake', async () => {
+    const { input, state } = createContext({
+      parent: { outcome: 'succeeded', time: { idle: 2_000 } },
+    });
 
-    const result = await task_report.execute(reportArgs, {
-      sessionID: 'child',
-    } as never);
+    await execute(createTaskReportTool({ input }), {
+      ...reportArgs,
+      kind: 'escalation',
+    });
 
-    expect(state.syntheticInputs).toHaveLength(1);
     const admission = state.syntheticInputs[0];
     expect(admission).toMatchObject({
       sessionID: 'parent',
-      delivery: 'queue',
-      resume: false,
+      delivery: 'steer',
+      resume: true,
       description: 'oh-my-opencode-slim internal initiator',
       metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
     });
-    expect(admission?.id).toMatch(/^msg_omos_[0-9a-f-]{36}$/);
-    expect(admission?.text).toContain('kind="progress"');
+    expect(admission?.text).toContain('kind="escalation"');
     expect(admission?.text).toContain('From @fixer (session child)');
     expect(admission?.text).toContain(reportArgs.message);
     expect(admission?.text).toContain(SLIM_INTERNAL_INITIATOR_MARKER);
-    // Exactly one native read: the calling child, never a parent lookup.
-    expect(state.getCalls).toEqual(['child']);
-    // No v1 user-prompt/model-switch transport remains.
+  });
+
+  test('contract: progress steers and requests a wake', async () => {
+    const { input, state } = createContext({});
+
+    await execute(createTaskReportTool({ input }));
+
+    expect(state.syntheticInputs[0]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: true,
+    });
+    expect(state.syntheticInputs[0]?.text).toContain('kind="progress"');
+  });
+
+  test('reads exactly the child then the parent; no user prompt or model switch', async () => {
+    const { input, state } = createContext({});
+
+    await execute(createTaskReportTool({ input }));
+
+    expect(state.getCalls).toEqual(['child', 'parent']);
     expect(state.promptCalls).toEqual([]);
     expect(state.switchModelCalls).toEqual([]);
-    expect(result).toMatch(/Update [a-f0-9-]{36} queued for the parent/);
-    expect(result).toContain('without waking it');
-    expect(result).toContain('processing is not confirmed');
-    expect(result).not.toContain('processed');
+    expect(state.syntheticInputs).toHaveLength(1);
   });
 
   test('header tracker classifies the admitted synthetic id as internal', async () => {
     const { input, state } = createContext({});
-    const { task_report } = createTaskReportTool({ input });
 
-    await task_report.execute(reportArgs, { sessionID: 'child' } as never);
+    await execute(createTaskReportTool({ input }));
 
     const id = state.syntheticInputs[0]?.id as string;
     expect(isInternalAdmission('parent', id)).toBe(true);
   });
 
-  test('does not send from a parentless session', async () => {
-    const { input, state } = createContext({
-      child: { parentID: undefined },
-    });
-    const { task_report } = createTaskReportTool({ input });
+  test('reports to a parent without an explicit agent', async () => {
+    const { input, state } = createContext({ parent: { agent: undefined } });
 
-    await expect(
-      task_report.execute(reportArgs, { sessionID: 'child' } as never),
-    ).rejects.toThrow('only available in a child session');
+    await execute(createTaskReportTool({ input }));
+
+    expect(state.syntheticInputs[0]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: true,
+    });
+  });
+
+  test('normalizes a non-string child agent to the subagent attribution', async () => {
+    const { input, state } = createContext({ child: { agent: 42 } });
+
+    await execute(createTaskReportTool({ input }));
+
+    expect(state.syntheticInputs[0]?.text).toContain(
+      'From @subagent (session child)',
+    );
+  });
+
+  test('contract: interrupted parent is not resumed for either kind', async () => {
+    const { input, state } = createContext({
+      parent: { outcome: 'interrupted', time: { idle: 2_000 } },
+    });
+    const tool = createTaskReportTool({ input });
+
+    await execute(tool);
+    await execute(tool, { ...reportArgs, kind: 'escalation' });
+
+    expect(state.syntheticInputs).toHaveLength(2);
+    expect(state.syntheticInputs[0]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: false,
+    });
+    expect(state.syntheticInputs[0]?.text).toContain('kind="progress"');
+    expect(state.syntheticInputs[1]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: false,
+    });
+    expect(state.syntheticInputs[1]?.text).toContain('kind="escalation"');
+  });
+
+  test('contract: busy parent does not change admission', async () => {
+    const { input, state } = createContext({
+      parent: { time: { busy: 2_000 } },
+    });
+
+    await execute(createTaskReportTool({ input }));
+
+    expect(state.syntheticInputs[0]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: true,
+    });
+  });
+
+  test('contract: result distinguishes wake request from interrupted parent', async () => {
+    const normal = createTaskReportTool({ input: createContext({}).input });
+    const interrupted = createTaskReportTool({
+      input: createContext({ parent: { outcome: 'interrupted' } }).input,
+    });
+    const awake = await execute(normal);
+    const dormant = await execute(interrupted);
+
+    expect(awake).toMatch(/Update [a-f0-9-]{36}/);
+    expect(awake).toContain('wake requested');
+    expect(awake).not.toContain('without waking');
+    expect(dormant).toContain('without waking');
+    expect(awake).toContain('processing is not confirmed');
+    expect(dormant).toContain('processing is not confirmed');
+    expect(awake).not.toContain('processed');
+    expect(dormant).not.toContain('processed');
+  });
+
+  test('does not send from a parentless session', async () => {
+    const { input, state } = createContext({ child: { parentID: undefined } });
+
+    await expect(execute(createTaskReportTool({ input }))).rejects.toThrow(
+      'only available in a child session',
+    );
     expect(state.syntheticInputs).toHaveLength(0);
   });
 
   test('refuses an empty parentID', async () => {
     const { input, state } = createContext({ child: { parentID: '' } });
-    const { task_report } = createTaskReportTool({ input });
 
-    await expect(
-      task_report.execute(reportArgs, { sessionID: 'child' } as never),
-    ).rejects.toThrow('only available in a child session');
+    await expect(execute(createTaskReportTool({ input }))).rejects.toThrow(
+      'only available in a child session',
+    );
     expect(state.syntheticInputs).toHaveLength(0);
   });
 
-  test('refuses a foreign child id, a non-string agent, or a missing child record', async () => {
+  test('refuses a foreign child id or a missing child record', async () => {
     const contexts = [
       createContext({ child: { id: 'foreign' } }),
-      createContext({ child: { agent: 42 } }),
       createContext({ omitChildRecord: true }),
     ];
     for (const ctx of contexts) {
-      const { task_report } = createTaskReportTool({ input: ctx.input });
       await expect(
-        task_report.execute(reportArgs, { sessionID: 'child' } as never),
+        execute(createTaskReportTool({ input: ctx.input })),
       ).rejects.toThrow('Could not verify the calling subagent session');
       expect(ctx.state.syntheticInputs).toHaveLength(0);
     }
   });
 
-  test('missing native synthetic fails honestly with no user-prompt fallback', async () => {
+  test('missing native get/synthetic fails honestly with no prompt fallback', async () => {
     for (const options of [{ omitSynthetic: true }, { omitGet: true }]) {
       const { input, state } = createContext(options);
-      const { task_report } = createTaskReportTool({ input });
 
-      await expect(
-        task_report.execute(reportArgs, { sessionID: 'child' } as never),
-      ).rejects.toThrow(/native v2 session/);
+      await expect(execute(createTaskReportTool({ input }))).rejects.toThrow(
+        /native v2 session/,
+      );
       expect(state.syntheticInputs).toHaveLength(0);
       expect(state.promptCalls).toEqual([]);
     }
+  });
+
+  test('does not accept a parent record that is missing or mismatched', async () => {
+    const contexts = [
+      createContext({ omitParentRecord: true }),
+      createContext({ parent: { id: 'other' } }),
+    ];
+    for (const ctx of contexts) {
+      await expect(
+        execute(createTaskReportTool({ input: ctx.input })),
+      ).rejects.toThrow('Could not verify the owning parent session');
+      expect(ctx.state.syntheticInputs).toHaveLength(0);
+    }
+  });
+
+  test('propagates a thrown parent get or native synthetic error', async () => {
+    const getFailure = new Error('parent get failed');
+    const getThrows = createContext({ getThrows: { parent: getFailure } });
+    await expect(
+      execute(createTaskReportTool({ input: getThrows.input })),
+    ).rejects.toBe(getFailure);
+    expect(getThrows.state.syntheticInputs).toHaveLength(0);
+
+    const admissionFailure = new Error('Session not found');
+    const syntheticThrows = createContext({
+      syntheticThrows: admissionFailure,
+    });
+    await expect(
+      execute(createTaskReportTool({ input: syntheticThrows.input })),
+    ).rejects.toBe(admissionFailure);
   });
 
   test.each([
@@ -238,20 +367,20 @@ describe('task_report', () => {
     ['malformed record', () => ({ id: 'wrong', type: 'synthetic' })],
     [
       'wrong-id record',
-      (input: Record<string, unknown>) => ({
-        ...nativeSyntheticRecord(input),
+      (sent: Record<string, unknown>) => ({
+        ...nativeSyntheticRecord(sent),
         id: 'msg_omos_other',
       }),
     ],
   ])('does not acknowledge a %s synthetic response', async (_, result) => {
-    const { input } = createContext({
+    const { input, state } = createContext({
       syntheticResult: result as (input: Record<string, unknown>) => unknown,
     });
-    const { task_report } = createTaskReportTool({ input });
 
-    await expect(
-      task_report.execute(reportArgs, { sessionID: 'child' } as never),
-    ).rejects.toThrow('The parent session did not accept the report');
+    await expect(execute(createTaskReportTool({ input }))).rejects.toThrow(
+      'The parent session did not accept the report',
+    );
+    expect(state.syntheticInputs).toHaveLength(1);
   });
 
   test.each([
@@ -285,89 +414,71 @@ describe('task_report', () => {
         }),
     ],
   ])(
-    'rejects a same-id stale record with %s instead of claiming queued',
+    'rejects a same-id stale record with %s instead of claiming success',
     async (_, stale) => {
       const { input, state } = createContext({
         syntheticResult: stale as (input: Record<string, unknown>) => unknown,
       });
-      const { task_report } = createTaskReportTool({ input });
 
       // The envelope stays identical: id/sessionID/type/delivery all match.
-      await expect(
-        task_report.execute(reportArgs, { sessionID: 'child' } as never),
-      ).rejects.toThrow('The parent session did not accept the report');
+      await expect(execute(createTaskReportTool({ input }))).rejects.toThrow(
+        'The parent session did not accept the report',
+      );
       expect(state.syntheticInputs).toHaveLength(1);
     },
   );
 
-  test('propagates a thrown parent-not-found instead of claiming queued', async () => {
-    const failure = new Error('Session not found');
-    const { input } = createContext({ syntheticThrows: failure });
-    const { task_report } = createTaskReportTool({ input });
-
-    await expect(
-      task_report.execute(reportArgs, { sessionID: 'child' } as never),
-    ).rejects.toBe(failure);
-  });
-
-  test('always queues without resuming for busy, idle, interrupted, and form-wait parents', async () => {
-    const parentStates: Array<[string, Record<string, unknown>]> = [
-      ['busy', { outcome: 'busy', time: { busy: 2_000 } }],
-      ['idle', { outcome: 'succeeded', time: { idle: 2_000 } }],
-      ['interrupted', { outcome: 'interrupted', time: { idle: 2_000 } }],
-      [
-        'pending form',
-        {
-          outcome: 'running',
-          pendingForm: { id: 'form-1', status: 'pending' },
-        },
-      ],
-    ];
-
-    for (const [stateName, parent] of parentStates) {
-      const { input, state } = createContext({ parent });
-      const { task_report } = createTaskReportTool({ input });
-      const result = await task_report.execute(
-        { ...reportArgs, kind: 'escalation' },
-        { sessionID: 'child' } as never,
-      );
-
-      expect(state.syntheticInputs[0], stateName).toMatchObject({
-        sessionID: 'parent',
-        delivery: 'queue',
-        resume: false,
-      });
-      expect(result, stateName).toContain('without waking it');
-      expect(result, stateName).toContain('processing is not confirmed');
-    }
-  });
-
-  test('disposal at entry still prevents queue admission', async () => {
+  test('disposal at entry still prevents admission', async () => {
     const { input, state } = createContext({});
     const { task_report } = createTaskReportTool({
       input,
       isDisposed: () => true,
     });
 
-    await expect(
-      task_report.execute(reportArgs, { sessionID: 'child' } as never),
-    ).rejects.toThrow('Plugin is disposing');
+    await expect(execute({ task_report })).rejects.toThrow(
+      'Plugin is disposing',
+    );
     expect(state.syntheticInputs).toHaveLength(0);
   });
 
-  test('disposal during a deferred child get prevents synthetic admission', async () => {
+  test('disposal during a deferred child get prevents admission', async () => {
     let disposed = false;
-    const { input, state, resolveGet } = createContext({ deferredGet: true });
-    const { task_report } = createTaskReportTool({
+    const { input, state, resolveGet } = createContext({ deferGet: 'child' });
+    const tool = createTaskReportTool({
       input,
       isDisposed: () => disposed,
     });
 
-    const pending = task_report.execute(reportArgs, {
-      sessionID: 'child',
-    } as never);
+    const pending = execute(tool);
     disposed = true;
     resolveGet?.({ id: 'child', parentID: 'parent', agent: 'fixer' });
+
+    await expect(pending).rejects.toThrow('Plugin is disposing');
+    expect(state.syntheticInputs).toHaveLength(0);
+  });
+
+  test('disposal during a deferred parent get prevents admission', async () => {
+    let disposed = false;
+    let parentReadStarted!: () => void;
+    const parentRead = new Promise<void>((resolve) => {
+      parentReadStarted = resolve;
+    });
+    const { input, state, resolveGet } = createContext({
+      deferGet: 'parent',
+      onGet: (sessionID) => {
+        if (sessionID === 'parent') parentReadStarted();
+      },
+    });
+    const tool = createTaskReportTool({
+      input,
+      isDisposed: () => disposed,
+    });
+
+    const pending = execute(tool);
+    await parentRead;
+    expect(state.getCalls).toEqual(['child', 'parent']);
+    disposed = true;
+    resolveGet?.({ id: 'parent', outcome: 'succeeded' });
 
     await expect(pending).rejects.toThrow('Plugin is disposing');
     expect(state.syntheticInputs).toHaveLength(0);

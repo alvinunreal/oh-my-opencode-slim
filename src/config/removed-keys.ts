@@ -1,6 +1,6 @@
 /**
  * Config keys removed in this version (dropped, not migrated, except that
- * `backgroundJobs.enabled: false` still maps to `backgroundJobs.mode: "off"`).
+ * `backgroundJobs.enabled: false` maps to `"off"` and `"managed"` to `"native"`).
  *
  * A stale removed key must not invalidate the whole config file: the loader
  * strips each one from the raw layer before schema validation and reports a
@@ -11,6 +11,18 @@
  * Paths use `*` for one arbitrary record key (a council preset name).
  * Delete entries (or this whole module) once the compatibility window ends.
  */
+const REMOVED_MANAGED_KEYS = [
+  'backgroundJobs.maxSessionsPerAgent',
+  'backgroundJobs.stopConfirmationMs',
+  'backgroundJobs.wallClockTimeoutMs',
+  'backgroundJobs.concurrency',
+  'backgroundJobs.sameProviderPolicy',
+  'backgroundJobs.waitForUserGuard',
+  'backgroundJobs.childInputWake',
+  'backgroundJobs.childInputWakeKinds',
+  'backgroundJobs.pruneEvictedSessions',
+] as const;
+
 const REMOVED_CONFIG_KEYS = [
   'tmux',
   'agents.*.primary',
@@ -31,6 +43,7 @@ const REMOVED_CONFIG_KEYS = [
   'backgroundJobs.maxRetainedSnapshots',
   'backgroundJobs.boardInjection',
   'backgroundJobs.abortGraceMs',
+  ...REMOVED_MANAGED_KEYS,
   'fallback.timeoutMs',
   'fallback.retry_on_empty',
   'fallback.runtimeOverride',
@@ -41,7 +54,13 @@ const REMOVED_CONFIG_KEYS = [
 /** Removed keys whose successor needs a specific message. */
 const REMOVED_CONFIG_KEY_MESSAGES: Readonly<Record<string, string>> = {
   'backgroundJobs.enabled':
-    'Config key "backgroundJobs.enabled" was removed; use backgroundJobs.mode ("managed" | "native" | "off") instead. enabled: false is still applied as mode "off".',
+    'Config key "backgroundJobs.enabled" was removed; use backgroundJobs.mode ("native" | "off") instead. enabled: false is still applied as mode "off".',
+  ...Object.fromEntries(
+    REMOVED_MANAGED_KEYS.map((path) => [
+      path,
+      `Config key "${path}" belonged to the retired managed lifecycle and is ignored.`,
+    ]),
+  ),
 };
 
 function removedConfigKeyMessage(path: string): string {
@@ -107,6 +126,13 @@ export function stripRemovedConfigKeys(
     jobs.mode === undefined
   ) {
     jobs.mode = 'off';
+  }
+  if (isPlainObject(jobs) && jobs.mode === 'managed') {
+    jobs.mode = 'native';
+    onRemoved(
+      'Config value backgroundJobs.mode "managed" was removed; "native" is applied instead. Use "off" to disable Slim task tools and session presets.',
+      'backgroundJobs.mode',
+    );
   }
   const removed: string[] = [];
   for (const path of REMOVED_CONFIG_KEYS) {

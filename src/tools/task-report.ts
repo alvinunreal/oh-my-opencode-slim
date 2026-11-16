@@ -32,7 +32,7 @@ function assertNativeSyntheticAdmitted(
     result.id !== id ||
     result.sessionID !== sessionID ||
     result.type !== 'synthetic' ||
-    result.delivery !== 'queue' ||
+    result.delivery !== 'steer' ||
     !isRecord(payload) ||
     payload.text !== text ||
     payload.description !== description ||
@@ -49,7 +49,7 @@ export function createTaskReportTool(options: {
 }): Record<'task_report', ToolDefinition> {
   const task_report = tool({
     description:
-      'Queue a bounded progress update or blocker for the calling child’s verified parent. The host does not wake the parent; processing is not confirmed.',
+      'Send a bounded progress update or blocker to the calling child’s verified parent. Use for material milestones, consequential findings, blockers, or decisions the parent must make. Requests a wake unless the parent was interrupted; processing is not confirmed.',
     args: {
       kind: z
         .enum(['progress', 'escalation'])
@@ -88,23 +88,29 @@ export function createTaskReportTool(options: {
       const child = await session.get({ sessionID: childSessionID });
       if (options.isDisposed?.()) throw new Error('Plugin is disposing');
 
-      if (
-        !isRecord(child) ||
-        child.id !== childSessionID ||
-        typeof child.agent !== 'string'
-      ) {
+      if (!isRecord(child) || child.id !== childSessionID) {
         throw new Error('Could not verify the calling subagent session');
       }
-      const agent = child.agent;
       const parentID = child.parentID;
       if (typeof parentID !== 'string' || !parentID) {
         throw new Error('task_report is only available in a child session');
       }
 
+      // Parent read supplies only the last outcome: an interrupted parent is
+      // not woken. Parent existence stays the host admission authority.
+      const parent = await session.get({ sessionID: parentID });
+      if (options.isDisposed?.()) throw new Error('Plugin is disposing');
+
+      if (!isRecord(parent) || parent.id !== parentID) {
+        throw new Error('Could not verify the owning parent session');
+      }
+      const dormant = parent.outcome === 'interrupted';
+
+      const agent = typeof child.agent === 'string' ? child.agent : undefined;
       const updateID = randomUUID();
       const message = [
         `<subagent-update id="${updateID}" kind="${args.kind}">`,
-        `From @${agent} (session ${childSessionID}):`,
+        `From @${agent ?? 'subagent'} (session ${childSessionID}):`,
         args.message.trim(),
         '</subagent-update>',
       ].join('\n');
@@ -113,7 +119,7 @@ export function createTaskReportTool(options: {
 
       if (options.isDisposed?.()) throw new Error('Plugin is disposing');
 
-      // exact2.3: record before admission, host validates the parent.
+      // exact2.3: record before admission; host validates the parent.
       const id = createInternalSyntheticMessageID();
       recordInternalAdmission(parentID, id);
       const admitted = await session.synthetic({
@@ -122,12 +128,14 @@ export function createTaskReportTool(options: {
         text,
         description,
         metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
-        delivery: 'queue',
-        resume: false,
+        delivery: 'steer',
+        resume: !dormant,
       });
       assertNativeSyntheticAdmitted(admitted, id, parentID, text, description);
 
-      return `Update ${updateID} queued for the parent without waking it. The host accepted the update; processing is not confirmed.`;
+      return dormant
+        ? `Update ${updateID} accepted for the parent without waking it; processing is not confirmed.`
+        : `Update ${updateID} accepted for the parent; wake requested, processing is not confirmed.`;
     },
   });
 

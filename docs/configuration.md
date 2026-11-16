@@ -137,10 +137,16 @@ Click the `OMO-Slim` heading to collapse or expand its sidebar section. It
 starts expanded; the choice lasts for the current TUI window only. An idle
 agent has a `•` before its name. While an agent session reports `busy` or
 `retry`, an animated Braille indicator replaces the bullet in the same spot.
-The bullet returns after every active session for that agent becomes idle or
-is deleted.
+An idle agent with clickable session history shows `✦` instead of the bullet.
+The bullet returns when there is no active session or available history.
+The sidebar shows up to two most recently finished sessions per agent and
+parent; running sessions are always shown.
 
-In an expanded agent list, `⚰` marks a stopped session (no terminal result); only `task_revive` can continue it. Expanded subagent rows show the session's title, truncated to the sidebar's width, when the host knows one; before a title is generated or on hosts without title data they fall back to the numbered alias.
+In an expanded agent list, `⚰` marks an interrupted session; use
+`subagent(sessionID)` to continue it. Expanded subagent rows show the session's
+title, truncated to the sidebar's width, when the host knows one; before a
+title is generated or on hosts without title data they fall back to the
+numbered alias.
 
 ---
 
@@ -425,9 +431,13 @@ an MCP tool remains authoritative.
 These keys were removed. A config file that still contains one keeps loading:
 the key is dropped before validation and a warning names it, for example
 `Config key "fallback.timeoutMs" was removed in this version and is ignored;
-see docs/configuration.md`. Values are **not** migrated (the one exception is
-`backgroundJobs.enabled: false`, still applied as `mode: "off"`), so set the
-replacement yourself where one exists.
+see docs/configuration.md`. The exceptions are `backgroundJobs.enabled: false`,
+applied as `mode: "off"`, and `backgroundJobs.mode: "managed"`, applied as
+`"native"` in the same layer. Other values are not migrated.
+
+On V2, positive concurrency or wall-clock limits are rejected instead of
+removed. The error identifies the file, key and value; Slim cannot enforce
+those limits.
 
 | Removed key | Use instead |
 |-------------|-------------|
@@ -436,7 +446,17 @@ replacement yourself where one exists.
 | `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
 | `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
 | `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
-| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → host default (`"managed"` on V1, `"native"` on V2), `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
+| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → host default, `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
+| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning; use `"off"` to disable Slim task tools and session presets. |
+| `backgroundJobs.maxSessionsPerAgent` | None; Slim no longer retains a reusable-session pool. |
+| `backgroundJobs.stopConfirmationMs` | None; the managed terminal gate was removed. |
+| `backgroundJobs.wallClockTimeoutMs` | None; positive values are rejected on V2. |
+| `backgroundJobs.concurrency` | None; positive default, provider or model limits are rejected on V2. |
+| `backgroundJobs.sameProviderPolicy` | None; V2 subagents run in the background. |
+| `backgroundJobs.waitForUserGuard` | None; the managed guard was removed. |
+| `backgroundJobs.childInputWake` | None; the managed wake was removed. |
+| `backgroundJobs.childInputWakeKinds` | None; the managed wake was removed. |
+| `backgroundJobs.pruneEvictedSessions` | None; Slim no longer prunes managed sessions. |
 | `backgroundJobs.continueOnIdle`, `backgroundJobs.orchestratorWake` | OpenCode delivers native subagent completions. The periodic idle reminder was removed. |
 | `backgroundJobs.maxContextLines` | None; reusability is state-based (terminal, reconciled, status-certain). See [Background Job Management](#background-job-management) |
 | `backgroundJobs.readContextMinLines` | None; the per-session read-context list is path-only with an internal display cap |
@@ -684,7 +704,7 @@ process, not once per session).
 
 OpenCode owns child execution, continuation, delivery, and restart recovery.
 Slim defaults to `backgroundJobs.mode: "native"`, which enables exact-ID
-`task_status`, `task_cancel`, permission-only `task_reply`, queue-only
+`task_status`, `task_cancel`, permission-only `task_reply`, child
 `task_report`, and session preset binding. Use `"off"` to disable Slim's
 task controls and session bindings.
 

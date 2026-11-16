@@ -278,19 +278,23 @@ describe('TUI feature gates', () => {
     expect(cleanup).toBeUndefined();
   });
 
-  test('threads hostFlavor to feature gates during TUI gate probe', () => {
-    writeUserConfig({ backgroundJobs: { mode: 'managed' } });
-
-    // On v1 or unmarked host, probe succeeds with managed gates
-    const v1 = readTuiGates(env.projectDir, 'v1');
-    expect(v1.readFailed).toBe(false);
-    expect(v1.gates.tuiEnabled).toBe(true);
-
-    // On v2 host, explicit managed mode causes the config read to fail
-    // and probeTuiGates catches it, returning failOpen gates with readFailed: true
-    const v2 = readTuiGates(env.projectDir, 'v2');
-    expect(v2.readFailed).toBe(true);
-    expect(v2.gates.tuiEnabled).toBe(true);
+  test('surfaces a rejected positive limit and clears it after repair', () => {
+    writeUserConfig({ backgroundJobs: { mode: 'off' } });
+    const good = readTuiGates(env.projectDir, 'v2');
+    writeUserConfig({
+      backgroundJobs: { concurrency: { providerConcurrency: { openai: 2 } } },
+    });
+    const refused = readTuiGates(env.projectDir, 'v2', true);
+    expect(refused.readFailed).toBe(false);
+    expect(refused.gates.configInvalid).toBe(true);
+    expect(refused.fingerprint).not.toBe(good.fingerprint);
+    expect(readTuiGates(env.projectDir, 'v2', true).fingerprint).toBe(
+      refused.fingerprint,
+    );
+    writeUserConfig({ backgroundJobs: { mode: 'off' } });
+    const repaired = readTuiGates(env.projectDir, 'v2', true);
+    expect(repaired.gates.configInvalid).toBe(false);
+    expect(repaired.fingerprint).not.toBe(refused.fingerprint);
   });
 
   test('v2 off disables session preset routing without disabling preset editing', () => {

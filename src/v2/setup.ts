@@ -26,7 +26,7 @@ import {
 } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
 import {
-  isSupportedOpenCodeVersion,
+  classifyOpenCodeVersion,
   MINIMUM_OPENCODE_VERSION,
   parseOpenCodeVersion,
 } from '../config/opencode-version';
@@ -50,6 +50,7 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
+import { appendRefusalCorrections } from '../hooks/refusal-corrections';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/volatile-message';
 import { OhMyOpenCodeLite } from '../index';
 import { MarketplaceBusyError } from '../marketplace/errors';
@@ -286,6 +287,7 @@ export interface V2SessionContextHandlerDeps {
     },
     hints?: { model?: { providerID: string; id: string } },
   ) => Promise<void>;
+  refusalRecovery?: ForegroundFallbackManager['refusalRecovery'];
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
    * session. Never touches system/messages/tools. */
@@ -573,6 +575,48 @@ export function createSessionContextHandler(
               }
             : undefined,
         );
+        const refusalRecovery = deps.refusalRecovery;
+        if (refusalRecovery) {
+          const notices = new Map<string, (typeof v1messages)[number]>();
+          for (const message of v1messages) {
+            const metadata = message.info.metadata;
+            if (
+              isRecord(metadata) &&
+              metadata.source === 'subagent' &&
+              typeof metadata.childID === 'string'
+            ) {
+              notices.delete(metadata.childID);
+              notices.set(metadata.childID, message);
+            }
+          }
+          const corrections = (
+            await Promise.all(
+              Array.from(notices, async ([taskID, notice]) => {
+                if (notice.info.metadata?.state !== 'error') return;
+                const recovery = refusalRecovery(taskID);
+                if (
+                  !recovery ||
+                  !notice.parts.some(
+                    (part) =>
+                      part.type === 'text' &&
+                      typeof part.text === 'string' &&
+                      part.text.includes(recovery.message),
+                  )
+                )
+                  return;
+                const model = await recovery.model;
+                if (model) return { taskID, model };
+              }),
+            )
+          ).filter((correction) => correction !== undefined);
+          if (corrections.length)
+            appendRefusalCorrections(
+              v1messages,
+              event.sessionID,
+              event.agent,
+              corrections,
+            );
+        }
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
           if (projectedTimes.has(info)) delete info.time;
@@ -675,6 +719,10 @@ export interface V2SessionPromptBridge {
   /** Latest agent known for a session from the learned state above (the
    * identity source for transcript user-message enrichment). */
   agentForSession(sessionID: string): string | undefined;
+  /** Model resolved for the session's latest observed primary request. */
+  modelForSession(
+    sessionID: string,
+  ): { providerID: string; id: string; variant?: string } | undefined;
 }
 
 /** Trailing (last) message with `role === 'user'`, or undefined. Hot
@@ -1957,6 +2005,17 @@ export function createSessionPromptBridge(
     agentForSession(sessionID) {
       return sessionState.get(sessionID)?.agent;
     },
+
+    modelForSession(sessionID) {
+      const model = sessionState.get(sessionID)?.model;
+      return model
+        ? {
+            providerID: model.providerID,
+            id: model.modelID,
+            ...(model.variant ? { variant: model.variant } : {}),
+          }
+        : undefined;
+    },
   };
 }
 
@@ -2239,13 +2298,16 @@ function assertSupportedV2Host(ctx: V2Context): void {
   const rawVersion = ctx?.app?.version;
   const version =
     typeof rawVersion === 'string' ? parseOpenCodeVersion(rawVersion) : null;
-  if (!version) {
-    log('[v2] host version is not semver; skipping minimum check', {
+  const classification = classifyOpenCodeVersion(
+    typeof rawVersion === 'string' ? rawVersion : '',
+  );
+  if (classification === 'unknown') {
+    log('[v2] host version is preview or not semver; skipping minimum check', {
       version: rawVersion,
     });
     return;
   }
-  if (!isSupportedOpenCodeVersion(version)) {
+  if (classification === 'unsupported') {
     throw new Error(
       `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_OPENCODE_VERSION} or newer. Update with npm install -g @opencode/cli@latest.`,
     );
@@ -2285,7 +2347,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     // setup still needs the directory for config loading and tool adapters.
     const directory = resolveV2Directory(ctx);
     // Validate the host-specific config before claiming a location or wiring
-    // any registration. Unsupported managed mode must fail setup, not degrade.
+    // any registration. Unsupported positive limits must fail setup, not degrade.
     const startupConfigSnapshot = readPluginConfigSnapshot(directory, {
       hostFlavor: 'v2',
     });
@@ -3444,6 +3506,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           sessionContext: sessionContextRead,
           systemTransform,
           messagesTransform,
+          refusalRecovery: v1Hooks[
+            'v2.refusalRecovery'
+          ] as ForegroundFallbackManager['refusalRecovery'],
           // Primaries use the startup registry; child profiles stay
           // session-frozen. `off` has no profile bridge: every agent applies
           // its own startup registry settings instead.
@@ -3656,7 +3721,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       isRecord(response) && isRecord(response.data)
                         ? response.data
                         : response;
-                    const model = isRecord(info) ? info.model : undefined;
+                    const stored = isRecord(info) ? info.model : undefined;
+                    // Session.Info.model is a pin, not the host's resolved default.
+                    const model = isRecord(stored)
+                      ? stored
+                      : promptBridge?.modelForSession(parentSessionID);
                     if (
                       !isRecord(model) ||
                       typeof model.providerID !== 'string' ||

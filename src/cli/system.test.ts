@@ -18,7 +18,6 @@ test('finds and identifies OpenCode in ~/.opencode/bin', () => {
     ).toEqual({
       path: opencode,
       version: 'opencode v2.2.4',
-      hostFlavor: 'v2',
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -40,8 +39,31 @@ test('uses the opencode command when a legacy shim also exists on PATH', () => {
     ).toEqual({
       path: opencode,
       version: 'opencode v2.3.1',
-      hostFlavor: 'v2',
     });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('prefers an unknown preview on PATH over another supported host', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'opencode-system-test-'));
+  try {
+    const bin = join(dir, 'bin');
+    const fallback = join(dir, '.opencode', 'bin');
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(fallback, { recursive: true });
+    writeFileSync(join(bin, 'opencode'), '#!/bin/sh\necho opencode vlocal\n', {
+      mode: 0o755,
+    });
+    writeFileSync(
+      join(fallback, 'opencode'),
+      '#!/bin/sh\necho opencode v2.3.0\n',
+      { mode: 0o755 },
+    );
+    expect(
+      findOpenCode({ ...process.env, HOME: dir, PATH: `${bin}:/usr/bin:/bin` })
+        ?.path,
+    ).toBe(join(bin, 'opencode'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
