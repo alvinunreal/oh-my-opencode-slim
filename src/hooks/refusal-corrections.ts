@@ -2,10 +2,7 @@ import { formatSystemReminder } from '../config/constants';
 import { appendTrailingVolatileMessage } from './cache-safe-injection';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './volatile-message';
 
-export const REFUSAL_CORRECTION_METADATA_KEY =
-  'oh-my-opencode-slim.refusalContinuation';
-
-export function formatRefusalCorrectionText(
+function formatRefusalCorrectionText(
   corrections: Array<{ taskID: string; model: string }>,
 ): string {
   return formatSystemReminder(
@@ -32,7 +29,6 @@ export function appendRefusalCorrections(
     {
       text: formatRefusalCorrectionText(corrections),
       metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
-      extraMetadata: { [REFUSAL_CORRECTION_METADATA_KEY]: true },
     },
   );
 }
