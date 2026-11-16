@@ -1008,9 +1008,9 @@ bunx oh-my-opencode-slim@latest companion install
 
 ## 支持動物福利
 
-Slim 免費並採用 MIT 授權，今後也會維持如此。我們不收取費用，而是請覺得它有用的使用者支持動物福利。推薦的慈善機構致力於改善農場動物的生活條件，皆經過 [Animal Charity Evaluators](https://animalcharityevaluators.org) 的獨立評估，捐款直接交給這些機構。
+Slim 免費並採用 MIT 授權，今後也會維持如此。我們不收取費用，而是請覺得它有用的使用者支持動物福利。推薦的慈善機構致力於終結動物在農場與屠宰過程中遭受的最痛苦做法：未經適當致昏的宰殺、不使用止痛的手術，以及狹小的禁閉。捐款直接交給這些機構。
 
-- **[捐款](https://ohmyopencodeslim.com/donate)**：開啟你所在地區一家推薦慈善機構的捐款頁面。
+- **[捐款](https://ohmyopencodeslim.com/donate)**：開啟你所在地區一家慈善機構的捐款頁面。
 - **[所有慈善機構](https://ohmyopencodeslim.com/animals)**：比較各個選項，並了解選擇它們的理由。
 - **商業使用**：授權不附帶任何義務。我們請仰賴 Slim 的公司每年捐款一次。
 

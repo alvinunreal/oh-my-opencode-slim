@@ -793,9 +793,9 @@ bunx oh-my-opencode-slim@latest companion install
 
 ## 동물 복지 후원
 
-Slim은 무료이며 MIT 라이선스이고, 앞으로도 그럴 것입니다. 비용 대신, 유용하게 쓰시는 분들께 동물 복지 후원을 부탁드립니다. 추천 단체들은 농장 동물의 사육 환경 개선에 힘쓰며, 모두 [Animal Charity Evaluators](https://animalcharityevaluators.org)의 독립적인 평가를 받았습니다. 기부금은 단체로 직접 전달됩니다.
+Slim은 무료이며 MIT 라이선스이고, 앞으로도 그럴 것입니다. 비용 대신, 유용하게 쓰시는 분들께 동물 복지 후원을 부탁드립니다. 추천 단체들은 농장과 도축 과정에서 동물이 겪는 가장 고통스러운 관행, 즉 적절한 기절 처리 없는 도살, 진통 없는 시술, 좁은 공간의 감금을 없애기 위해 활동합니다. 기부금은 단체로 직접 전달됩니다.
 
-- **[기부하기](https://ohmyopencodeslim.com/donate)**: 거주 지역에서 활동하는 추천 단체의 기부 페이지가 열립니다.
+- **[기부하기](https://ohmyopencodeslim.com/donate)**: 거주 지역에서 활동하는 단체의 기부 페이지가 열립니다.
 - **[전체 단체](https://ohmyopencodeslim.com/animals)**: 선택지를 비교하고 선정 이유를 확인할 수 있습니다.
 - **상업적 사용**: 라이선스에는 어떤 의무도 없습니다. Slim을 사용하는 기업에는 연 1회 기부를 부탁드립니다.
 

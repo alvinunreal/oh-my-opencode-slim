@@ -1033,9 +1033,9 @@ Use this section as a map: start with installation, then jump to features, confi
 
 ## Supporting Animal Welfare
 
-Slim is free and MIT licensed, and will remain so. In place of payment, we ask users who find it useful to support animal welfare. The recommended charities work to improve conditions for farmed animals. Each is independently evaluated by [Animal Charity Evaluators](https://animalcharityevaluators.org), and donations go directly to them.
+Slim is free and MIT licensed, and will remain so. In place of payment, we ask users who find it useful to support animal welfare. The recommended charities work to end the most painful practices animals face on farms and at slaughter: killing without proper stunning, surgery without pain relief, and close confinement. Donations go directly to them.
 
-- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of a recommended charity active in your region.
+- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of a charity active in your region.
 - **[All charities](https://ohmyopencodeslim.com/animals)**: compare the options and see why they were selected.
 - **Commercial use**: the license carries no obligation. Companies that rely on Slim are asked to make an annual donation.
 
