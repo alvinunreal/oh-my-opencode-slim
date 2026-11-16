@@ -812,18 +812,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // aliases this record; see publishChainGeneration.
     foregroundFallbackChains = runtime.modelArrays;
     if (fallbackManagerNeeded) {
-      // The handoff module is consumed only by this manager; load it in the
-      // same breath (parallel, never when the manager is skipped) and only
+      // Load the manager only when the hook is available.
       const fallbackModule = await import('./hooks/foreground-fallback');
       foregroundFallback = new fallbackModule.ForegroundFallbackManager({
         chains: foregroundFallbackChains,
-        enabled: false,
         input: ctx,
         maxRetries: runtime.fallback.maxRetries,
         coordinator: sessionLifecycle,
-        // A managed background-task session switching models mid-flight must
-        // move its admission accounting (provider/model caps) to the new
-        // model. No-op for unknown/non-task sessions; idempotent per model.
+        // Project confirmed model switches to the live agent state.
         onSessionModelChanged: (sessionID, model, detail) => {
           if (detail?.agentName) {
             projectLiveAgentModel(
@@ -1436,8 +1432,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
    * This is deliberately NOT a global agent reload: the session-frozen
    * surfaces (agent definitions, prompts, tools, permissions, skills, MCPs)
    * are never rebuilt and the host agent registry is never reloaded. The
-   * running generation state (`config`, `runtime`, `agentDefs`, `agents`,
-   * `finalHostAgentConfig`) is untouched — a throwaway `RuntimeConfig.createDetached`
+   * running generation state (`config`, `runtime`, `agentDefs`, `agents`) is
+   * untouched — a throwaway `RuntimeConfig.createDetached`
    * view resolves the fresh file against the captured host layer. On success
    * the refresh republishes the complete next chain generation (config +
    * marketplace-merged, see buildChainGeneration) beside the sidebar write,
@@ -1974,20 +1970,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
       }
 
-      // This is the source of truth for admission. It is intentionally
-      // captured only after every host/plugin merge, model pass and
-      // permission pass.
-      const finalHostAgentConfig = opencodeConfig.agent as Record<
-        string,
-        unknown
-      >;
-      const compaction = finalHostAgentConfig.compaction as
-        | { model?: unknown }
-        | undefined;
-      foregroundFallback?.setCompactionModelPinned(
-        typeof compaction?.model === 'string' && compaction.model.length > 0,
-      );
-
       registryBridge.prepareCommands(opencodeConfig);
     },
 
@@ -2046,9 +2028,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // message id in info.id and the session id in info.sessionID. Resolve
         // by session so child activity refreshes the correct stuck timer.
         const eventSessionID = resolveEventSessionID(event);
-        if (event.type === 'message.updated' && event.properties?.info) {
-          foregroundFallback?.observeCompactionMessage(event.properties.info);
-        }
         const rawStatus = event.properties?.status;
         const statusType =
           typeof rawStatus === 'string'
@@ -2252,10 +2231,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // re-prompt: the re-prompt's busy event commits in its own scope,
         // and a still-staged "inactive" must not land after it (#1697).
         flushTuiSnapshotBatch();
-
-        // Resolve identity before task error bookkeeping, but replay afterwards:
-        // prompt admission may synchronously emit a busy event.
-        await foregroundFallback?.preflightEvent(input.event);
 
         if (event.type === 'server.instance.disposed') {
           clearTuiActivities();

@@ -42,7 +42,7 @@ from its owning module, that returns the hook points OpenCode invokes.
 | Error recovery | `createJsonErrorRecoveryHook` | message transform, tool-execute after |
 | Lifecycle/event | `createCacheMonitorHook` | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
-| Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
+| Model fallback | `ForegroundFallbackManager` | session retry hook; execution and step events |
 
 ## Flow
 
