@@ -15,8 +15,7 @@
   </p>
 
   <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 将你的笔记变成清晰、可编辑的 SVG 图表</sub>
+    🐾 <b>献给农场动物。</b> <sub>永久免费。如果 Slim 为你节省了时间，请<a href="https://ohmyopencodeslim.com/donate">捐助一家在你所在地区帮助它们的慈善机构</a>。</sub>
   </p>
 
   <p>
@@ -725,6 +724,20 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 🐾 献给农场动物
+
+Slim 免费且采用 MIT 许可证，它献给工厂化养殖场里的动物。每年有超过 800 亿只陆地动物和估计一万亿条以上的鱼被宰杀用作食物，它们大多一生都在笼子、拥挤的棚舍和水箱中度过。
+
+如果 Slim 为你节省了时间，请把一部分回馈给它们：
+
+- **[捐款](https://ohmyopencodeslim.com/donate)**：打开一家在你所在地区工作、由 [Animal Charity Evaluators](https://animalcharityevaluators.org) 推荐的慈善机构的捐款页面。
+- **[查看所有慈善机构](https://ohmyopencodeslim.com/animals)**：选择其他机构，或了解我们为什么选择它们。
+- **在工作中使用 Slim？** 许可证对你没有任何要求。我们希望你的公司每年捐一笔款。
+
+捐款直接给慈善机构，不经过我们。
 
 ---
 

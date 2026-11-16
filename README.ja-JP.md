@@ -15,8 +15,7 @@
   </p>
 
   <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· メモを、きれいで編集できる SVG 図に</sub>
+    🐾 <b>畜産動物たちに捧げます。</b> <sub>ずっと無料です。Slim で時間が浮いたら、<a href="https://ohmyopencodeslim.com/donate">あなたの地域で動物を助ける団体に寄付してください</a>。</sub>
   </p>
 
   <p>
@@ -728,6 +727,20 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 🐾 畜産動物たちのために
+
+Slim は無料の MIT ライセンスで、工場式畜産の動物たちに捧げています。毎年 800 億頭を超える陸上動物と、推定 1 兆匹以上の魚が食用に殺されています。その多くは、ケージや過密な畜舎、水槽の中で一生を過ごします。
+
+Slim で時間が浮いたら、その一部を動物たちに返してください。
+
+- **[寄付する](https://ohmyopencodeslim.com/donate)**：あなたの地域で活動する [Animal Charity Evaluators](https://animalcharityevaluators.org) 推薦団体の寄付ページが開きます。
+- **[すべての団体を見る](https://ohmyopencodeslim.com/animals)**：別の団体を選んだり、選んだ理由を読んだりできます。
+- **仕事で Slim を使っていますか？** ライセンス上の義務はありません。会社として毎年の寄付をお願いします。
+
+寄付は団体に直接届き、私たちは受け取りません。
 
 ---
 

@@ -15,8 +15,7 @@
   </p>
 
   <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 將你的筆記轉成簡潔、可編輯的 SVG 圖表</sub>
+    🐾 <b>獻給農場動物。</b> <sub>永久免費。如果 Slim 為你節省了時間，請<a href="https://ohmyopencodeslim.com/donate">捐助一家在你所在地區幫助牠們的慈善機構</a>。</sub>
   </p>
 
   <p>
@@ -1004,6 +1003,20 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 🐾 獻給農場動物
+
+Slim 免費且採用 MIT 授權，它獻給工廠化養殖場裡的動物。每年有超過 800 億隻陸地動物和估計一兆條以上的魚被宰殺作為食物，牠們大多一生都在籠子、擁擠的棚舍和水槽中度過。
+
+如果 Slim 為你節省了時間，請把一部分回饋給牠們：
+
+- **[捐款](https://ohmyopencodeslim.com/donate)**：開啟一家在你所在地區工作、由 [Animal Charity Evaluators](https://animalcharityevaluators.org) 推薦的慈善機構的捐款頁面。
+- **[查看所有慈善機構](https://ohmyopencodeslim.com/animals)**：選擇其他機構，或了解我們為什麼選擇它們。
+- **在工作中使用 Slim？** 授權對你沒有任何要求。我們希望你的公司每年捐一筆款。
+
+捐款直接給慈善機構，不經過我們。
 
 ---
 

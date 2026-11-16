@@ -15,8 +15,7 @@
   </p>
 
   <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· Turn your notes into clean, editable SVG diagrams</sub>
+    🐾 <b>Dedicated to farmed animals.</b> <sub>Free forever. If Slim saves you time, <a href="https://ohmyopencodeslim.com/donate">donate to a charity helping them where you live</a>.</sub>
   </p>
 
   <p>
@@ -1029,6 +1028,20 @@ Use this section as a map: start with installation, then jump to features, confi
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 🐾 For Farmed Animals
+
+Slim is free and MIT licensed, and it is dedicated to the animals on factory farms. More than 80 billion land animals and an estimated trillion or more fish are killed for food every year, most after lives in cages, crowded sheds and tanks.
+
+If Slim saves you time, give some of it back to them:
+
+- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of an [Animal Charity Evaluators](https://animalcharityevaluators.org) recommended charity working in your region.
+- **[See all charities](https://ohmyopencodeslim.com/animals)**: pick another one, or read why we chose them.
+- **Using Slim at work?** The license asks nothing of you. We ask that your company make a yearly donation.
+
+The money goes to the charity, not to us.
 
 ---
 

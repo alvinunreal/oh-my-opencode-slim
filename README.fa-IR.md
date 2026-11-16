@@ -15,8 +15,7 @@
   </p>
 
   <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· یادداشت‌هایتان را به نمودارهای SVG تمیز و قابل‌ویرایش تبدیل کنید</sub>
+    🐾 <b>تقدیم به حیوانات مزرعه.</b> <sub>برای همیشه رایگان. اگر Slim در وقت شما صرفه‌جویی می‌کند، <a href="https://ohmyopencodeslim.com/donate">به خیریه‌ای که در منطقهٔ شما به آن‌ها کمک می‌کند کمک کنید</a>.</sub>
   </p>
 
   <p>
@@ -925,6 +924,20 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 🐾 برای حیوانات مزرعه
+
+Slim رایگان و با مجوز MIT است و به حیوانات دامداری‌های صنعتی تقدیم شده است. هر سال بیش از ۸۰ میلیارد حیوان خشکی‌زی و به‌طور تخمینی بیش از یک تریلیون ماهی برای غذا کشته می‌شوند و بیشترشان عمر خود را در قفس، سوله‌های شلوغ و مخزن‌ها می‌گذرانند.
+
+اگر Slim در وقت شما صرفه‌جویی می‌کند، بخشی از آن را به آن‌ها برگردانید:
+
+- **[کمک مالی](https://ohmyopencodeslim.com/donate)**: صفحهٔ کمک مالی یک خیریهٔ توصیه‌شده از سوی [Animal Charity Evaluators](https://animalcharityevaluators.org) را باز می‌کند که در منطقهٔ شما فعالیت دارد.
+- **[همهٔ خیریه‌ها](https://ohmyopencodeslim.com/animals)**: خیریهٔ دیگری انتخاب کنید یا بخوانید چرا این‌ها را برگزیدیم.
+- **از Slim در کار استفاده می‌کنید؟** مجوز هیچ چیزی از شما نمی‌خواهد. از شرکت شما می‌خواهیم که سالانه کمک مالی کند.
+
+پول مستقیم به خیریه می‌رسد، نه به ما.
 
 ---
 

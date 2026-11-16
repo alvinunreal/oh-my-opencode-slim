@@ -15,8 +15,7 @@
   </p>
 
   <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 메모를 깔끔하고 편집 가능한 SVG 다이어그램으로</sub>
+    🐾 <b>농장 동물에게 바칩니다.</b> <sub>영원히 무료입니다. Slim 으로 시간을 아꼈다면 <a href="https://ohmyopencodeslim.com/donate">여러분 지역에서 동물을 돕는 단체에 기부해 주세요</a>.</sub>
   </p>
 
   <p>
@@ -789,6 +788,20 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 🐾 농장 동물을 위해
+
+Slim 은 무료이며 MIT 라이선스이고, 공장식 축산의 동물들에게 바칩니다. 매년 800억 마리가 넘는 육상 동물과 1조 마리 이상으로 추정되는 물고기가 식용으로 도살됩니다. 대부분은 케이지, 비좁은 축사, 수조 안에서 평생을 보냅니다.
+
+Slim 으로 시간을 아꼈다면 그 일부를 동물들에게 돌려주세요.
+
+- **[기부하기](https://ohmyopencodeslim.com/donate)**: 여러분 지역에서 활동하는 [Animal Charity Evaluators](https://animalcharityevaluators.org) 추천 단체의 기부 페이지가 열립니다.
+- **[모든 단체 보기](https://ohmyopencodeslim.com/animals)**: 다른 단체를 고르거나, 우리가 이 단체들을 고른 이유를 읽어 보세요.
+- **회사에서 Slim 을 쓰고 있나요?** 라이선스는 아무것도 요구하지 않습니다. 회사 차원에서 매년 기부해 주시기를 부탁드립니다.
+
+기부금은 단체로 직접 가며, 우리는 받지 않습니다.
 
 ---
 
