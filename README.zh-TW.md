@@ -10,12 +10,8 @@
   <p><sub>由 <b>Boring Dystopia Development</b> 打造</sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <b>Slim 是免費的。</b> <sub>如果它對你有用，請考慮<a href="https://ohmyopencodeslim.com/donate">支持動物福利</a>。</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -25,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim 是免費的。** 如果它對你有用，請考慮支持動物福利。<br>
+> [向你所在地區的慈善機構捐款](https://ohmyopencodeslim.com/donate) · [查看所有慈善機構](https://ohmyopencodeslim.com/animals)
 
 ## 這是什麼外掛
 

@@ -10,12 +10,8 @@
   <p><sub>ساخته‌شده توسط <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <b>Slim رایگان است.</b> <sub>اگر برایتان مفید است، <a href="https://ohmyopencodeslim.com/donate">حمایت از رفاه حیوانات</a> را در نظر بگیرید.</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -25,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim رایگان است.** اگر برایتان مفید است، حمایت از رفاه حیوانات را در نظر بگیرید.<br>
+> [کمک به خیریه‌ای در منطقهٔ شما](https://ohmyopencodeslim.com/donate) · [همهٔ خیریه‌ها](https://ohmyopencodeslim.com/animals)
 
 ## این Plugin چیست؟
 
