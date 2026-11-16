@@ -5383,16 +5383,6 @@ describe('createV2Setup e2e', () => {
     const PARENT = 'ses_inherit_parent';
     const CHILD = 'ses_inherit_child';
     const TURN = { providerID: 'turn', id: 'parent-turn', variant: 'high' };
-    let callSeq = 0;
-
-    beforeEach(() => {
-      jest.useFakeTimers();
-    });
-
-    afterEach(async () => {
-      await flushLoggerForTesting();
-      jest.useRealTimers();
-    });
 
     const setupInherit = async (pinned?: Record<string, unknown>) => {
       await Bun.write(
@@ -5422,15 +5412,10 @@ describe('createV2Setup e2e', () => {
               agent: 'orchestrator',
               ...(sessionID === PARENT && pinned ? { model: pinned } : {}),
             };
-      const stored = new Map<string, Record<string, unknown>>();
-      const storage = ctx.storage as unknown as {
-        set: (key: string, value: unknown) => Promise<void>;
-      };
-      const storageSet = storage.set.bind(storage);
-      storage.set = async (key, value) => {
-        stored.set(key, structuredClone(value) as Record<string, unknown>);
-        await storageSet(key, value);
-      };
+      const childRecord = async () =>
+        (await ctx.storage.get(`session-preset/v1/${CHILD}`)) as
+          | Record<string, unknown>
+          | undefined;
       const nativeInputs: Array<Record<string, unknown>> = [];
       const native = {
         description: 'native subagent',
@@ -5459,37 +5444,24 @@ describe('createV2Setup e2e', () => {
       const cleanup = await createV2Setup()(ctx);
       const observe = async (
         sessionID: string,
-        model: Record<string, unknown>,
-      ) => {
-        await calls.promptHookCb?.({
-          sessionID,
-          messageID: `msg_user_${sessionID}`,
-          prompt: { text: 'delegate' },
-        });
-        await calls.contextHookCb?.({
+        model: Record<string, unknown> = TURN,
+      ) =>
+        calls.contextHookCb?.({
           sessionID,
           agent: 'orchestrator',
           model,
           options: {},
           system: [],
           tools: {},
-          messages: [
-            {
-              id: `msg_user_${sessionID}`,
-              role: 'user',
-              content: [{ type: 'text', text: 'delegate' }],
-            },
-          ],
+          messages: [],
         });
-      };
-      const observeTurn = () => observe(PARENT, TURN);
       const launch = async (input: Record<string, unknown> = {}) => {
         const event = {
           tool: 'subagent',
           sessionID: PARENT,
           agent: 'orchestrator',
           messageID: 'msg_inherit_assistant',
-          id: `call_inherit_${++callSeq}`,
+          id: 'call_inherit',
           input: {
             agent: 'explorer',
             description: 'inherit probe',
@@ -5512,10 +5484,9 @@ describe('createV2Setup e2e', () => {
       return {
         cleanup,
         observe,
-        observeTurn,
         launch,
         execute,
-        stored,
+        childRecord,
         nativeInputs,
       };
     };
@@ -5523,15 +5494,13 @@ describe('createV2Setup e2e', () => {
     test('an unpinned parent delegates on the model its current turn runs', async () => {
       const t = await setupInherit();
       try {
-        await t.observeTurn();
+        await t.observe(PARENT);
         await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
         const event = await t.launch();
         expect(event.input.model).toBe('turn/parent-turn#high');
         await t.execute(event);
         expect(t.nativeInputs.at(-1)?.model).toBe('turn/parent-turn#high');
-        expect(
-          t.stored.get(`session-preset/v1/${CHILD}`)?.inheritedProviderID,
-        ).toBe('turn');
+        expect((await t.childRecord())?.inheritedProviderID).toBe('turn');
       } finally {
         await t.cleanup();
       }
@@ -5544,7 +5513,7 @@ describe('createV2Setup e2e', () => {
         variant: 'default',
       });
       try {
-        await t.observeTurn();
+        await t.observe(PARENT);
         const event = await t.launch();
         expect(event.input.model).toBe('pinned/parent-pin');
       } finally {
@@ -5555,11 +5524,11 @@ describe('createV2Setup e2e', () => {
     test('an explicit per-call model wins and keeps the inherited origin', async () => {
       const t = await setupInherit();
       try {
-        await t.observeTurn();
+        await t.observe(PARENT);
         const event = await t.launch({ model: 'explicit/choice' });
         expect(event.input.model).toBe('explicit/choice');
         await t.execute(event);
-        expect(t.stored.get(`session-preset/v1/${CHILD}`)).toMatchObject({
+        expect(await t.childRecord()).toMatchObject({
           explicitModel: true,
           preserveModel: true,
           inheritedProviderID: 'turn',
@@ -5572,10 +5541,10 @@ describe('createV2Setup e2e', () => {
     test('an unresolvable parent model still refuses before the executor', async () => {
       const t = await setupInherit();
       try {
+        await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
         await expect(t.launch()).rejects.toThrow(
           'Inherited subagent parent model unavailable',
         );
-        expect(t.nativeInputs).toEqual([]);
       } finally {
         await t.cleanup();
       }

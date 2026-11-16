@@ -675,6 +675,7 @@ export interface V2SessionPromptBridge {
   /** Latest agent known for a session from the learned state above (the
    * identity source for transcript user-message enrichment). */
   agentForSession(sessionID: string): string | undefined;
+  /** Model resolved for the session's latest observed primary request. */
   modelForSession(
     sessionID: string,
   ): { providerID: string; id: string; variant?: string } | undefined;
