@@ -719,6 +719,10 @@ export interface V2SessionPromptBridge {
   /** Latest agent known for a session from the learned state above (the
    * identity source for transcript user-message enrichment). */
   agentForSession(sessionID: string): string | undefined;
+  /** Model resolved for the session's latest observed primary request. */
+  modelForSession(
+    sessionID: string,
+  ): { providerID: string; id: string; variant?: string } | undefined;
 }
 
 /** Trailing (last) message with `role === 'user'`, or undefined. Hot
@@ -2000,6 +2004,17 @@ export function createSessionPromptBridge(
 
     agentForSession(sessionID) {
       return sessionState.get(sessionID)?.agent;
+    },
+
+    modelForSession(sessionID) {
+      const model = sessionState.get(sessionID)?.model;
+      return model
+        ? {
+            providerID: model.providerID,
+            id: model.modelID,
+            ...(model.variant ? { variant: model.variant } : {}),
+          }
+        : undefined;
     },
   };
 }
@@ -3706,7 +3721,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       isRecord(response) && isRecord(response.data)
                         ? response.data
                         : response;
-                    const model = isRecord(info) ? info.model : undefined;
+                    const stored = isRecord(info) ? info.model : undefined;
+                    // Session.Info.model is a pin, not the host's resolved default.
+                    const model = isRecord(stored)
+                      ? stored
+                      : promptBridge?.modelForSession(parentSessionID);
                     if (
                       !isRecord(model) ||
                       typeof model.providerID !== 'string' ||
