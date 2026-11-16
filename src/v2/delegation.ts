@@ -6,15 +6,6 @@ import { type DelegationVocabulary, delegationVocabulary } from './adapters';
 export const DELEGATION_TOOL_V2 = 'subagent';
 const DELEGATION_TOOL_V1 = 'task';
 
-/**
- * task_reply's honest v2 surface: until a host exposes form.reply through
- * the plugin session domain, v2 can only serve permission requests. One
- * shared constant so every branch that narrows the description uses
- * byte-identical wording (#1540 undetected branch = #1541 v2 branch).
- */
-export const TASK_REPLY_PERMISSION_ONLY_DESCRIPTION =
-  'Reply to a tracked child permission request by task ID/alias and request ID.';
-
 /** v2 `subagent` tool name → the `task` name the v1 pipeline expects;
  * every other name is returned unchanged. */
 export function toolNameToV1(tool: string): string {
@@ -79,13 +70,4 @@ export function delegationWording(
 ): DelegationWording {
   const { tool, agentParam, resumeParam } = delegationVocabulary(hostFlavor);
   return { tool, agentParam, resumeParam };
-}
-
-/** v2 native resume call form for model-visible guidance: v2 retired
- * `task_revive`, so a retained session is continued through the native
- * delegation tool's resume parameter. `taskID` omitted renders the literal
- * placeholder form used in static prompt copy. */
-export function v2ResumeCall(taskID?: string): string {
-  const { tool, resumeParam } = delegationVocabulary('v2');
-  return `${tool}(${resumeParam}: "${taskID ?? '...'}", prompt: "...")`;
 }
