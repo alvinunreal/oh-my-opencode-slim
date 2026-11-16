@@ -48,7 +48,7 @@ hook, tool or utility barrels:
 
 - `backgroundJobs.mode: "managed"` (V1 only) loads the board, supervisor,
   admission state, recovery and managed tools. `"native"` (the V2 default) loads
-  only the thin host-read controls and, on V2, the queue-only report; `"off"`
+  only the thin host-read controls and, on V2, the child report; `"off"`
   loads neither implementation. On V2 the managed gates are structurally false,
   so the board, persistence, recovery, adoption and wake modules are never
   resolved, independent of configuration. The v1 wake scheduler is separate from

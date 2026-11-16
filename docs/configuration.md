@@ -668,7 +668,7 @@ process, not once per session).
 
 OpenCode owns child execution, continuation, delivery, and restart recovery.
 Slim defaults to `backgroundJobs.mode: "native"`, which enables exact-ID
-`task_status`, `task_cancel`, permission-only `task_reply`, queue-only
+`task_status`, `task_cancel`, permission-only `task_reply`, child
 `task_report`, and session preset binding. Use `"off"` to disable Slim's
 task controls and session bindings.
 

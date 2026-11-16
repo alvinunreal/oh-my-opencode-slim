@@ -72,8 +72,9 @@ continue them by exact
 Automation must use exact session IDs. In V2 native mode, `task_status` reads a
 child's trailing result and pending permissions, `task_cancel` asks the host to
 interrupt it, and `task_reply` answers permissions only. Answer questions in the
-host UI. The pre-existing child `task_report` queues an update with
-`delivery: "queue"` and `resume: false`; it does not wake the parent.
+host UI. The pre-existing child `task_report` admits an update with
+`delivery: "steer"` and requests a wake unless the parent's outcome is
+`interrupted`. Acceptance does not confirm processing.
 
 Native restart recovery is owned by OpenCode and can repeat external effects.
 It does not provide exactly-once execution. See
