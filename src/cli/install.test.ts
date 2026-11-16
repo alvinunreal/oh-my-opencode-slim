@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { checkOpenCodeInstalled } from './install';
 
 test('installer accepts unknown preview versions but rejects old releases', () => {
-  const host = { path: '/isolated/opencode', hostFlavor: 'v2' as const };
+  const host = { path: '/isolated/opencode' };
   expect(checkOpenCodeInstalled({ ...host, version: 'opencode vlocal' })).toBe(
     true,
   );

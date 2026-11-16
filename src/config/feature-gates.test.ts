@@ -36,11 +36,32 @@ test('explicit positive managed limits are refused with their full paths', () =>
   }
 });
 
-test('unsupported config errors show the message without implementation frames', () => {
-  const error = new UnsupportedHostConfigError(
-    '/config/slim.json: remove the limit',
+test('reports every positive managed limit in one error', () => {
+  const validate = () =>
+    validateExplicitHostConfig(
+      {
+        backgroundJobs: {
+          wallClockTimeoutMs: 900000,
+          concurrency: {
+            defaultConcurrency: 4,
+            providerConcurrency: { openai: 2 },
+            modelConcurrency: { 'openai/model': 3 },
+          },
+        },
+      },
+      'v2',
+      '/config/slim.json',
+    );
+
+  expect(validate).toThrow('/config/slim.json');
+  expect(validate).toThrow('backgroundJobs.wallClockTimeoutMs = 900000');
+  expect(validate).toThrow('backgroundJobs.concurrency.defaultConcurrency = 4');
+  expect(validate).toThrow(
+    'backgroundJobs.concurrency.providerConcurrency.openai = 2',
   );
-  expect(error.stack).toBe(`UnsupportedHostConfigError: ${error.message}`);
+  expect(validate).toThrow(
+    'backgroundJobs.concurrency.modelConcurrency.openai/model = 3',
+  );
 });
 
 describe('resolveFeatureGates', () => {

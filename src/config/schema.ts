@@ -643,71 +643,6 @@ function emitBackgroundJobsDiagnostic(message: string): void {
   console.warn(`[oh-my-opencode-slim] ${message}`);
 }
 
-/** Unwraps `.default()` layers; returns the shape when the schema is an object schema. */
-function objectShapeOf(
-  schema: z.ZodTypeAny,
-): Record<string, z.ZodTypeAny> | undefined {
-  let current = schema;
-  while (current instanceof z.ZodDefault) {
-    current = current.unwrap() as z.ZodTypeAny;
-  }
-  return current instanceof z.ZodObject
-    ? (current.shape as Record<string, z.ZodTypeAny>)
-    : undefined;
-}
-
-/**
- * Drops invalid keys without discarding valid siblings. The shared shape keeps
- * sanitization aligned with validation; removed keys still reach the parser.
- */
-function sanitizeRecordByShape(
-  config: Record<string, unknown>,
-  shape: Record<string, z.ZodTypeAny>,
-): { result: Record<string, unknown>; dropped: string[] } {
-  const dropped: string[] = [];
-  let out = config;
-  const copyOnce = () => {
-    if (out === config) out = { ...config };
-  };
-  for (const [key, value] of Object.entries(config)) {
-    if (!Object.hasOwn(shape, key)) continue;
-    const keySchema = shape[key];
-    // Removed keys declared as `z.never()` must reach the parser so the
-    // config is rejected with a "was removed" error; dropping them here
-    // would silently strip the key instead of rejecting it.
-    let unwrapped: z.ZodTypeAny = keySchema;
-    while (
-      unwrapped instanceof z.ZodOptional ||
-      unwrapped instanceof z.ZodDefault
-    ) {
-      unwrapped = unwrapped.unwrap() as z.ZodTypeAny;
-    }
-    if (unwrapped instanceof z.ZodNever) continue;
-    let next = value;
-    let nestedDropped: string[] = [];
-    if (isPlainConfigObject(value)) {
-      const nestedShape = objectShapeOf(keySchema);
-      if (nestedShape) {
-        const nested = sanitizeRecordByShape(value, nestedShape);
-        nestedDropped = nested.dropped;
-        if (nested.result !== value) {
-          copyOnce();
-          next = nested.result;
-          out[key] = next;
-        }
-      }
-    }
-    if (!keySchema.safeParse(next).success) {
-      dropped.push(key);
-      copyOnce();
-      delete out[key];
-    } else {
-      for (const k of nestedDropped) dropped.push(`${key}.${k}`);
-    }
-  }
-  return { result: out, dropped };
-}
-
 /** Issue #1291: drop invalid `backgroundJobs` keys instead of rejecting the whole config layer. */
 export function sanitizeBackgroundJobsConfig(value: unknown): unknown {
   if (value === undefined) return value;
@@ -717,14 +652,16 @@ export function sanitizeBackgroundJobsConfig(value: unknown): unknown {
     );
     return {};
   }
-  const { result, dropped } = sanitizeRecordByShape(
-    value,
-    BackgroundJobsConfigStrictSchema.shape as Record<string, z.ZodTypeAny>,
-  );
-  if (dropped.length === 0) return value;
+  if (
+    !Object.hasOwn(value, 'mode') ||
+    BackgroundJobsConfigStrictSchema.shape.mode.safeParse(value.mode).success
+  )
+    return value;
   emitBackgroundJobsDiagnostic(
-    `${BACKGROUND_JOBS_INVALID_VALUE_MESSAGE} (dropped backgroundJobs keys: ${dropped.join(', ')})`,
+    `${BACKGROUND_JOBS_INVALID_VALUE_MESSAGE} (dropped backgroundJobs keys: mode)`,
   );
+  const result = { ...value };
+  delete result.mode;
   return result;
 }
 

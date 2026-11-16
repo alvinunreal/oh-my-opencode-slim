@@ -178,7 +178,6 @@ export function probeTuiGates(
       snapshot,
     };
   } catch (err) {
-    log('[tui] tui config read failed; keeping TUI and sidebar', String(err));
     if (err instanceof UnsupportedHostConfigError) {
       return {
         read: {
@@ -189,6 +188,7 @@ export function probeTuiGates(
         },
       };
     }
+    log('[tui] tui config read failed; keeping TUI and sidebar', String(err));
     return {
       read: {
         gates: failOpenTuiGates(),

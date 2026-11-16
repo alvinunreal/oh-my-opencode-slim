@@ -419,7 +419,7 @@ const AGENTS = [
   'observer',
   'council',
 ];
-function pluginConfig(mode: Mode | 'managed') {
+function pluginConfig(mode: Mode) {
   return {
     preset: 'local-lifecycle',
     presets: {
@@ -548,11 +548,7 @@ class Host {
       OPENCODE_DISABLE_FFF: 'true',
     };
   }
-  async configure(
-    installed: string,
-    mode: Mode | 'managed',
-    customConfig?: RecordValue,
-  ) {
+  async configure(installed: string, mode: Mode, customConfig?: RecordValue) {
     for (const directory of [
       'home',
       'tmp',
@@ -1834,22 +1830,15 @@ async function strictManaged(
 ) {
   const migratedRoot = path.join(root, 'migrated');
   const migrated = new Host(migratedRoot, model);
-  await migrated.configure(installed, 'managed', {
+  await migrated.configure(installed, 'native', {
     ...pluginConfig('native'),
     backgroundJobs: {
       mode: 'managed',
-      maxSessionsPerAgent: 2,
-      stopConfirmationMs: 5000,
       wallClockTimeoutMs: 0,
       concurrency: {
         defaultConcurrency: 0,
         providerConcurrency: { openai: 0 },
       },
-      sameProviderPolicy: { openai: 'foreground' },
-      waitForUserGuard: false,
-      childInputWake: false,
-      childInputWakeKinds: { question: false },
-      pruneEvictedSessions: false,
     },
   });
   await checkCase(
@@ -1878,18 +1867,7 @@ async function strictManaged(
         await migrated.stop();
         const logs = await logTexts(migratedRoot);
         assert.match(logs, /removed-key/);
-        for (const key of [
-          'mode',
-          'maxSessionsPerAgent',
-          'stopConfirmationMs',
-          'wallClockTimeoutMs',
-          'concurrency',
-          'sameProviderPolicy',
-          'waitForUserGuard',
-          'childInputWake',
-          'childInputWakeKinds',
-          'pruneEvictedSessions',
-        ]) {
+        for (const key of ['mode', 'wallClockTimeoutMs', 'concurrency']) {
           assert(
             logs.includes(`backgroundJobs.${key}`),
             `Missing migration warning for ${key}`,

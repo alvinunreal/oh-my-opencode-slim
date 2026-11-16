@@ -58,7 +58,6 @@ export type ConfigLoadWarningKind =
   | 'read-error'
   | 'missing-preset'
   | 'normalized'
-  | 'unsupported-host'
   | 'unknown-key'
   | 'removed-key';
 

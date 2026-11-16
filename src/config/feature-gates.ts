@@ -39,7 +39,6 @@ export class UnsupportedHostConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UnsupportedHostConfigError';
-    this.stack = `${this.name}: ${message}`;
   }
 }
 
@@ -67,30 +66,38 @@ export function validateExplicitHostConfig(
     return;
   }
   const jobs = backgroundJobs as Record<string, unknown>;
-  const rejectLimit = (key: string, value: unknown) => {
+  const unsupported: string[] = [];
+  const collectLimit = (key: string, value: unknown) => {
     if (typeof value === 'number' && value > 0) {
-      throw new UnsupportedHostConfigError(
-        `${source}Unsupported backgroundJobs.${key} = ${value} on OpenCode v2: Slim no longer enforces this limit. Remove the key or set it to 0, then run /reload.`,
-      );
+      unsupported.push(`backgroundJobs.${key} = ${value}`);
     }
   };
-  rejectLimit('wallClockTimeoutMs', jobs.wallClockTimeoutMs);
+  collectLimit('wallClockTimeoutMs', jobs.wallClockTimeoutMs);
   const concurrency = jobs.concurrency;
   if (
-    !concurrency ||
-    typeof concurrency !== 'object' ||
-    Array.isArray(concurrency)
-  )
-    return;
-  const limits = concurrency as Record<string, unknown>;
-  rejectLimit('concurrency.defaultConcurrency', limits.defaultConcurrency);
-  for (const key of ['providerConcurrency', 'modelConcurrency']) {
-    const entries = limits[key];
-    if (!entries || typeof entries !== 'object' || Array.isArray(entries))
-      continue;
-    for (const [id, value] of Object.entries(entries)) {
-      rejectLimit(`concurrency.${key}.${id}`, value);
+    concurrency &&
+    typeof concurrency === 'object' &&
+    !Array.isArray(concurrency)
+  ) {
+    const limits = concurrency as Record<string, unknown>;
+    collectLimit('concurrency.defaultConcurrency', limits.defaultConcurrency);
+    for (const key of ['providerConcurrency', 'modelConcurrency']) {
+      const entries = limits[key];
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+        continue;
+      for (const [id, value] of Object.entries(entries)) {
+        collectLimit(`concurrency.${key}.${id}`, value);
+      }
     }
+  }
+  if (unsupported.length > 0) {
+    const remedy =
+      unsupported.length === 1
+        ? 'this limit. Remove the key or set it'
+        : 'these limits. Remove the keys or set them';
+    throw new UnsupportedHostConfigError(
+      `${source}Unsupported ${unsupported.join(', ')} on OpenCode v2: Slim no longer enforces ${remedy} to 0, then run /reload.`,
+    );
   }
 }
 

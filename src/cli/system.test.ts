@@ -18,7 +18,6 @@ test('finds and identifies OpenCode in ~/.opencode/bin', () => {
     ).toEqual({
       path: opencode,
       version: 'opencode v2.2.4',
-      hostFlavor: 'v2',
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -40,7 +39,6 @@ test('uses the opencode command when a legacy shim also exists on PATH', () => {
     ).toEqual({
       path: opencode,
       version: 'opencode v2.3.1',
-      hostFlavor: 'v2',
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
