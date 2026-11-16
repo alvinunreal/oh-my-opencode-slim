@@ -2288,7 +2288,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     // setup still needs the directory for config loading and tool adapters.
     const directory = resolveV2Directory(ctx);
     // Validate the host-specific config before claiming a location or wiring
-    // any registration. Unsupported managed mode must fail setup, not degrade.
+    // any registration. Unsupported positive limits must fail setup, not degrade.
     const startupConfigSnapshot = readPluginConfigSnapshot(directory, {
       hostFlavor: 'v2',
     });

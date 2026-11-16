@@ -36,7 +36,6 @@ import {
   PluginConfigSchema,
   type RawPluginConfig,
   type ResolvedPluginConfig,
-  sanitizeBackgroundJobsConfig,
   sanitizeMultiplexerConfig,
   WebfetchConfigSchema,
 } from './schema';
@@ -298,40 +297,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function retainExplicitBackgroundJobsFields(
-  parsedConfig: RawPluginConfig,
-  rawConfig: unknown,
-): RawPluginConfig {
-  if (!parsedConfig.backgroundJobs) {
-    return parsedConfig;
-  }
-
-  const rawBackgroundJobs =
-    isPlainRecord(rawConfig) && isPlainRecord(rawConfig.backgroundJobs)
-      ? rawConfig.backgroundJobs
-      : undefined;
-  if (!rawBackgroundJobs) {
-    return parsedConfig;
-  }
-
-  // Keys the sanitizer dropped were invalid in this layer (#1291). Retaining
-  // their parsed defaults would resurrect them as explicit values, letting a
-  // broken upper layer override valid lower-layer settings during merge.
-  // The sanitizer's once-per-process diagnostic already fired inside
-  // safeParse, so this second pass stays silent.
-  const sanitizedBackgroundJobs = sanitizeBackgroundJobsConfig(
-    rawBackgroundJobs,
-  ) as Record<string, unknown>;
-
-  return {
-    ...parsedConfig,
-    backgroundJobs: retainSanitizedValues(
-      parsedConfig.backgroundJobs as unknown as Record<string, unknown>,
-      sanitizedBackgroundJobs,
-    ) as RawPluginConfig['backgroundJobs'],
-  };
-}
-
 /**
  * Zod applies multiplexer defaults while parsing each layer. Keep those
  * defaults from masquerading as explicitly configured overrides; the merged
@@ -473,26 +438,6 @@ export function loadRawPluginConfigFromPath(
     };
 
     validateExplicitHostConfig(rawConfig, options?.hostFlavor, configPath);
-    if (
-      options?.hostFlavor === 'v2' &&
-      isPlainRecord(rawConfig) &&
-      isPlainRecord(rawConfig.backgroundJobs)
-    ) {
-      for (const key of [
-        'childInputWake',
-        'childInputWakeKinds',
-        'waitForUserGuard',
-        'pruneEvictedSessions',
-        'sameProviderPolicy',
-      ]) {
-        if (!Object.hasOwn(rawConfig.backgroundJobs, key)) continue;
-        emitWarning(
-          'unsupported-host',
-          `backgroundJobs.${key} is v1-only and ignored on OpenCode v2 hosts, which use the native lifecycle.`,
-        );
-      }
-    }
-
     // Drop keys removed in this version before schema validation: a stale
     // removed key must not invalidate the whole file (and silently discard
     // every other user setting). Reported per key, not migrated.
@@ -544,7 +489,6 @@ export function loadRawPluginConfigFromPath(
     // defaults from masquerading as explicitly configured overrides; the
     // merged interview config is normalized after all layers are merged.
     let layerConfig = retainExplicitInterviewFields(result.data, rawConfig);
-    layerConfig = retainExplicitBackgroundJobsFields(layerConfig, rawConfig);
     layerConfig = retainExplicitMultiplexerFields(layerConfig, rawConfig);
     if (isPlainRecord(rawConfig)) {
       if (layerConfig.fallback && isPlainRecord(rawConfig.fallback)) {

@@ -5,6 +5,30 @@ import { z } from 'zod';
 import { PluginConfigSchema } from './schema';
 import { dropDefaultedRequired } from './schema-json';
 
+test('published background jobs schema retires managed settings', () => {
+  const schema = JSON.parse(
+    readFileSync(
+      join(import.meta.dir, '..', '..', 'oh-my-opencode-slim.schema.json'),
+      'utf8',
+    ),
+  );
+  const properties = schema.properties.backgroundJobs.properties;
+  expect(properties.mode.enum).toEqual(['native', 'off']);
+  for (const key of [
+    'maxSessionsPerAgent',
+    'stopConfirmationMs',
+    'wallClockTimeoutMs',
+    'concurrency',
+    'sameProviderPolicy',
+    'waitForUserGuard',
+    'childInputWake',
+    'childInputWakeKinds',
+    'pruneEvictedSessions',
+  ]) {
+    expect(properties[key]).toEqual({ not: {} });
+  }
+});
+
 /**
  * Keeps the committed oh-my-opencode-slim.schema.json in sync with the
  * parser: the JSON Schema must be exactly what `bun run generate-schema`

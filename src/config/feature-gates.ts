@@ -39,6 +39,7 @@ export class UnsupportedHostConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UnsupportedHostConfigError';
+    this.stack = `${this.name}: ${message}`;
   }
 }
 
@@ -47,9 +48,8 @@ const UNSUPPORTED_MANAGED_MODE_MESSAGE =
 
 /**
  * Validate explicit config before sanitization or schema defaults are applied.
- * Resolved configs contain V1 defaults for these keys, so must not be checked
- * here. Lifecycle mode itself has no schema default and is also checked by
- * resolveFeatureGates for direct runtime seeds.
+ * Reject only positive limits that the native lifecycle cannot enforce.
+ * Direct runtime seeds are also guarded by resolveFeatureGates.
  */
 export function validateExplicitHostConfig(
   config: unknown,
@@ -66,21 +66,30 @@ export function validateExplicitHostConfig(
   ) {
     return;
   }
-  if ((backgroundJobs as Record<string, unknown>).mode === 'managed') {
-    throw new UnsupportedHostConfigError(
-      `${source}${UNSUPPORTED_MANAGED_MODE_MESSAGE}`,
-    );
-  }
-  for (const key of [
-    'concurrency',
-    'wallClockTimeoutMs',
-    'maxSessionsPerAgent',
-    'stopConfirmationMs',
-  ]) {
-    if (Object.hasOwn(backgroundJobs, key)) {
+  const jobs = backgroundJobs as Record<string, unknown>;
+  const rejectLimit = (key: string, value: unknown) => {
+    if (typeof value === 'number' && value > 0) {
       throw new UnsupportedHostConfigError(
-        `${source}Unsupported backgroundJobs.${key} on OpenCode v2; this setting requires the V1 managed lifecycle. Remove it and use the native host lifecycle.`,
+        `${source}Unsupported backgroundJobs.${key} = ${value} on OpenCode v2: Slim no longer enforces this limit. Remove the key or set it to 0, then run /reload.`,
       );
+    }
+  };
+  rejectLimit('wallClockTimeoutMs', jobs.wallClockTimeoutMs);
+  const concurrency = jobs.concurrency;
+  if (
+    !concurrency ||
+    typeof concurrency !== 'object' ||
+    Array.isArray(concurrency)
+  )
+    return;
+  const limits = concurrency as Record<string, unknown>;
+  rejectLimit('concurrency.defaultConcurrency', limits.defaultConcurrency);
+  for (const key of ['providerConcurrency', 'modelConcurrency']) {
+    const entries = limits[key];
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+      continue;
+    for (const [id, value] of Object.entries(entries)) {
+      rejectLimit(`concurrency.${key}.${id}`, value);
     }
   }
 }

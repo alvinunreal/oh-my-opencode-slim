@@ -222,17 +222,17 @@ describe('v2 setup directory claim', () => {
     await rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  test('unsupported V2 managed config rejects before a directory claim', async () => {
+  test('unsupported V2 positive limit rejects before a directory claim', async () => {
     await Bun.write(
       path.join(
         process.env.OPENCODE_CONFIG_DIR as string,
         'oh-my-opencode-slim.json',
       ),
-      JSON.stringify({ backgroundJobs: { mode: 'managed' } }),
+      JSON.stringify({ backgroundJobs: { wallClockTimeoutMs: 900000 } }),
     );
     await expect(
       createV2Setup()(makeSetupCtx(path.join(fixtureRoot, 'project'))),
-    ).rejects.toThrow(/managed/i);
+    ).rejects.toThrow(/wallClockTimeoutMs/i);
     expect(hasLiveInstances()).toBe(false);
   });
 

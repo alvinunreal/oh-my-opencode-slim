@@ -537,44 +537,39 @@ describe('v2 setup feature gates', () => {
     }
   }, 20_000);
 
-  test('explicit managed mode fails before registrations or storage reads', async () => {
+  test('managed project layer migrates inert keys and overrides user off mode', async () => {
+    const configDir = process.env.OPENCODE_CONFIG_DIR as string;
+    await mkdir(configDir, { recursive: true });
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ backgroundJobs: { mode: 'off' } }),
+    );
     await writeProjectConfig({
       companion: { enabled: false },
-      backgroundJobs: { mode: 'managed' },
+      backgroundJobs: {
+        mode: 'managed',
+        maxSessionsPerAgent: 2,
+        stopConfirmationMs: 5000,
+        wallClockTimeoutMs: 0,
+        concurrency: {
+          defaultConcurrency: 0,
+          providerConcurrency: { openai: 0 },
+        },
+        sameProviderPolicy: { openai: 'foreground' },
+        waitForUserGuard: true,
+        childInputWake: true,
+        childInputWakeKinds: { question: true },
+        pruneEvictedSessions: false,
+      },
     });
-    const { ctx, hooks, commandAdds, toolUpdates, storageCalls } =
-      makeCtx(projectDir);
-    await expect(createV2Setup()(ctx)).rejects.toThrow(/managed/i);
-    expect(hooks).toEqual([]);
-    expect(commandAdds).toEqual([]);
-    expect(toolUpdates).toEqual([]);
-    expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+    const { ctx, commandAdds } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(commandAdds.map((entry) => entry.name)).toContain('preset');
+    } finally {
+      await cleanup();
+    }
   });
-
-  test.each([
-    { concurrency: {} },
-    { wallClockTimeoutMs: 0 },
-    { maxSessionsPerAgent: 2 },
-    { stopConfirmationMs: 5_000 },
-  ])(
-    'retired V2 limit %j refuses setup before storage or registrations',
-    async (limit) => {
-      await writeProjectConfig({
-        companion: { enabled: false },
-        backgroundJobs: { mode: 'native', ...limit },
-      });
-      const { ctx, hooks, commandAdds, toolUpdates, storageCalls } =
-        makeCtx(projectDir);
-
-      await expect(createV2Setup()(ctx)).rejects.toThrow(
-        `Unsupported backgroundJobs.${Object.keys(limit)[0]}`,
-      );
-      expect(hooks).toEqual([]);
-      expect(commandAdds).toEqual([]);
-      expect(toolUpdates).toEqual([]);
-      expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
-    },
-  );
 
   test('native default leaves the native subagent description untouched', async () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);
