@@ -2849,6 +2849,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     messagesImpl?: (args: unknown) => Promise<unknown>;
     retryEnabled?: boolean;
     maxRetries?: number;
+    timers?: ReturnType<typeof createTimerHarness>;
   }) {
     const durable = { providerID: 'test', id: 'a', variant: 'source' };
     const info: { model?: typeof durable; parentID?: string; agent?: string } =
@@ -2885,6 +2886,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: options?.retryEnabled ?? true,
+        timers: options?.timers,
       }),
     );
     return { manager, mocks, switchModel, onChanged, durable, info };
@@ -3484,6 +3486,84 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
       path: { id: 'child' },
     });
+  });
+
+  test('refusal recovery survives rejected idle until continuation idle', async () => {
+    const switching = deferred<void>();
+    const { manager, switchModel } = fixture({
+      parentID: 'parent',
+      switchModel: () => switching.promise,
+    });
+    await manager.handleEvent(started('recovery-child'));
+    await manager.handleEvent(failed('recovery-child'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: 'recovery-child', status: { type: 'idle' } },
+    });
+    expect(manager.refusalRecovery('recovery-child')).toBeDefined();
+    switching.resolve();
+    await settle();
+    expect(await manager.refusalRecovery('recovery-child')?.model).toBe(
+      'test/b',
+    );
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: 'recovery-child', status: { type: 'idle' } },
+    });
+    expect(manager.refusalRecovery('recovery-child')).toBeDefined();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: 'recovery-child', status: { type: 'busy' } },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: 'recovery-child', status: { type: 'idle' } },
+    });
+    expect(manager.refusalRecovery('recovery-child')).toBeUndefined();
+    manager.dispose();
+  });
+
+  test('an undefined refusal decision remains until idle', async () => {
+    const { manager } = fixture({ chains: { orchestrator: ['test/a'] } });
+    await manager.handleEvent(started('no-fallback'));
+    await manager.handleEvent(failed('no-fallback'));
+    await settle();
+    const recovery = manager.refusalRecovery('no-fallback');
+    expect(recovery).toBeDefined();
+    expect(await recovery?.model).toBeUndefined();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: 'no-fallback', status: { type: 'idle' } },
+    });
+    expect(manager.refusalRecovery('no-fallback')).toBeUndefined();
+    manager.dispose();
+  });
+
+  test('refusal recovery decision has a two-second fake-timer bound', async () => {
+    const timers = createTimerHarness();
+    const pending = deferred<void>();
+    const { manager } = fixture({
+      timers,
+      promptAsyncImpl: () => pending.promise,
+    });
+    await manager.handleEvent(started('recovery-timeout'));
+    await manager.handleEvent(failed('recovery-timeout'));
+    await settle();
+    const recovery = manager.refusalRecovery('recovery-timeout');
+    expect(recovery).toBeDefined();
+    const model = recovery?.model;
+    let settled = false;
+    void model?.then(() => {
+      settled = true;
+    });
+    await timers.advance(2_000);
+    expect(settled).toBe(true);
+    expect(await model).toBeUndefined();
+    pending.resolve();
+    await settle();
+    manager.dispose();
   });
 
   test('v2 content-filter uses the step model when the session has no explicit model', async () => {

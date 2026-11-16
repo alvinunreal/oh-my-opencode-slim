@@ -7,7 +7,6 @@ import {
 import { isRecord } from '../utils/guards';
 import { createInternalAgentTextPart } from '../utils/internal-initiator';
 import { getClient } from '../utils/opencode-client';
-import { withAgent } from '../utils/prompt-agent';
 
 const z = tool.schema;
 const MAX_REPORT_LENGTH = 2000;
@@ -15,7 +14,7 @@ const MAX_REPORT_LENGTH = 2000;
 type SessionInfo = {
   id?: string;
   parentID?: string;
-  agent: string;
+  agent?: string;
   outcome?: string;
 };
 
@@ -25,10 +24,13 @@ function unwrapSessionInfo(response: unknown, label: string): SessionInfo {
     throw new Error(`Could not read ${label} session`);
   }
   const value = isRecord(response.data) ? response.data : response;
-  if (typeof value.id !== 'string' || typeof value.agent !== 'string') {
+  if (typeof value.id !== 'string') {
     throw new Error(`Could not verify ${label} session identity`);
   }
-  return value as SessionInfo;
+  return {
+    ...value,
+    agent: typeof value.agent === 'string' ? value.agent : undefined,
+  } as SessionInfo;
 }
 
 function assertPromptAccepted(response: unknown): void {
@@ -112,12 +114,7 @@ export function createTaskReportTool(options: {
         args.message.trim(),
         '</subagent-update>',
       ].join('\n');
-      const body = withAgent(
-        {
-          parts: [createInternalAgentTextPart(message)],
-        },
-        parent.agent,
-      );
+      const body = { parts: [createInternalAgentTextPart(message)] };
       const promptAsync = client.session.promptAsync as unknown as (
         input: Record<string, unknown>,
       ) => Promise<unknown>;

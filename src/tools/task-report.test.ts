@@ -121,6 +121,24 @@ describe('task_report', () => {
     expect(admission?.text).toContain('kind="progress"');
   });
 
+  test('reports to a parent without an explicit agent', async () => {
+    let admission: Record<string, unknown> | undefined;
+    const input = createContext({
+      parent: { agent: undefined },
+      onSynthetic: (value) => {
+        admission = value;
+      },
+    });
+    const { task_report } = createTaskReportTool({ input });
+    await task_report.execute(reportArgs, { sessionID: 'child' } as never);
+
+    expect(admission).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: true,
+    });
+  });
+
   test('contract: interrupted parent is not resumed for either kind', async () => {
     const admissions: Record<string, unknown>[] = [];
     const input = createContext({

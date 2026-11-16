@@ -1,0 +1,34 @@
+import { formatSystemReminder } from '../config/constants';
+import { appendTrailingVolatileMessage } from './cache-safe-injection';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './volatile-message';
+
+function formatRefusalCorrectionText(
+  corrections: Array<{ taskID: string; model: string }>,
+): string {
+  return formatSystemReminder(
+    [
+      '### Child task — Continuing after fallback',
+      ...corrections.map(
+        ({ taskID, model }) =>
+          `- ${taskID}: the previous error is superseded; the child continues on ${model}.`,
+      ),
+      'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
+    ].join('\n'),
+  );
+}
+
+export function appendRefusalCorrections(
+  messages: unknown[],
+  sessionID: string,
+  agent: string,
+  corrections: Array<{ taskID: string; model: string }>,
+): void {
+  appendTrailingVolatileMessage(
+    messages,
+    { role: 'user', agent, sessionID, id: `refusal-correction-${sessionID}` },
+    {
+      text: formatRefusalCorrectionText(corrections),
+      metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
+    },
+  );
+}
