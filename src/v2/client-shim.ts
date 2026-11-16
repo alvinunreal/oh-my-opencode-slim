@@ -119,10 +119,8 @@ function filesFromBody(
  * assistant entries carry `time.completed` (set when the turn
  * finalizes), `finish`, and `error`, and tool parts carry `state.status`
  * in the v1 vocabulary. The old `{id, role}`-only reduction degraded
- * every downstream classification — completion times were unreadable
- * (eternal "pending") and finish/error states were invisible — which
- * starved the terminal gate's transcript publish path on v2 hosts
- * (live-verified 2.0.8 incident).
+ * downstream classification: completion times and finish/error states
+ * were invisible (live-verified 2.0.8 incident).
  *
  * The 2.0.8 `idle` marker (`{type: 'idle', time, outcome}`) trails every
  * finished session. It is a lifecycle boundary, never content, and has
@@ -185,15 +183,8 @@ function toV1Message(m: Record<string, unknown>) {
 }
 
 /**
- * One-time degradation notices for host surfaces the v2 plugin session
- * domain does not expose. Verified against the upstream promise-plugin
- * adapter (`packages/plugin/src/promise/{session,adapter}.ts`): the
- * domain is built with exactly create/get/switchAgent/switchModel/
- * prompt/generate/command/synthetic/interrupt/update/move/wait/context —
- * NO `list` and NO `remove`. On such hosts the `list` shim used to
- * return the empty page silently (children enumeration quietly fell
- * back to event tracking) and `delete` logged a no-op notice per call.
- * Both now emit ONE deterministic warning per setup generation
+ * One-time degradation notices for host contexts missing optional session
+ * surfaces. Both emit one deterministic warning per setup generation
  * (module-level latch, rearmed by resetClientShimGenerationWarnings —
  * `opencode reload` reuses the process, so a new generation must not
  * inherit the previous one's silence; fixed text, no timestamps or
@@ -241,10 +232,8 @@ function modelRefFromBody(body: {
  * in the text-only v2 translation, so the marker travels as prompt
  * `metadata` (accepted and propagated by the v2 session.prompt endpoint
  * and its hook). The session-prompt bridge restores it onto the rebuilt
- * v1 parts view so `isInternalInitiatorPart` consumers — notably
- * orchestrator-wake's `observeChatMessage`, which must NOT treat a wake
- * admission as external user activity (the two-wake no-progress cap
- * depends on that) — keep working on v2.
+ * v1 parts view so `isInternalInitiatorPart` consumers can distinguish
+ * internal admissions from external user activity.
  */
 function internalInitiatorMetadataFromBody(
   args: Record<string, unknown>,
@@ -292,9 +281,7 @@ function toV1SessionInfo(
   if (typeof info.projectID === 'string') out.projectID = info.projectID;
   if (typeof info.title === 'string') out.title = info.title;
   if (typeof info.agent === 'string') out.agent = info.agent;
-  // v2 Session.Info.outcome appears only on terminal transition
-  // (succeeded|failed|interrupted); orchestrator-wake's children-driven
-  // mode reads it as the terminal signal.
+  // v2 Session.Info.outcome appears only on terminal transition.
   if (typeof info.outcome === 'string') out.outcome = info.outcome;
   if (isRecord(info.model)) out.model = info.model;
   if (isRecord(info.metadata)) out.metadata = info.metadata;
@@ -423,22 +410,15 @@ export function buildPluginInput(
         : {}),
       // Same rule as `get`: expose `abort` only when the host can really
       // interrupt. A stub that resolves after logging would let callers
-      // (native mode's task_cancel, the managed abort path, foreground
-      // fallback) report an accepted stop that never happened.
+      // (such as native task_cancel) report an accepted stop that never happened.
       ...(s.interrupt
         ? {
             abort: async (args: Record<string, unknown>) =>
               s.interrupt?.({ sessionID: sessionIDOf(args), resume: false }),
           }
         : {}),
-      // `messages` is exposed only when the host provides
-      // session.context — the terminal gate's transcriptSourceAbsent
-      // predicate methods-presence as the capability signal, and a
-      // fake-empty `{data: []}` stub here would read as "source present
-      // but empty" (classifier verdict `absent` → a baseline-less child
-      // STOPPED_WITHOUT_TERMINAL_RESULT) instead of honest capability
-      // absence (same no-fake-success doctrine as the `get` omission
-      // above).
+      // Expose messages only when the host provides session.context, so an
+      // unavailable transcript is not mistaken for an empty one.
       ...(s.context
         ? {
             messages: async (args: Record<string, unknown>) => {
@@ -452,7 +432,7 @@ export function buildPluginInput(
                 typeof limit === 'number' &&
                 Number.isFinite(limit) &&
                 limit > 0;
-              // Bounded tail read (foreground-fallback replay): the v2
+              // Bounded tail read (foreground-fallback continuation): the v2
               // messages route paginates natively, so `limit` maps to the
               // LAST N projected messages newest-first, reversed back to
               // the v1 ascending shape. Hosts without the route still fetch
@@ -568,9 +548,9 @@ export function buildPluginInput(
             throw new Error('[v2] session.prompt unavailable');
           },
       // v1 prompt_async QUEUED its prompt. The optional `delivery` argument
-      // lets callers preserve that on v2 ('queue' — orchestrator-wake);
+      // lets callers preserve that on v2 ('queue');
       // the default stays 'steer'. Callers may pass the session's current
-      // model as a pin (orchestrator-wake), with a logged degrade on failure.
+      // model as a pin, with a logged degrade on failure.
       // The optional `modelSelection:
       // 'inherit'` argument opts a pure-internal caller into LIFECYCLE
       // continuation semantics (#1079): the body pin is a snapshot, so the
@@ -592,8 +572,7 @@ export function buildPluginInput(
           parts?: Array<{ type?: string; text?: string }>;
         };
         const metadata = internalInitiatorMetadataFromBody(args);
-        // Internal-initiator injections (orchestrator-wake nudges, interview
-        // continuation) must not be persisted as user input on v2: the flat
+        // Internal-initiator injections must not be persisted as user input on v2: the flat
         // session.prompt translation drops the v1 part-level `synthetic`
         // flag, which regressed them into visible user bubbles. v2's
         // dedicated session.synthetic admission keeps the text model-visible

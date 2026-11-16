@@ -30,7 +30,7 @@ from its owning module, that returns the hook points OpenCode invokes.
 - **Command hook helper** (`command-hook-utils.ts`): `registerCommandHook`
   shared by command-style hooks (deepwork, reflect).
 - **Message types** (`types.ts`): `MessageInfo`, `MessagePart`,
-  `MessageWithParts`, plus replay helpers used by foreground-fallback.
+  `MessageWithParts`.
 - **Volatile messages** (`volatile-message.ts`): shared marker used by the goal pointer and the cache breakpoint selector.
 
 ### Hook Categories
@@ -61,8 +61,7 @@ from its owning module, that returns the hook points OpenCode invokes.
 indices once per request. Parts remain live; image identity uses signature
 prefixes before full extraction, which is memoized only within that view.
 Root wiring shares it with phase and council transforms. Goal placement
-remains trailing-most. `stripTaggedContents` removes multiple compaction tags
-with one equivalent pass; the cache-safety harness mirrors this wiring.
+remains trailing-most; the cache-safety harness mirrors this wiring.
 
 ### Hook Registration
 
@@ -98,7 +97,7 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 | `absolute-path-rescue/` | Rewrites misguessed absolute tool paths by re-anchoring the longest workspace-suffix match (ENOENT-only, unambiguous candidates only) |
 | `apply-patch/` | Structured `apply_patch` parsing, matching, recovery, rewrite pipeline |
 | `cache-monitor/` | Observation-only prompt-cache telemetry watchdog |
-| `council-seats/` | Council seat-result assembly seam: `Seats:`-line rewrite hook + managed (job board) and native (host session) resolvers |
+| `council-seats/` | Council seat-result assembly seam: `Seats:`-line rewrite hook and native host-session resolver |
 | `deepwork/` | `/deepwork` runtime command |
 | `foreground-fallback/` | Interactive-session model fallback on rate-limit/errors |
 | `json-error-recovery/` | Malformed JSON/tool-output recovery helpers |

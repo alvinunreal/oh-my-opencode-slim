@@ -425,8 +425,8 @@ export function createSessionContextHandler(
         await deps.systemTransform(
           // Forward the request-scoped agent so the transform can tell a
           // real orchestrator request from an auxiliary (title/compaction)
-          // request running in the same session — v1 hosts lack this and
-          // fall back to a structural heuristic.
+          // request running in the same session. When absent, the transform
+          // falls back to a structural heuristic.
           { sessionID: event.sessionID, agent: event.agent },
           { system: sysStrings },
         );
@@ -2662,9 +2662,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             /* default() optional */
           }
         }
-        // v1 publishes this projection from its config hook; v2 never calls
-        // that hook, so finalization owns the startup sidebar identity
-        // snapshot. Refresh reads the same frozen registry identity table.
+        // Finalization publishes the startup sidebar identity snapshot.
+        // Refresh reads the same frozen registry identity table.
         if (sidebarEnabled) {
           recordTuiAgentDisplayNames(
             collectAgentDisplayNames(registry.identities),

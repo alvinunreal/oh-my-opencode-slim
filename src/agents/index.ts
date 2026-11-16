@@ -1531,12 +1531,9 @@ function createAgentViews(
   }
 
   // Static pointer = roster only. The seat list lives here because v2's
-  // native subagent roster filters hidden agents out — on v2 this line is
-  // the orchestrator's only always-present source of seat IDs. v1 applies no
-  // hidden filter (as of opencode 1.18.35, `agents.list()` and the task
-  // tool's describeTask carry no hidden check), so hidden councillors do
-  // surface in the v1 task roster — a host-side gap outside omos's control.
-  // v2 compounds this with agent-param guidance ('name not in available
+  // native subagent roster filters hidden agents out, so this line is the
+  // orchestrator's only always-present source of seat IDs. The host adds
+  // agent-param guidance ('name not in available
   // subagents → pass through model parameter', subagent.ts:31-33) that
   // actively steers away from exact-name dispatch; a roster-visible-but-@-hidden
   // agent flag upstream would let the Council Mode block's dispatch clause be

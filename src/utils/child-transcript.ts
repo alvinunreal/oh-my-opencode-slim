@@ -1,14 +1,8 @@
 /**
  * Shared child-session transcript evidence extraction and fetch.
  *
- * Two consumers need "what did the child session end with?":
- * - `revived-run-tracker` (revive probes, strict v1 transcript shape)
- * - the quiescent host-outcome settle path in `task-session-manager`
- *   (v2 shim shape — `info` carries only `{id, role}`; terminality is
- *   confirmed upstream via `Session.Info.outcome`)
- *
- * Both previously carried their own (and subtly different) extraction
- * logic. This module is the single source of truth for reading a v1-style
+ * Native task observation and council seats need the child's trailing
+ * transcript. This module reads a v1-style
  * `{data: [{info, parts}]}` messages response and classifying the
  * trailing assistant turn — and for fetching that transcript:
  * `fetchChildTranscript` binds the client's `session.messages` endpoint
@@ -16,8 +10,7 @@
  * normalized `Error`, replacing the bind/call/unwrap boilerplate that was
  * previously duplicated at every call site. `responseError` and
  * `stringifyError` are the shared response-error extraction and error-text
- * helpers for session-endpoint call sites (revive probes, notification
- * transport, task cancellation).
+ * helpers for session-endpoint call sites.
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';

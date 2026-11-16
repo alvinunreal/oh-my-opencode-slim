@@ -148,7 +148,7 @@ bun run build
 2. **فهرست مدل‌هایی را که OpenCode می‌بیند refresh و نمایش دهید**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **فایل تنظیمات Plugin را باز کنید**: `~/.config/opencode/oh-my-opencode-slim.json`
 

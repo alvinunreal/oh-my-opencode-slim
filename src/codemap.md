@@ -4,7 +4,7 @@
 
 Core plugin implementation for **oh-my-opencode-slim**, providing:
 - Main plugin initialization and OpenCode integration (`index.ts`)
-- Dual v1/v2 host export: `default.server` (v1) + `default.setup` (v2 adapter via `src/v2/`)
+- OpenCode v2 plugin export `{ id, setup }` (`plugin.ts`), built for the root and `./server` entries
 - Terminal User Interface (TUI) sidebar plugin for agent status display (`tui.ts`)
 - Client-side multiplexer pane lifecycle, wired only from the TUI entry (`src/multiplexer/client/`)
 - TUI state persistence and synchronization across sessions (`tui-state.ts`)
@@ -48,7 +48,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 
 | File | Role | Dependencies |
 |------|------|--------------|
-| `index.ts` | Main plugin entry, orchestrates all server-side subsystems; exports dual `server`/`setup` default | Config system, agent factories, tool creators, hooks, v2 adapter |
+| `index.ts` | Shared plugin factory that orchestrates server-side subsystems | Config system, agent factories, tool creators, hooks, v2 adapter |
 | `admission-runtime.ts` | Per-directory scheduler/pending-call runtime lease | Background task concurrency, task-session pending calls |
 | `tui.ts` | TUI sidebar plugin for agent model display; wires the client-side multiplexer pane lifecycle | tui-state.ts, config constants, multiplexer/client |
 | `tui-host-sessions.ts` | In-memory projection of host session history and activity for the sidebar | tui-state.ts, v2/team-display.ts |
@@ -192,7 +192,7 @@ Key event flows:
 
 - Plugin config loaded via `loadPluginConfig()` with support for:
   - User overrides from `~/.config/opencode/oh-my-opencode-slim.json`
-  - Preset switching via the TUI `/preset` manager (persisted to the config file; v2 hosts request the live inference-profile refresh for NEW child sessions and the sidebar — existing sessions stay frozen — and a malformed config keeps the last-known-good state; v1 hosts apply on next reload)
+  - Preset switching via the TUI `/preset` manager (persisted to the config file; v2 requests a live inference-profile refresh for NEW child sessions and the sidebar — existing sessions stay frozen — and a malformed config keeps the last-known-good state)
   - Environment-based disablement via `OH_MY_OPENCODE_SLIM_DISABLE`
 - Agent configurations merged with user settings from OpenCode config
 - Model resolution supports both string models and array-based fallback chains

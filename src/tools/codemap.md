@@ -208,9 +208,9 @@ Preset switching is not a tool: `preset-switch.ts` exposes on-disk helpers
 #### Presets (preset-switch.ts)
 - Defined in plugin config under `presets` field
 - Each preset maps agent names to `AgentOverrideConfig`
-- `switchPresetOnDisk` persists the preset name to the user config file. v1
-  applies it on reload; v2 requests a live inference-profile/sidebar refresh
-  for new child sessions while existing sessions stay frozen.
+- `switchPresetOnDisk` persists the preset name to the user config file. The
+  v2 manager requests a live inference-profile/sidebar refresh for new child
+  sessions while existing sessions stay frozen.
 
 #### AST-grep (ast-grep/)
 - Auto-downloads CLI binary on first use

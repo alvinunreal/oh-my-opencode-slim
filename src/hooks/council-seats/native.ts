@@ -1,8 +1,7 @@
 /**
  * Native seat resolver: resolves `Seats:` refs straight from the host's
- * session domain — no board, no ledger, no lifecycle. This is what makes
- * council work with native OpenCode v2 delegation and the managed
- * lifecycle OFF.
+ * session domain without plugin-side lifecycle tracking. This supports
+ * council with native OpenCode v2 delegation.
  *
  * Only exact `ses_` child IDs resolve; any other ref is missing. One
  * bounded deadline covers the whole call; there is no retry, no polling,

@@ -137,7 +137,7 @@ bun run build
 2. **OpenCode が認識しているモデルを更新して一覧表示します**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **プラグイン設定**を開きます: `~/.config/opencode/oh-my-opencode-slim.json`
 

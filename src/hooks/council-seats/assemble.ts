@@ -22,8 +22,8 @@ import type { SeatRequest, SeatResult, SeatResultResolver } from './types';
 const SEATS_LINE_PATTERN = /^Seats:\s*(.+)$/;
 
 /**
- * Canonical placeholder tails, one per non-completed kind. The managed
- * resolver uses these; the native resolver may use its own short tails.
+ * Canonical placeholder tails, one per non-completed kind. The native
+ * resolver uses these, and assembly uses them as defaults.
  */
 export const SEAT_REASONS = {
   running: 'still running',
