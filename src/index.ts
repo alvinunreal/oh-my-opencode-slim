@@ -1822,9 +1822,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.releaseSessionChains': (sessionID: string) => {
       foregroundFallback?.releaseSessionChains(sessionID);
     },
-    // v2 owns its own interview bridge/service; point the submit tool and
-    // text-complete fallback at it so `/interview` state lands in the same
-    // service that captured the session transcript.
+    // Point the submit tool at the v2 interview bridge's service, which
+    // captures the session transcript.
     'v2.setInterviewService': (
       service: ReturnType<typeof createInterviewService>,
     ) => {

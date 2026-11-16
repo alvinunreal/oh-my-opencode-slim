@@ -41,10 +41,7 @@ import {
   findLatestAssistantState,
   flattenMessage,
   hasInterviewStateBlock,
-  locateInterviewStateBlocks,
   normalizeAssistantState,
-  parseAssistantState,
-  replaceInterviewStateBlocks,
 } from './parser';
 import {
   buildAnswerPrompt,
@@ -232,11 +229,6 @@ export function createInterviewService(
     messageID?: string,
   ) => Promise<{ ok: boolean; message: string }>;
   notifyTurnStatus: (sessionID: string) => Promise<void>;
-  completeInterviewText: (
-    sessionID: string,
-    text: string,
-    messageID?: string,
-  ) => Promise<string>;
   listInterviewFiles: () => Promise<InterviewFileItem[]>;
   listInterviews: () => InterviewListItem[];
   submitAnswers: (
@@ -550,8 +542,8 @@ export function createInterviewService(
 
   /**
    * Shared apply step: dedupe `state` against the document's
-   * `consumedState` hash and rewrite the document. Used by the tool path,
-   * the v1 `text.complete` fallback, and polling.
+   * `consumedState` hash and rewrite the document. Used by the tool path and
+   * polling.
    */
   async function applyStateToDocument(
     interview: InterviewRecord,
@@ -651,10 +643,6 @@ export function createInterviewService(
     }
     const matches = patch.match(/^@@ /gm);
     return matches ? matches.length : 0;
-  }
-
-  function stripInterviewStateBlocks(text: string): string {
-    return replaceInterviewStateBlocks(text, () => '').trim();
   }
 
   function resetTurnNoticeState(sessionID: string): void {
@@ -802,7 +790,7 @@ export function createInterviewService(
     const remembered = memoryFor(interview.id).lastAppliedState;
     const toolMessageID = turnFor(interview.sessionID).toolMessageID;
     // The assistant message the current state was applied for: the tool path
-    // records it on submit, the v1 text fallback records it on apply.
+    // records it on submit, and polling records it when applying stored text.
     const appliedMessageID = remembered?.messageID ?? toolMessageID;
     const messageIndex = (id: string | undefined): number =>
       id === undefined
@@ -1107,8 +1095,7 @@ export function createInterviewService(
       return;
     }
 
-    // Apply any state still present in stored text (printState mode, a missed
-    // text.complete hook, or the v2 fallback) before choosing the notice.
+    // Apply any state still present in stored text before choosing the notice.
     const turn = turnFor(sessionID);
     if (!turn.noticeHandled) {
       try {
@@ -1260,73 +1247,6 @@ export function createInterviewService(
       sessionID,
       `⎔ Interview update failed: ${reason} · UI: ${url} [system status: continue without acknowledging this notification]`,
     );
-  }
-
-  /**
-   * v1 `experimental.text.complete` fallback: capture a printed
-   * `<interview_state>` block through the shared apply step, then strip it.
-   * Malformed or failed states leave the text unchanged so the existing
-   * error/retry path still runs. printState mode keeps the block.
-   */
-  async function completeInterviewText(
-    sessionID: string,
-    text: string,
-    messageID?: string,
-  ): Promise<string> {
-    if (printState) {
-      return text;
-    }
-    const interviewId = activeInterviewIds.get(sessionID);
-    if (!interviewId) {
-      return text;
-    }
-    const interview = interviewsById.get(interviewId);
-    if (!interview) {
-      return text;
-    }
-    if (locateInterviewStateBlocks(text).length === 0) {
-      return text;
-    }
-    // The submit tool is authoritative for its assistant message: a block
-    // printed in the same message (or re-polled later) must not overwrite the
-    // tool state. The per-turn flag covers hosts without a message id.
-    const turn = turnFor(sessionID);
-    const toolMessageID = turn.toolMessageID;
-    if (
-      turn.toolApplied ||
-      (toolMessageID !== undefined && messageID === toolMessageID)
-    ) {
-      return stripInterviewStateBlocks(text);
-    }
-
-    const parsed = parseAssistantState(text, maxQuestions);
-    if (!parsed.state) {
-      return text;
-    }
-    try {
-      const outcome = await applyStateToDocument(interview, parsed.state);
-      if (outcome.patchError) {
-        turnFor(sessionID).patchError = true;
-        markTurnError(sessionID, outcome.patchError.message);
-        memoryFor(interview.id).lastPatchError = outcome.patchError.message;
-        return text;
-      }
-      if (outcome.applied) {
-        markStateApplied(interview, parsed.state, outcome.hash, messageID);
-      } else {
-        const remembered = memoryFor(interview.id).lastAppliedState;
-        if (messageID !== remembered?.messageID) {
-          markStateApplied(interview, parsed.state, outcome.hash, messageID);
-        }
-      }
-      return stripInterviewStateBlocks(text);
-    } catch (error) {
-      markTurnError(
-        sessionID,
-        error instanceof Error ? error.message : String(error),
-      );
-      return text;
-    }
   }
 
   async function notifyInterviewUrl(
@@ -2168,7 +2088,6 @@ export function createInterviewService(
     getInterviewState,
     submitState,
     notifyTurnStatus,
-    completeInterviewText,
     listInterviewFiles,
     listInterviews,
     submitAnswers,

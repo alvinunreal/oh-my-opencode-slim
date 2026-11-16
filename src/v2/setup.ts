@@ -2475,12 +2475,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         });
       }
       if (interviewBridge) disposers.push(() => interviewBridge.dispose());
-      // The submit tool and text-complete fallback are built inside the v1
-      // factory against the v1 interview manager. On v2 the bridge owns the
-      // live transcript and active interviews, so point them at its service.
-      // With the interview subsystem disabled there is no bridge service to
-      // hand over: the v1 manager is either absent (v2 host) or left on its
-      // own default service, and no interview machinery ever runs.
+      // Point the submit tool at the bridge service, which owns the live
+      // transcript and active interviews. With interviews disabled there is
+      // no bridge service to hand over.
       if (interviewBridge) {
         (
           v1Hooks as {

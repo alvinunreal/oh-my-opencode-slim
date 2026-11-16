@@ -1,11 +1,9 @@
 /**
- * Shared pure domain helpers for the preset editors.
+ * Shared pure domain helpers for preset editing and persistence.
  *
- * Two hosts implement the same three-level preset manager with different
- * control flows: the v1 TUI editor (`src/tui-preset.ts`, JSX dialogs) and the
- * v2 TUI editor (`src/v2/preset-manager.ts`, promise dialogs). Everything in
- * this module is host-agnostic and side-effect free so both editors share one
- * implementation of:
+ * The v2 TUI manager (`src/v2/preset-manager.ts`) and preset persistence
+ * (`src/tools/preset-switch.ts`) use these host-agnostic, side-effect-free
+ * primitives for:
  *
  * - action-sentinel/user-choice wrapping (no user value can be shadowed by a
  *   manager action);
@@ -18,8 +16,8 @@
  * - temperature and JSON options parsing;
  * - empty-override cleanup for persistable definitions.
  *
- * The modules deliberately keep their own control-flow adapters (callbacks vs.
- * promises) and only share these domain primitives.
+ * The manager owns dialog control flow; persistence shares name-safety
+ * primitives.
  */
 import type {
   AgentOverrideConfig,

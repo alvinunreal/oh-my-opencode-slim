@@ -8,7 +8,7 @@ Core plugin implementation for **oh-my-opencode-slim**, providing:
 - Terminal User Interface (TUI) sidebar plugin for agent status display (`tui.ts`)
 - Client-side multiplexer pane lifecycle, wired only from the TUI entry (`src/multiplexer/client/`)
 - TUI state persistence and synchronization across sessions (`tui-state.ts`)
-- Three-level TUI `/preset` manager (`tui-preset.ts`)
+- Three-level TUI `/preset` manager (`v2/preset-manager.ts`)
 - Emergency kill-all for running subagents (`tui-kill.ts`)
 - Installer-managed plugin-entry marker (`plugin-entry.ts`)
 - Plugin init health-check thresholds and helpers (`health-check.ts`)
@@ -41,7 +41,7 @@ OpenCode Core → Plugin Initialization (index.ts)
   → Runtime State Tracking (tui-state.ts)
   → TUI Rendering (tui.ts → sidebar_content slot)
   → TUI Client Pane Lifecycle (multiplexer/client/tui-wiring.ts)
-  → TUI /preset Management (tui-preset.ts → preset-switch.ts)
+  → TUI /preset Management (v2/preset-manager.ts → tools/preset-switch.ts)
 ```
 
 ### Key Components
@@ -54,7 +54,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 | `tui-host-sessions.ts` | In-memory projection of host session history and activity for the sidebar | tui-state.ts, v2/team-display.ts |
 | `tui-gates.ts` | Render-stack-free config gate read (`readTuiGates`/`readConfigState`); re-exported by `tui.ts`. Needed by the thin v2 entry so `tui: false` never loads OpenTUI/Solid | config/snapshot, config/schema, multiplexer/client/tui-wiring |
 | `tui-state.ts` | Persistent state management for TUI | Node.js fs/promises, os module |
-| `tui-preset.ts` | Three-level `/preset` manager (preset list → agents → agent edit) using `api.ui` dialogs | preset-switch.ts, config loader/constants |
+| `v2/preset-manager.ts` | Three-level `/preset` manager (preset list → agents → agent edit) using `ui.dialog` | tools/preset-switch.ts, config loader/constants |
 | `plugin-entry.ts` | Installer-managed plugin entry marker and `PluginEntry` type | none |
 | `health-check.ts` | Init health-check thresholds and disabled-tool-aware minimum tool count | none (kept internal, not re-exported) |
 

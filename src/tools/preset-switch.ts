@@ -27,8 +27,6 @@ import { mergePresetMaps, resolvePresetDefinition } from '../config/presets';
 import {
   isPrototypeSensitiveName,
   ownPresetValue,
-  withAgentOverride,
-  withoutAgentOverride,
 } from '../preset-editor-domain';
 
 type PresetMap = Record<string, PresetInput>;
@@ -1036,27 +1034,4 @@ export function deletePreset(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Set (or replace) an agent override within an in-memory preset. Returns a
- * new preset object; does not mutate the input.
- */
-export function setAgentOverride(
-  preset: Preset,
-  agentName: string,
-  override: AgentOverrideConfig,
-): Preset {
-  return withAgentOverride(preset, agentName, override);
-}
-
-/**
- * Remove an agent from an in-memory preset. Returns a new preset object; does
- * not mutate the input. If the agent was not present, the preset is unchanged.
- */
-export function removeAgentFromPreset(
-  preset: Preset,
-  agentName: string,
-): Preset {
-  return withoutAgentOverride(preset, agentName);
 }

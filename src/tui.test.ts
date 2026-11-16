@@ -30,7 +30,6 @@ import {
   renderSidebar,
   resolveHoverBackground,
   resolveSelectedRootModel,
-  resolveSidebarSlotOrder,
   resolveTuiPaneDirectory,
   retainEqualModelNames,
   STATUS_DOT_GLYPH,
@@ -3536,76 +3535,6 @@ describe('sidebarTargetLabel', () => {
     expect(
       sidebarTargetLabel({ sessionID: 'ses-b', alias: 'exp-4' }, () => ' \n '),
     ).toBe('exp-4');
-  });
-});
-
-describe('resolveSidebarSlotOrder', () => {
-  const NAME = 'oh-my-opencode-slim';
-
-  test('index 0 lands at 110, right after the host context section', () => {
-    expect(resolveSidebarSlotOrder([`file:///w/${NAME}`], NAME)).toBe(110);
-  });
-
-  test('later indexes map to later bands of 100', () => {
-    expect(
-      resolveSidebarSlotOrder(
-        ['@cortexkit/opencode-magic-context@0.42.4', `file:///w/${NAME}`],
-        NAME,
-      ),
-    ).toBe(210);
-  });
-
-  test('falls back to 900 when the list is missing or not an array', () => {
-    expect(resolveSidebarSlotOrder(undefined, NAME)).toBe(900);
-    expect(resolveSidebarSlotOrder(null, NAME)).toBe(900);
-    expect(resolveSidebarSlotOrder('not-a-list', NAME)).toBe(900);
-  });
-
-  test('falls back to 900 when the spec is absent from the list', () => {
-    expect(
-      resolveSidebarSlotOrder(['@cortexkit/opencode-magic-context'], NAME),
-    ).toBe(900);
-  });
-
-  test('matches npm specs with versions', () => {
-    expect(
-      resolveSidebarSlotOrder(['other-plugin', `${NAME}@2.2.20`], NAME),
-    ).toBe(210);
-  });
-
-  test('matches [spec, options] tuple entries the installer generates', () => {
-    expect(
-      resolveSidebarSlotOrder(
-        [
-          ['@cortexkit/opencode-magic-context@0.42.4', {}],
-          [`file:///home/raxxor/workspace/${NAME}`, { flag: true }],
-        ],
-        NAME,
-      ),
-    ).toBe(210);
-  });
-
-  test('does not match a scoped package sharing the basename', () => {
-    expect(resolveSidebarSlotOrder([`@other/${NAME}`, 'unrelated'], NAME)).toBe(
-      900,
-    );
-  });
-
-  test('file:// specs with a trailing slash still match', () => {
-    expect(resolveSidebarSlotOrder([`file:///w/${NAME}/`], NAME)).toBe(110);
-  });
-
-  test('plain absolute local paths match by basename', () => {
-    expect(resolveSidebarSlotOrder([`/workspace/${NAME}`], NAME)).toBe(110);
-  });
-
-  test('non-string and malformed entries are skipped without shifting index', () => {
-    expect(
-      resolveSidebarSlotOrder(
-        [{ not: 'a spec' }, 42, [''], `file:///w/${NAME}`],
-        NAME,
-      ),
-    ).toBe(410);
   });
 });
 
