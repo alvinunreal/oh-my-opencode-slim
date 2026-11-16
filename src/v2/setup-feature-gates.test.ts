@@ -286,6 +286,15 @@ describe('v2 setup feature gates', () => {
     await rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  test('accepts major-zero preview hosts but rejects unsupported releases', async () => {
+    const { ctx } = makeCtx(projectDir);
+    ctx.app.version = '0.0.0-beta-19507';
+    const cleanup = await createV2Setup()(ctx);
+    await cleanup();
+    ctx.app.version = '2.2.4';
+    await expect(createV2Setup()(ctx)).rejects.toThrow(/unsupported/i);
+  });
+
   test('interview disabled: no command marker, no context dispatch', async () => {
     await writeProjectConfig({
       companion: { enabled: false },

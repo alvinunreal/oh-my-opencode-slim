@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { isSupportedOpenCodeVersion } from '../config/opencode-version';
+import { classifyOpenCodeVersion } from '../config/opencode-version';
 
 const VERSION_COMMAND_TIMEOUT_MS = 2000;
 
@@ -143,7 +143,7 @@ export function findOpenCode(
           version,
           hostFlavor: Number(major) >= 2 ? 'v2' : 'v1',
         } as const;
-        if (isSupportedOpenCodeVersion(version)) return host;
+        if (classifyOpenCodeVersion(version) !== 'unsupported') return host;
         unsupported ??= host;
       }
     } catch {
