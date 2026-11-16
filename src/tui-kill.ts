@@ -4,7 +4,7 @@
  */
 import type { OpencodeClient } from '@opencode-ai/sdk';
 import { getSidebarAgentTargets } from './tui';
-import type { TuiSnapshot } from './tui-state';
+import { resolveTuiSnapshotRoot, type TuiSnapshot } from './tui-state';
 import { log } from './utils/logger';
 import {
   abortSessionWithTimeout,
@@ -12,8 +12,11 @@ import {
   sessionAbortFailure,
   withTimeout,
 } from './utils/session';
+import type { TimerSeam } from './utils/timer-seam';
 
 export const KILL_ALL_COMMAND_ID = 'omo.kill_all';
+export const KILL_ALL_STOP_NOTICE =
+  "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.";
 
 /**
  * Verified free against the host defaults (packages/tui/src/config/keybind.ts
@@ -37,6 +40,10 @@ export function getKillAllTargets(
   snapshot: TuiSnapshot,
   visibleRootID?: string,
 ): string[] {
+  const root =
+    visibleRootID === undefined
+      ? undefined
+      : resolveTuiSnapshotRoot(snapshot, visibleRootID);
   return getSidebarAgentTargets(snapshot, visibleRootID).flatMap((group) =>
     group.sessions
       .filter(
@@ -46,7 +53,7 @@ export function getKillAllTargets(
           // and killing the main session would abort the orchestrator,
           // not a subagent.
           (session.status === 'busy' || session.status === 'retry') &&
-          session.sessionID !== visibleRootID,
+          session.sessionID !== root,
       )
       .map((session) => session.sessionID),
   );
@@ -63,6 +70,7 @@ export async function killAllRunningSubagents(
   snapshot: TuiSnapshot,
   visibleRootID?: string,
   directory?: string,
+  timers?: TimerSeam,
 ): Promise<KillAllResult> {
   const targets = getKillAllTargets(snapshot, visibleRootID);
   if (targets.length === 0) return { killed: 0, failed: 0, total: 0 };
@@ -72,9 +80,44 @@ export async function killAllRunningSubagents(
         session?: {
           abort?: (args: Record<string, unknown>) => Promise<unknown>;
           interrupt?: (args: Record<string, unknown>) => Promise<unknown>;
+          synthetic?: (args: Record<string, unknown>) => Promise<unknown>;
         };
       }
     | undefined;
+  const session = rec?.session;
+  if (
+    typeof session?.interrupt === 'function' &&
+    typeof session.synthetic === 'function'
+  ) {
+    const synthetic = session.synthetic.bind(session);
+    const parents = new Set(targets.map((id) => snapshot.sessionParents[id]));
+    await Promise.allSettled(
+      [...parents].map(async (sessionID) => {
+        if (sessionID === undefined) return;
+        try {
+          const result = await withTimeout(
+            synthetic({
+              sessionID,
+              text: KILL_ALL_STOP_NOTICE,
+              delivery: 'steer',
+              resume: false,
+            }),
+            SESSION_ABORT_TIMEOUT_MS,
+            `Stop notice timed out after ${SESSION_ABORT_TIMEOUT_MS}ms`,
+            timers,
+          );
+          const failure = sessionAbortFailure(result);
+          if (failure) throw new Error(failure);
+        } catch (error) {
+          log(
+            `[tui-kill] stop notice failed for ${sessionID}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }),
+    );
+  }
   const outcomes = await Promise.all(
     targets.map(async (sessionID) => {
       try {
@@ -84,6 +127,7 @@ export async function killAllRunningSubagents(
             rec.session.interrupt({ sessionID, resume: false }),
             SESSION_ABORT_TIMEOUT_MS,
             `Session interrupt timed out after ${SESSION_ABORT_TIMEOUT_MS}ms`,
+            timers,
           );
           const failure = sessionAbortFailure(result);
           if (failure) throw new Error(failure);
