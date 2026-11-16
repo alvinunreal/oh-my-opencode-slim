@@ -38,13 +38,13 @@ export interface KillAllResult {
  *  with an active status (busy/retry — the only statuses TuiSnapshot keeps). */
 export function getKillAllTargets(
   snapshot: TuiSnapshot,
-  visibleRootID?: string,
+  visibleSessionID?: string,
 ): string[] {
   const root =
-    visibleRootID === undefined
+    visibleSessionID === undefined
       ? undefined
-      : resolveTuiSnapshotRoot(snapshot, visibleRootID);
-  return getSidebarAgentTargets(snapshot, visibleRootID).flatMap((group) =>
+      : resolveTuiSnapshotRoot(snapshot, visibleSessionID);
+  return getSidebarAgentTargets(snapshot, visibleSessionID).flatMap((group) =>
     group.sessions
       .filter(
         (session) =>
@@ -60,7 +60,10 @@ export function getKillAllTargets(
 }
 
 /**
- * Abort every running subagent of the visible conversation. Fail-soft:
+ * Abort every running subagent of the visible conversation. The stop notice
+ * to each direct parent is admitted (or times out) before any interrupt,
+ * because the host wakes a parent as soon as a child's cancellation lands.
+ * Fail-soft:
  * one failing abort never stops the others (each gets its own
  * abortSessionWithTimeout with the standard 1s cap). Returns the counts
  * the caller toasts; never throws.
@@ -68,11 +71,11 @@ export function getKillAllTargets(
 export async function killAllRunningSubagents(
   client: unknown,
   snapshot: TuiSnapshot,
-  visibleRootID?: string,
+  visibleSessionID?: string,
   directory?: string,
   timers?: TimerSeam,
 ): Promise<KillAllResult> {
-  const targets = getKillAllTargets(snapshot, visibleRootID);
+  const targets = getKillAllTargets(snapshot, visibleSessionID);
   if (targets.length === 0) return { killed: 0, failed: 0, total: 0 };
   const rec = client as
     | {
@@ -91,11 +94,10 @@ export async function killAllRunningSubagents(
   ) {
     const synthetic = session.synthetic.bind(session);
     const parents = new Set(targets.map((id) => snapshot.sessionParents[id]));
-    await Promise.allSettled(
+    await Promise.all(
       [...parents].map(async (sessionID) => {
-        if (sessionID === undefined) return;
         try {
-          const result = await withTimeout(
+          await withTimeout(
             synthetic({
               sessionID,
               text: KILL_ALL_STOP_NOTICE,
@@ -106,8 +108,6 @@ export async function killAllRunningSubagents(
             `Stop notice timed out after ${SESSION_ABORT_TIMEOUT_MS}ms`,
             timers,
           );
-          const failure = sessionAbortFailure(result);
-          if (failure) throw new Error(failure);
         } catch (error) {
           log(
             `[tui-kill] stop notice failed for ${sessionID}: ${

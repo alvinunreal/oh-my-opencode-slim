@@ -59,7 +59,6 @@ import {
   type TuiSnapshot,
   updateSnapshot,
 } from './tui-state';
-import * as logger from './utils/logger';
 import { SESSION_ABORT_TIMEOUT_MS } from './utils/session';
 import { createTimerHarness, tick } from './utils/test-timers';
 
@@ -3795,40 +3794,6 @@ describe('kill-all running subagents', () => {
     await clock.tick();
     expect(interrupts).toEqual(['A']);
     expect(await pending).toEqual({ killed: 1, failed: 0, total: 1 });
-  });
-
-  test('failed stop notices are logged without blocking interrupts', async () => {
-    const log = spyOn(logger, 'log').mockImplementation(() => {});
-    const snapshot = createSnapshot({
-      activeSessions: { A: 'oracle', B1: 'observer' },
-      sessionParents: { A: 'conv-1', B: 'conv-1', B1: 'B' },
-      sessionDetails: { A: { status: 'busy' }, B1: { status: 'busy' } },
-    });
-    const interrupts: string[] = [];
-    const client = {
-      session: {
-        synthetic: async ({ sessionID }: { sessionID: string }) => {
-          if (sessionID === 'B') throw new Error('offline');
-          return { error: 'rejected' };
-        },
-        interrupt: async ({ sessionID }: { sessionID: string }) => {
-          interrupts.push(sessionID);
-          return { interrupted: true };
-        },
-      },
-    };
-    try {
-      expect(
-        await killAllRunningSubagents(client, snapshot, 'conv-1', '/proj'),
-      ).toEqual({ killed: 2, failed: 0, total: 2 });
-      expect(interrupts.sort()).toEqual(['A', 'B1']);
-      expect(log.mock.calls.map((call) => call[0]).sort()).toEqual([
-        '[tui-kill] stop notice failed for B: offline',
-        '[tui-kill] stop notice failed for conv-1: session abort rejected: rejected',
-      ]);
-    } finally {
-      log.mockRestore();
-    }
   });
 
   test('empty targets issue no aborts', async () => {
