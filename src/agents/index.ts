@@ -66,11 +66,6 @@ const ORCHESTRATOR_DEFAULT_TOOL_NAMES = [
   'task_status',
   'acp_run',
 ] as const;
-/** V1-only controls; v2 continues and steers with native subagent. */
-const ORCHESTRATOR_V1_ONLY_TOOL_NAMES = [
-  'task_revive',
-  'task_message',
-] as const;
 const MARKETPLACE_TOOL_NAMES = [
   'marketplace_inspect',
   'marketplace_manage',
@@ -759,22 +754,13 @@ function registeredDefaultToolNames(
     if (!disabledTools.has(toolName)) registered.add(toolName);
   };
   const taskControls =
-    runtime.backgroundJobsMode === 'managed'
+    runtime.backgroundJobsMode === 'native'
       ? [
           'task_cancel',
-          'task_reply',
           'task_status',
-          ...(hostFlavor === 'v2'
-            ? []
-            : (['task_revive', 'task_message', 'wait_for_user'] as const)),
+          ...(hostFlavor === 'v2' ? ['task_reply', 'task_report'] : []),
         ]
-      : runtime.backgroundJobsMode === 'native'
-        ? [
-            'task_cancel',
-            'task_status',
-            ...(hostFlavor === 'v2' ? ['task_reply', 'task_report'] : []),
-          ]
-        : [];
+      : [];
   for (const toolName of taskControls) register(toolName);
   if (runtime.interviewEnabled && !runtime.disabledCommands.has('interview')) {
     register('interview_submit_state');
@@ -842,7 +828,6 @@ function applyDefaultPermissions(
     : (existing.question ?? 'deny');
   const pluginDefaultToolNames = [
     ...ORCHESTRATOR_DEFAULT_TOOL_NAMES,
-    ...(hostFlavor === 'v2' ? [] : ORCHESTRATOR_V1_ONLY_TOOL_NAMES),
     'interview_submit_state',
     'wait_for_user',
     ...MARKETPLACE_TOOL_NAMES,

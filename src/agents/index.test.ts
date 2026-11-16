@@ -741,13 +741,13 @@ describe('orchestrator agent', () => {
   });
 
   test('orchestrator is allowed to invoke task-control tools', () => {
-    const agents = createAgents(runtimeFor());
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const permission = (
       orchestrator as { config: { permission: Record<string, unknown> } }
     ).config.permission;
 
-    for (const toolName of ['task_cancel', 'task_revive', 'task_status']) {
+    for (const toolName of ['task_cancel', 'task_status']) {
       expect(permission[toolName]).toBe('allow');
     }
   });
@@ -808,15 +808,6 @@ describe('orchestrator agent', () => {
     );
     const fixer = agents.find((agent) => agent.name === 'fixer');
     expect(fixer?.config.permission).toBe('allow');
-  });
-
-  test('orchestrator is allowed to invoke wait_for_user', () => {
-    const agents = createAgents(runtimeFor());
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(
-      (orchestrator as { config: { permission: Record<string, unknown> } })
-        .config.permission.wait_for_user,
-    ).toBe('allow');
   });
 
   test('interview_submit_state is allowed for the primary agent only', () => {
@@ -1231,13 +1222,13 @@ describe('tool permissions', () => {
   });
 
   test('oracle is denied access to task-control tools by default', () => {
-    const agents = createAgents(runtimeFor());
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const oracle = agents.find((a) => a.name === 'oracle');
     const permission = (
       oracle as { config: { permission: Record<string, unknown> } }
     ).config.permission;
 
-    for (const toolName of ['task_cancel', 'task_revive', 'task_status']) {
+    for (const toolName of ['task_cancel', 'task_status']) {
       expect(permission[toolName]).toBe('deny');
     }
   });
@@ -1408,7 +1399,8 @@ describe('generated default permission availability', () => {
 
   test('disabled task controls omit primary allows but keep every deny', () => {
     const agents = createAgents(
-      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }),
+      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }, 'v2'),
+      { hostFlavor: 'v2' },
     );
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(Object.hasOwn(orchestrator, 'task_cancel')).toBe(false);
@@ -1483,13 +1475,6 @@ describe('generated default permission availability', () => {
       mode: 'native',
       disabled: [],
       reply: false,
-      report: false,
-    },
-    {
-      hostFlavor: 'v1',
-      mode: 'managed',
-      disabled: [],
-      reply: true,
       report: false,
     },
   ] as const)(
@@ -1640,14 +1625,13 @@ describe('generated default permission availability', () => {
   });
 
   test('enabled generations keep the role permission stance', () => {
-    const agents = createAgents(runtimeFor({ disabled_agents: [] }));
+    const agents = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
+      hostFlavor: 'v2',
+    });
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_reply).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
-    expect(orchestrator.task_revive).toBe('allow');
-    expect(orchestrator.task_message).toBe('allow');
-    expect(orchestrator.wait_for_user).toBe('allow');
     expect(orchestrator.interview_submit_state).toBe('allow');
     expect(orchestrator.marketplace_inspect).toBe('allow');
     expect(permissionsOf(agents, 'explorer').question).toBe('deny');
@@ -3098,21 +3082,6 @@ describe('createAgents with malformed disabled_tools', () => {
       disabled_tools: {} as any,
     };
     expect(() => createAgents(runtimeFor(config))).not.toThrow();
-  });
-
-  test('orchestrator keeps wait_for_user available when disabled_tools is malformed', () => {
-    const config: PluginConfig = {
-      disabled_tools: 'not-an-array' as any,
-    };
-    const agents = createAgents(runtimeFor(config));
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(orchestrator).toBeDefined();
-    // A malformed list is treated as empty: the managed v1 lifecycle
-    // registers wait_for_user, so the primary default stays available.
-    expect(
-      (orchestrator as { config: { permission: Record<string, unknown> } })
-        .config.permission.wait_for_user,
-    ).toBe('allow');
   });
 });
 

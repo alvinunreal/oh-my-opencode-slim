@@ -4,9 +4,12 @@ import { RuntimeConfig } from '../config/runtime';
 import { createAgents, getAgentConfigs } from './index';
 
 const TEST_DIRECTORY = 'runtime-test-agents-custom';
-function runtimeFor(config: PluginConfig | undefined = {}) {
+function runtimeFor(
+  config: PluginConfig | undefined = {},
+  hostFlavor?: string,
+) {
   RuntimeConfig.reset(TEST_DIRECTORY);
-  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {}, hostFlavor);
   return RuntimeConfig.get(TEST_DIRECTORY);
 }
 
@@ -543,7 +546,7 @@ describe('permission edge cases', () => {
       },
     };
 
-    const agents = createAgents(runtimeFor(config));
+    const agents = createAgents(runtimeFor(config, 'v2'), { hostFlavor: 'v2' });
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
 
     expect(orchestrator).toBeDefined();

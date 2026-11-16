@@ -1395,7 +1395,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const toolThreshold = minimumExpectedToolCount(
     runtime.disabledTools,
     Boolean(webfetch),
-    hostFlavor,
     runtime.backgroundJobsMode,
   );
   if (
