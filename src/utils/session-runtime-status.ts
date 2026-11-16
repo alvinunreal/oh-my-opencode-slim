@@ -316,25 +316,20 @@ export type HostRoundState =
   | { kind: 'pending' }
   | { kind: 'unknown'; reason: string };
 
+export function isHostTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 /** A shutdown leaves this execution open until the host resumes or fails it. */
 export function hostRunningSince(
   info: Record<string, unknown> | undefined,
 ): number | undefined {
   const time = isRecord(info?.time) ? info.time : undefined;
   const busy = time?.busy;
-  if (
-    typeof busy !== 'number' ||
-    !Number.isSafeInteger(busy) ||
-    busy < 0 ||
-    !Number.isFinite(new Date(busy).getTime())
-  )
+  if (!isHostTimestamp(busy) || !Number.isFinite(new Date(busy).getTime()))
     return undefined;
   const idle = time?.idle;
-  return idle === undefined ||
-    (typeof idle === 'number' &&
-      Number.isSafeInteger(idle) &&
-      idle >= 0 &&
-      busy > idle)
+  return idle === undefined || (isHostTimestamp(idle) && busy > idle)
     ? busy
     : undefined;
 }
@@ -352,9 +347,7 @@ export function hostRoundStateOf(
   if (!outcomePresent && idleAt === undefined) return { kind: 'pending' };
   if (
     !outcomePresent ||
-    typeof idleAt !== 'number' ||
-    !Number.isSafeInteger(idleAt) ||
-    idleAt < 0 ||
+    !isHostTimestamp(idleAt) ||
     (outcome !== 'succeeded' &&
       outcome !== 'failed' &&
       outcome !== 'interrupted')

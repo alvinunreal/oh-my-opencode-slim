@@ -1,8 +1,5 @@
 import { formatSystemReminder } from '../config/constants';
-import {
-  appendTrailingVolatileMessage,
-  stripTaggedContent,
-} from './cache-safe-injection';
+import { appendTrailingVolatileMessage } from './cache-safe-injection';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './volatile-message';
 
 export const REFUSAL_CORRECTION_METADATA_KEY =
@@ -29,8 +26,6 @@ export function appendRefusalCorrections(
   agent: string,
   corrections: Array<{ taskID: string; model: string }>,
 ): void {
-  stripTaggedContent(messages, REFUSAL_CORRECTION_METADATA_KEY);
-  if (!corrections.length) return;
   appendTrailingVolatileMessage(
     messages,
     { role: 'user', agent, sessionID, id: `refusal-correction-${sessionID}` },

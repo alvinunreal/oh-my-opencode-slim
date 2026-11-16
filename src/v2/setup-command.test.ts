@@ -644,6 +644,45 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
     expect(JSON.stringify(prefix)).toBe(JSON.stringify(before));
   });
 
+  test('refusal correction awaits child decisions concurrently in notice order', async () => {
+    const first = Promise.withResolvers<string | undefined>();
+    const second = Promise.withResolvers<string | undefined>();
+    const requested: string[] = [];
+    const notice = refusalNotice();
+    const event = makeEvent([
+      notice,
+      {
+        ...refusalNotice(),
+        id: 'notice-y',
+        metadata: { ...notice.metadata, childID: 'child-y' },
+      },
+    ]);
+    const handler = refusalHandler((id) => {
+      requested.push(id);
+      return {
+        message: 'Provider blocked the response',
+        model: id === 'child-x' ? first.promise : second.promise,
+      };
+    });
+    const run = handler(event);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    const requestedBeforeResolution = [...requested];
+    second.resolve('test/second');
+    first.resolve('test/first');
+    await run;
+    expect(requestedBeforeResolution).toEqual(['child-x', 'child-y']);
+    expect(event.messages.at(-1)?.content[0]?.text).toBe(
+      [
+        '<system-reminder>',
+        '### Child task — Continuing after fallback',
+        '- child-x: the previous error is superseded; the child continues on test/first.',
+        '- child-y: the previous error is superseded; the child continues on test/second.',
+        'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
+        '</system-reminder>',
+      ].join('\n'),
+    );
+  });
+
   test('refusal correction uses only the last notice for a child', async () => {
     const handler = refusalHandler(() => ({
       message: 'Provider blocked the response',

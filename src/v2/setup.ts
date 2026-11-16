@@ -575,7 +575,8 @@ export function createSessionContextHandler(
               }
             : undefined,
         );
-        if (deps.refusalRecovery) {
+        const refusalRecovery = deps.refusalRecovery;
+        if (refusalRecovery) {
           const notices = new Map<string, (typeof v1messages)[number]>();
           for (const message of v1messages) {
             const metadata = message.info.metadata;
@@ -588,29 +589,33 @@ export function createSessionContextHandler(
               notices.set(metadata.childID, message);
             }
           }
-          const corrections: Array<{ taskID: string; model: string }> = [];
-          for (const [taskID, notice] of notices) {
-            if (notice.info.metadata?.state !== 'error') continue;
-            const recovery = deps.refusalRecovery(taskID);
-            if (
-              !recovery ||
-              !notice.parts.some(
-                (part) =>
-                  part.type === 'text' &&
-                  typeof part.text === 'string' &&
-                  part.text.includes(recovery.message),
-              )
+          const corrections = (
+            await Promise.all(
+              Array.from(notices, async ([taskID, notice]) => {
+                if (notice.info.metadata?.state !== 'error') return;
+                const recovery = refusalRecovery(taskID);
+                if (
+                  !recovery ||
+                  !notice.parts.some(
+                    (part) =>
+                      part.type === 'text' &&
+                      typeof part.text === 'string' &&
+                      part.text.includes(recovery.message),
+                  )
+                )
+                  return;
+                const model = await recovery.model;
+                if (model) return { taskID, model };
+              }),
             )
-              continue;
-            const model = await recovery.model;
-            if (model) corrections.push({ taskID, model });
-          }
-          appendRefusalCorrections(
-            v1messages,
-            event.sessionID,
-            event.agent,
-            corrections,
-          );
+          ).filter((correction) => correction !== undefined);
+          if (corrections.length)
+            appendRefusalCorrections(
+              v1messages,
+              event.sessionID,
+              event.agent,
+              corrections,
+            );
         }
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };

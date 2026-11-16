@@ -15,6 +15,7 @@ import {
   composeHostRound,
   hostRoundStateOf,
   hostRunningSince,
+  isHostTimestamp,
 } from '../utils/session-runtime-status';
 
 /** Each untracked host read (ownership, transcript) refuses after 5 s. */
@@ -147,10 +148,7 @@ async function readTranscript(
     }
     const latestInputAt = latestInputAtOf(transcript);
     const busy = hostTime?.busy;
-    const busyAt =
-      typeof busy === 'number' && Number.isSafeInteger(busy) && busy >= 0
-        ? busy
-        : undefined;
+    const busyAt = isHostTimestamp(busy) ? busy : undefined;
     const round = composeHostRound(state, latestInputAt, busyAt);
     if (state.kind === 'terminal') {
       const text = terminalTextOf(transcript);

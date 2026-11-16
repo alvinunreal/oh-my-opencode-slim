@@ -1256,20 +1256,8 @@ export class ForegroundFallbackManager {
       this.handleV2Refusal(sessionID, step, error, rawFinish),
     );
     const message = nestedField(error, 'message');
-    if (typeof message === 'string' && message) {
-      const recovery = { outcome, message };
-      this.refusalRecoveries.set(sessionID, recovery);
-      void outcome.then(
-        (model) => {
-          if (!model && this.refusalRecoveries.get(sessionID) === recovery)
-            this.refusalRecoveries.delete(sessionID);
-        },
-        () => {
-          if (this.refusalRecoveries.get(sessionID) === recovery)
-            this.refusalRecoveries.delete(sessionID);
-        },
-      );
-    }
+    if (typeof message === 'string' && message)
+      this.refusalRecoveries.set(sessionID, { outcome, message });
     return outcome;
   }
 
