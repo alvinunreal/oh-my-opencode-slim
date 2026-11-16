@@ -59,7 +59,8 @@ import {
   type TuiSnapshot,
   updateSnapshot,
 } from './tui-state';
-import { createTimerHarness } from './utils/test-timers';
+import { SESSION_ABORT_TIMEOUT_MS } from './utils/session';
+import { createTimerHarness, tick } from './utils/test-timers';
 
 const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
 
@@ -3674,6 +3675,125 @@ describe('kill-all running subagents', () => {
     });
 
     expect(getKillAllTargets(snapshot, 'conv-1')).toEqual(['ora-busy']);
+  });
+
+  test('from a grandchild route only the resolved root is protected', () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        'conv-1': 'orchestrator',
+        A: 'oracle',
+        B: 'oracle',
+        B1: 'observer',
+      },
+      sessionParents: { 'conv-1': 'conv-1', A: 'conv-1', B: 'conv-1', B1: 'B' },
+      sessionDetails: {
+        'conv-1': { status: 'busy' },
+        A: { status: 'busy' },
+        B: { status: 'busy' },
+        B1: { status: 'busy' },
+      },
+    });
+
+    expect(getKillAllTargets(snapshot, 'B1').sort()).toEqual(['A', 'B', 'B1']);
+  });
+
+  test('admits a stop notice to each direct parent before interrupting', async () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        A: 'oracle',
+        A2: 'oracle',
+        B: 'oracle',
+        B1: 'observer',
+      },
+      sessionParents: { A: 'conv-1', A2: 'conv-1', B: 'conv-1', B1: 'B' },
+      sessionDetails: {
+        A: { status: 'busy' },
+        A2: { status: 'busy' },
+        B1: { status: 'busy' },
+      },
+    });
+    const notices: unknown[] = [];
+    const interrupts: string[] = [];
+    const admissions = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
+    const client = {
+      session: {
+        synthetic: (args: unknown) => {
+          notices.push(args);
+          return admissions[notices.length - 1].promise;
+        },
+        interrupt: async ({ sessionID }: { sessionID: string }) => {
+          interrupts.push(sessionID);
+          return { interrupted: true };
+        },
+      },
+    };
+    const pending = killAllRunningSubagents(
+      client,
+      snapshot,
+      'conv-1',
+      '/proj',
+    );
+    try {
+      await tick();
+      expect(notices).toEqual([
+        {
+          sessionID: 'conv-1',
+          text: "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.",
+          delivery: 'steer',
+          resume: false,
+        },
+        {
+          sessionID: 'B',
+          text: "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.",
+          delivery: 'steer',
+          resume: false,
+        },
+      ]);
+      expect(interrupts).toEqual([]);
+      admissions[0].resolve();
+      await tick();
+      expect(interrupts).toEqual([]);
+    } finally {
+      admissions[0].resolve();
+      admissions[1].resolve();
+      await pending;
+    }
+    expect(interrupts.sort()).toEqual(['A', 'A2', 'B1']);
+  });
+
+  test('a stalled stop notice times out before interrupting', async () => {
+    const clock = createTimerHarness();
+    const snapshot = createSnapshot({
+      activeSessions: { A: 'oracle' },
+      sessionParents: { A: 'conv-1' },
+      sessionDetails: { A: { status: 'busy' } },
+    });
+    const interrupts: string[] = [];
+    const client = {
+      session: {
+        synthetic: () => new Promise(() => {}),
+        interrupt: async ({ sessionID }: { sessionID: string }) => {
+          interrupts.push(sessionID);
+          return { interrupted: true };
+        },
+      },
+    };
+    const pending = killAllRunningSubagents(
+      client,
+      snapshot,
+      'conv-1',
+      '/proj',
+      clock,
+    );
+    await clock.tick();
+    expect(interrupts).toEqual([]);
+    await clock.advance(SESSION_ABORT_TIMEOUT_MS);
+    await clock.tick();
+    expect(interrupts).toEqual(['A']);
+    expect(await pending).toEqual({ killed: 1, failed: 0, total: 1 });
   });
 
   test('empty targets issue no aborts', async () => {

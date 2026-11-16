@@ -14,6 +14,7 @@ import {
   recordTuiAgentModels,
   recordTuiSessionParent,
 } from '../tui-state';
+import { tick } from '../utils/test-timers';
 import {
   notifyConfigChanged,
   registerConfigChangeListener,
@@ -2471,13 +2472,72 @@ describe('v2 tui preset plugin', () => {
           (c) => c.id === 'omo.kill_all',
         );
         await command?.run();
-        // run() is fire-and-forget (void runKillAllFlow): the abort call
-        // starts synchronously, the toast lands a microtask later.
-        await Bun.sleep(50);
+        // run() is fire-and-forget; drain the flow before checking the toast.
+        await tick();
 
         expect(aborts).toEqual(['ora-live']);
         expect(toasts).toHaveLength(1);
         expect(toasts[0]).toContain('Kill-all sent to 1 running subagent');
+      } finally {
+        cleanup?.();
+        fs.rmSync(dataHome, { recursive: true, force: true });
+        if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
+        else process.env.XDG_DATA_HOME = originalDataHome;
+      }
+    });
+
+    test('omo.kill_all uses host sessions without a sidebar snapshot', async () => {
+      const originalDataHome = process.env.XDG_DATA_HOME;
+      const dataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-kill2-'));
+      const interrupts: string[] = [];
+      const toasts: string[] = [];
+      const sessions = {
+        'conv-1': { id: 'conv-1', agent: 'orchestrator', time: { created: 1 } },
+        'ora-live': {
+          id: 'ora-live',
+          parentID: 'conv-1',
+          agent: 'oracle',
+          time: { created: 2, busy: 3 },
+        },
+      };
+      let cleanup: (() => void) | undefined;
+      try {
+        process.env.XDG_DATA_HOME = dataHome;
+        const stub = makeSetupCtx();
+        stub.ctx.data = {
+          session: {
+            get: (id: string) => sessions[id as keyof typeof sessions],
+            family: () => ['conv-1', 'ora-live'],
+            status: () => 'running',
+          },
+        };
+        stub.ctx.client = {
+          session: {
+            interrupt: async ({ sessionID }: { sessionID: string }) => {
+              interrupts.push(sessionID);
+              return { interrupted: true };
+            },
+          },
+        };
+        (stub.ctx.ui as { router?: unknown }).router = {
+          current: () => ({ type: 'session', sessionID: 'conv-1' }),
+        };
+        (stub.ctx.ui as { toast?: unknown }).toast = {
+          show: ({ message }: { message: string }) => toasts.push(message),
+        };
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        stub.renderAppSlot();
+
+        const command = stub.layers[0]?.commands.find(
+          (c) => c.id === 'omo.kill_all',
+        );
+        await command?.run();
+        await tick();
+
+        expect(interrupts).toEqual(['ora-live']);
+        expect(toasts).toEqual(['Kill-all sent to 1 running subagent.']);
       } finally {
         cleanup?.();
         fs.rmSync(dataHome, { recursive: true, force: true });
