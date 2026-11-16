@@ -373,7 +373,7 @@ describe('v2 setup feature gates', () => {
     await writeProjectConfig({
       companion: { enabled: false },
       backgroundJobs: { mode: 'native' },
-      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+      disabled_hooks: ['tool-loop-guard'],
     });
     const { ctx, hooks } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
@@ -389,7 +389,7 @@ describe('v2 setup feature gates', () => {
     await writeProjectConfig({
       companion: { enabled: false },
       backgroundJobs: { mode: 'off' },
-      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+      disabled_hooks: ['tool-loop-guard'],
     });
     const { ctx, hooks } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);

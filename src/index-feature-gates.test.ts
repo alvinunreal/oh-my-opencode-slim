@@ -591,11 +591,7 @@ describe('plugin feature gates through exported hooks', () => {
     test(`${flavor}: no post-tool consumers means no v1 after hook`, async () => {
       await configure({
         backgroundJobs: { mode: 'off' },
-        disabled_hooks: [
-          'auto-update-checker',
-          'json-error-recovery',
-          'tool-loop-guard',
-        ],
+        disabled_hooks: ['auto-update-checker', 'tool-loop-guard'],
       });
       const hooks = await createHooks(flavor);
       try {
