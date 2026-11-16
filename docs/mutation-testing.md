@@ -87,8 +87,8 @@ Master sweep baseline: 76 mutants, 72 killed, 4 survived. Outcomes:
 | --- | --- | --- | --- |
 | `dedup.ts:4:7-4:32` | `typeof value === 'number'` → `true` | Equivalent (not killed) | Under the mutant the branch has the same result for every input: `Number.isInteger` already rejects every non-number, so the disjunct can never decide it. The guard is still not deletable — `value` is `unknown` and it narrows the type — which is why no test can observe the difference. |
 | `dedup.ts:7:7-7:32` | string-type guard → `true` | Killed | `contract: non-string values that stringify to a status are rejected` (`index.property.test.ts`). |
-| `index.ts:1554:11-1554:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
-| `index.ts:3937:13-3937:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
+| `index.ts:1639:11-1639:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
+| `index.ts:4440:13-4440:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
 
 Ranges are sweep-time snapshots; the gate config locates its targets in
 source, so a refactor that shifts these lines invalidates them. The mutation
