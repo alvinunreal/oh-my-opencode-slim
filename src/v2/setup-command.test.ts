@@ -581,6 +581,122 @@ describe('applyCommandMarkerToContext', () => {
 });
 
 describe('createSessionContextHandler (merged context hook seam)', () => {
+  const refusalNotice = (
+    state = 'error',
+    text = 'Provider blocked the response',
+  ) => ({
+    id: `notice-${state}`,
+    role: 'user',
+    agent: 'orchestrator',
+    sessionID: 'ses_cmd',
+    metadata: {
+      source: 'subagent',
+      childID: 'child-x',
+      agent: 'explorer',
+      state,
+    },
+    content: [{ type: 'text', text }],
+  });
+  const correctionText = [
+    '<system-reminder>',
+    '### Child task — Continuing after fallback',
+    '- child-x: the previous error is superseded; the child continues on test/backup.',
+    'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
+    '</system-reminder>',
+  ].join('\n');
+  const refusalHandler = (refusalRecovery: (id: string) => unknown) =>
+    createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      refusalRecovery,
+    } as never);
+
+  test('refusal correction waits for the pending decision at the trailing edge', async () => {
+    const decision = Promise.withResolvers<string | undefined>();
+    const event = makeEvent([
+      {
+        id: 'earlier',
+        role: 'user',
+        sessionID: 'ses_cmd',
+        agent: 'orchestrator',
+        content: [{ type: 'text', text: 'earlier context' }],
+      },
+      refusalNotice(),
+    ]);
+    const before = structuredClone(event.messages);
+    let finished = false;
+    const run = refusalHandler(() => ({
+      message: 'Provider blocked the response',
+      model: decision.promise,
+    }))(event).then(() => {
+      finished = true;
+    });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(finished).toBe(false);
+    decision.resolve('test/backup');
+    await run;
+    const notice = event.messages[1];
+    expect(notice?.content[0]?.cache).toEqual({ type: 'ephemeral' });
+    expect(event.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+    expect(event.messages.at(-1)?.content[0]?.cache).toBeUndefined();
+    const prefix = structuredClone(event.messages.slice(0, -1));
+    delete prefix[1]?.content[0]?.cache;
+    expect(JSON.stringify(prefix)).toBe(JSON.stringify(before));
+  });
+
+  test('refusal correction uses only the last notice for a child', async () => {
+    const handler = refusalHandler(() => ({
+      message: 'Provider blocked the response',
+      model: Promise.resolve('test/backup'),
+    }));
+    const active = makeEvent([refusalNotice()]);
+    await handler(active);
+    expect(active.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+    const completed = makeEvent([
+      refusalNotice(),
+      refusalNotice('completed', 'done'),
+    ]);
+    await handler(completed);
+    expect(completed.messages).toHaveLength(2);
+  });
+
+  test('refusal correction does not wait for a different error body', async () => {
+    let waits = 0;
+    const handler = refusalHandler(() => ({
+      message: 'Provider blocked the response',
+      get model() {
+        waits++;
+        return Promise.resolve('test/backup');
+      },
+    }));
+    const active = makeEvent([refusalNotice()]);
+    await handler(active);
+    expect(active.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+    const other = makeEvent([refusalNotice('error', 'different failure')]);
+    await handler(other);
+    expect(other.messages).toHaveLength(1);
+    expect(waits).toBe(1);
+  });
+
+  test('refusal correction does not memoize a missing recovery', async () => {
+    let registered = false;
+    const handler = refusalHandler(() =>
+      registered
+        ? {
+            message: 'Provider blocked the response',
+            model: Promise.resolve('test/backup'),
+          }
+        : undefined,
+    );
+    const first = makeEvent([refusalNotice()]);
+    await handler(first);
+    expect(first.messages).toHaveLength(1);
+    registered = true;
+    const later = makeEvent([refusalNotice()]);
+    await handler(later);
+    expect(later.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+  });
+
   function recordCommandCalls(): {
     calls: Array<{
       command: string;

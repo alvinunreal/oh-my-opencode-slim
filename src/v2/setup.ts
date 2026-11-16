@@ -50,6 +50,7 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
+import { appendRefusalCorrections } from '../hooks/refusal-corrections';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/volatile-message';
 import { OhMyOpenCodeLite } from '../index';
 import { MarketplaceBusyError } from '../marketplace/errors';
@@ -286,6 +287,7 @@ export interface V2SessionContextHandlerDeps {
     },
     hints?: { model?: { providerID: string; id: string } },
   ) => Promise<void>;
+  refusalRecovery?: ForegroundFallbackManager['refusalRecovery'];
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
    * session. Never touches system/messages/tools. */
@@ -573,6 +575,43 @@ export function createSessionContextHandler(
               }
             : undefined,
         );
+        if (deps.refusalRecovery) {
+          const notices = new Map<string, (typeof v1messages)[number]>();
+          for (const message of v1messages) {
+            const metadata = message.info.metadata;
+            if (
+              isRecord(metadata) &&
+              metadata.source === 'subagent' &&
+              typeof metadata.childID === 'string'
+            ) {
+              notices.delete(metadata.childID);
+              notices.set(metadata.childID, message);
+            }
+          }
+          const corrections: Array<{ taskID: string; model: string }> = [];
+          for (const [taskID, notice] of notices) {
+            if (notice.info.metadata?.state !== 'error') continue;
+            const recovery = deps.refusalRecovery(taskID);
+            if (
+              !recovery ||
+              !notice.parts.some(
+                (part) =>
+                  part.type === 'text' &&
+                  typeof part.text === 'string' &&
+                  part.text.includes(recovery.message),
+              )
+            )
+              continue;
+            const model = await recovery.model;
+            if (model) corrections.push({ taskID, model });
+          }
+          appendRefusalCorrections(
+            v1messages,
+            event.sessionID,
+            event.agent,
+            corrections,
+          );
+        }
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
           if (projectedTimes.has(info)) delete info.time;
@@ -3444,6 +3483,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           sessionContext: sessionContextRead,
           systemTransform,
           messagesTransform,
+          refusalRecovery: v1Hooks[
+            'v2.refusalRecovery'
+          ] as ForegroundFallbackManager['refusalRecovery'],
           // Primaries use the startup registry; child profiles stay
           // session-frozen. `off` has no profile bridge: every agent applies
           // its own startup registry settings instead.

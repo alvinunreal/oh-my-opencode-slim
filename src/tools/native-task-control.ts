@@ -454,10 +454,10 @@ export function createNativeTaskControlTools(
         throw new Error('Plugin instance disposed');
       }
       let resultText: string | undefined;
-      // v1's live status map is real evidence of execution; v2 has no
-      // equivalent (the shim omits `status`), so this probe is v1 only.
-      if (evidence.live.status === 'busy' || evidence.live.status === 'retry') {
-        stateLines.push(`state: ${evidence.live.status} (live)`);
+      if (evidence.running) {
+        stateLines.push(
+          `state: running (host execution started ${new Date(evidence.running.since).toISOString()}; no terminal outcome yet)`,
+        );
         stateLines.push(
           '',
           'It is still working; the host notifies on completion. Do not poll.',
@@ -469,11 +469,12 @@ export function createNativeTaskControlTools(
           if (round.text?.trim()) resultText = round.text;
         } else if (round.verdict === 'error') {
           stateLines.push('state: error');
+          if (evidence.error) stateLines.push(`error: ${evidence.error}`);
           if (round.text) resultText = round.text;
         } else if (round.verdict === 'interrupted') {
           stateLines.push('state: stopped (interrupted)');
         } else {
-          // incomplete / retry / absent / unreadable: history proves no
+          // incomplete / unreadable: history proves no
           // terminal round, not that the child is working. The host may also
           // have overwritten a textless success to `incomplete`.
           stateLines.push(

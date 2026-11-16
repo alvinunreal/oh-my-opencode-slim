@@ -934,6 +934,10 @@ export class ForegroundFallbackManager {
   private readonly startedAt: number;
   private readonly v2Steps = new Map<string, V2RefusalStep>();
   private readonly childOutcomes = new Map<string, ChildOutcome>();
+  private readonly refusalRecoveries = new Map<
+    string,
+    { outcome: ChildOutcome; message: string }
+  >();
   private readonly v1Waiters = new Map<string, (model?: string) => void>();
   private readonly v1InterviewRefusals = new Map<string, string>();
   /** Seen user IDs keep old host re-emissions from rewinding a newer turn. */
@@ -1218,6 +1222,7 @@ export class ForegroundFallbackManager {
     this.v1Waiters.clear();
     this.v1InterviewRefusals.clear();
     this.childOutcomes.clear();
+    this.refusalRecoveries.clear();
     for (const pending of this.pendingInitialDelay.values()) {
       this.clearTimer(pending.timer);
     }
@@ -1246,10 +1251,40 @@ export class ForegroundFallbackManager {
     const key = `${sessionID}\0${step.assistantMessageID}`;
     const existing = this.childOutcomes.get(key);
     if (existing) return existing;
-    return this.rememberOutcome(
+    const outcome = this.rememberOutcome(
       key,
       this.handleV2Refusal(sessionID, step, error, rawFinish),
     );
+    const message = nestedField(error, 'message');
+    if (typeof message === 'string' && message) {
+      const recovery = { outcome, message };
+      this.refusalRecoveries.set(sessionID, recovery);
+      void outcome.then(
+        (model) => {
+          if (!model && this.refusalRecoveries.get(sessionID) === recovery)
+            this.refusalRecoveries.delete(sessionID);
+        },
+        () => {
+          if (this.refusalRecoveries.get(sessionID) === recovery)
+            this.refusalRecoveries.delete(sessionID);
+        },
+      );
+    }
+    return outcome;
+  }
+
+  refusalRecovery(sessionID: string) {
+    const recovery = this.refusalRecoveries.get(sessionID);
+    if (!recovery) return;
+    return {
+      message: recovery.message,
+      model: withTimeout(
+        recovery.outcome,
+        HOST_CALL_TIMEOUT_MS,
+        'refusal decision timed out',
+        this.timerSeam,
+      ).catch(() => undefined),
+    };
   }
 
   pendingRefusalOutcome(sessionID: string, assistantMessageID: string) {
@@ -1665,6 +1700,7 @@ export class ForegroundFallbackManager {
     this.restoredFrom.delete(id);
     this.busy.delete(id);
     this.awaitingRun.delete(id);
+    this.refusalRecoveries.delete(id);
     this.sessionModel.delete(id);
     this.sessionParent.delete(id);
     this.activeFallback.delete(id);
@@ -2477,7 +2513,11 @@ export class ForegroundFallbackManager {
     if (props.status?.type === 'busy' || props.status?.type === 'retry') {
       this.busy.add(sessionID);
       this.awaitingRun.delete(sessionID);
-    } else if (props.status?.type === 'idle') this.busy.delete(sessionID);
+    } else if (props.status?.type === 'idle') {
+      this.busy.delete(sessionID);
+      if (!this.inProgress.has(sessionID) && !this.awaitingRun.has(sessionID))
+        this.refusalRecoveries.delete(sessionID);
+    }
     if (this.separateCompaction.get(sessionID)?.active) return;
     const isFailoverRetry =
       props.status?.type === 'retry' &&

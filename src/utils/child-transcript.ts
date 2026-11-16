@@ -955,6 +955,22 @@ export function terminalTextOf(transcript: unknown): string | undefined {
   return undefined;
 }
 
+/** Latest host or assistant error in the current round. */
+export function terminalErrorOf(transcript: unknown): string | undefined {
+  const entries = transcriptEntries(transcript);
+  if (!Array.isArray(entries)) return undefined;
+  const boundary = latestInputIndexOf(entries);
+  for (let index = entries.length - 1; index > boundary; index -= 1) {
+    const entry = entries[index] as TranscriptMessage;
+    const source = sourceTypeOf(entry);
+    if (source === 'idle' || source === 'assistant') {
+      const error = diagnosticErrorText(entry.info?.error);
+      if (error) return error.text;
+    }
+  }
+  return undefined;
+}
+
 /** A v1 closure in history with no observed v2 lifecycle evidence. */
 export function classifyMigratedV1Round(
   response: unknown,

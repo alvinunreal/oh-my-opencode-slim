@@ -316,6 +316,29 @@ export type HostRoundState =
   | { kind: 'pending' }
   | { kind: 'unknown'; reason: string };
 
+/** A shutdown leaves this execution open until the host resumes or fails it. */
+export function hostRunningSince(
+  info: Record<string, unknown> | undefined,
+): number | undefined {
+  const time = isRecord(info?.time) ? info.time : undefined;
+  const busy = time?.busy;
+  if (
+    typeof busy !== 'number' ||
+    !Number.isSafeInteger(busy) ||
+    busy < 0 ||
+    !Number.isFinite(new Date(busy).getTime())
+  )
+    return undefined;
+  const idle = time?.idle;
+  return idle === undefined ||
+    (typeof idle === 'number' &&
+      Number.isSafeInteger(idle) &&
+      idle >= 0 &&
+      busy > idle)
+    ? busy
+    : undefined;
+}
+
 /** Parse the host round state from a session info payload. A partially
  *  projected round (one of outcome/time.idle present) is abnormal data and
  *  fails closed; both absent is pending. */
@@ -341,17 +364,22 @@ export function hostRoundStateOf(
   return { kind: 'terminal', outcome, idleAt };
 }
 
-/** A terminal verdict requires an idle time strictly after the latest input;
- *  otherwise the round is pending — never a guessed stop. Service-level
+/** A terminal verdict requires an idle time strictly after the latest input,
+ *  or a finished host execution when compaction removed that input. Service-level
  *  claims survive a graceful shutdown on purpose, so the host may still
  *  resume the latest round after a restart. */
 export function hostRoundVerdict(
   state: HostRoundState,
   latestInputAt: number | undefined,
+  busyAt?: number,
 ): 'terminal' | 'pending' | 'unknown' {
   if (state.kind === 'unknown') return 'unknown';
   if (state.kind === 'pending') return 'pending';
-  return latestInputAt !== undefined && state.idleAt > latestInputAt
+  return (
+    latestInputAt !== undefined
+      ? state.idleAt > latestInputAt
+      : busyAt !== undefined && busyAt <= state.idleAt
+  )
     ? 'terminal'
     : 'pending';
 }
@@ -360,8 +388,9 @@ export function hostRoundVerdict(
 export function composeHostRound(
   state: HostRoundState,
   latestInputAt: number | undefined,
+  busyAt?: number,
 ): CurrentRoundClassification {
-  const verdict = hostRoundVerdict(state, latestInputAt);
+  const verdict = hostRoundVerdict(state, latestInputAt, busyAt);
   if (verdict === 'unknown') {
     return {
       verdict: 'unreadable',
