@@ -40,12 +40,9 @@ import {
 // current test's mock session without relying on this.input (which is
 // undefined in tests — always set in production).
 let currentMockSession: Record<string, unknown> | null = null;
-// Same idea for the raw transport used by foreground-waiter promotion.
-let currentMockPost: ((args: unknown) => Promise<unknown>) | null = null;
 
 afterEach(() => {
   currentMockSession = null;
-  currentMockPost = null;
   const globalSet = (globalThis as Record<symbol, Set<string>>)[
     Symbol.for('oh-my-opencode-slim.foreground-fallback.in-progress')
   ];
@@ -63,7 +60,6 @@ function installGetClientMock(): void {
         messages: mock(() => Promise.resolve({ data: [] })),
         promptAsync: mock(() => Promise.resolve()),
       },
-      _client: currentMockPost ? { post: currentMockPost } : undefined,
     }),
   }));
 }
@@ -75,23 +71,15 @@ installGetClientMock();
 
 function createMockClient(overrides?: {
   promptAsyncImpl?: (args: unknown) => Promise<unknown>;
-  abortImpl?: () => Promise<unknown>;
-  includePromptAsync?: boolean;
   messagesData?: unknown[];
   messagesImpl?: (args: unknown) => Promise<unknown>;
-  messageData?: unknown;
-  postImpl?: (args: unknown) => Promise<unknown>;
-  includePostClient?: boolean;
   getData?: unknown;
 }) {
   const promptAsync = mock(async (args: unknown) => {
     if (overrides?.promptAsyncImpl) return overrides.promptAsyncImpl(args);
     return {};
   });
-  const abort = mock(async () => {
-    if (overrides?.abortImpl) return overrides.abortImpl();
-    return {};
-  });
+  const abort = mock(async () => ({}));
   const messages = mock(async (args: unknown) => {
     if (overrides?.messagesImpl) return overrides.messagesImpl(args);
     return {
@@ -99,13 +87,6 @@ function createMockClient(overrides?: {
         { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
       ],
     };
-  });
-  const message = mock(async (_args: unknown) => ({
-    data: overrides?.messageData,
-  }));
-  const post = mock(async (args: unknown) => {
-    if (overrides?.postImpl) return overrides.postImpl(args);
-    return true;
   });
   const session: Record<string, unknown> = {
     get: mock(async (args: { path: { id: string } }) => ({
@@ -116,15 +97,11 @@ function createMockClient(overrides?: {
     })),
     abort,
     messages,
-    message,
+    promptAsync,
   };
-  if (overrides?.includePromptAsync !== false) {
-    session.promptAsync = promptAsync;
-  }
 
   // Store for getClient mock
   currentMockSession = session;
-  currentMockPost = overrides?.includePostClient === false ? null : post;
   // Re-register the mock.module at test time so it survives any
   // overwrite from other test files loaded in the same process.
   installGetClientMock();
@@ -132,10 +109,9 @@ function createMockClient(overrides?: {
   return {
     client: {
       session,
-      _client: { post },
     } as never,
     session,
-    mocks: { promptAsync, abort, messages, message, post },
+    mocks: { promptAsync, abort, messages },
   };
 }
 
@@ -184,9 +160,7 @@ const retryEvent = (
   decision,
 });
 
-// Host order: the assistant is announced before its error surfaces through
-// session.error and message.updated. The transcript already contains the
-// user's message and its parts when fallback requests a replay.
+// Message events used for v2 turn and model bookkeeping.
 const redoEvents = {
   user: (sessionID: string, id: string, modelID = 'a') => ({
     type: 'message.updated',
@@ -216,55 +190,6 @@ const redoEvents = {
         providerID: 'test',
         modelID,
         ...(error === undefined ? {} : { error }),
-      },
-    },
-  }),
-  error: (
-    sessionID: string,
-    error: unknown = { message: 'rate limit' },
-    messageID = `assistant-${sessionID}-a`,
-  ) => ({
-    type: 'session.error',
-    properties: { sessionID, info: { id: messageID }, error },
-  }),
-  /** The host can surface an error without a message id. */
-  idlessError: (
-    sessionID: string,
-    error: unknown = { message: 'rate limit' },
-  ) => ({
-    type: 'session.error',
-    properties: { sessionID, error },
-  }),
-  idlessAssistant: (sessionID: string, modelID: string, error?: unknown) => ({
-    type: 'message.updated',
-    properties: {
-      info: {
-        sessionID,
-        role: 'assistant',
-        agent: 'orchestrator',
-        providerID: 'test',
-        modelID,
-        ...(error === undefined ? {} : { error }),
-      },
-    },
-  }),
-  retry: (sessionID: string, attempt = 1, next?: number) => ({
-    type: 'session.status',
-    properties: {
-      sessionID,
-      status: { type: 'retry', attempt, message: 'rate limit', next },
-    },
-  }),
-  success: (sessionID: string, modelID = 'a') => ({
-    type: 'message.updated',
-    properties: {
-      info: {
-        sessionID,
-        role: 'assistant',
-        agent: 'orchestrator',
-        providerID: 'test',
-        modelID,
-        time: { completed: 1 },
       },
     },
   }),
@@ -369,94 +294,6 @@ function timedManager(options: ForegroundFallbackOptions) {
     makeOptions({ ...options, timers: clock }),
   );
 }
-
-describe('foreground fallback agent identity', () => {
-  test('v2 compaction errors do not trigger replay', async () => {
-    const { client, mocks } = createMockClient();
-    const manager = timedManager({
-      chains: { orchestrator: ['p1/a', 'p1/b'] },
-      input: { client, directory: '/test', hostFlavor: 'v2' } as never,
-      maxRetries: 0,
-      v2RetryEnabled: true,
-    });
-    const sessionID = 'compaction-owner';
-    const user = (id: string, created = 1) => ({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id,
-          sessionID,
-          role: 'user',
-          agent: 'orchestrator',
-          model: { providerID: 'p1', modelID: 'a' },
-          time: { created },
-        },
-      },
-    });
-    const summary = {
-      id: 'msg_000000000003summary',
-      parentID: 'msg_000000000002compaction',
-      sessionID,
-      role: 'assistant',
-      agent: 'compaction',
-      summary: true,
-      providerID: 'p3',
-      modelID: 'summary',
-      time: { created: 3 },
-    };
-    const error = {
-      name: 'APIError',
-      data: {
-        message: 'Rate limit exceeded',
-        statusCode: 429,
-        isRetryable: true,
-      },
-    };
-    await manager.handleEvent(user('msg_000000000001user'));
-    await manager.handleEvent(user(summary.parentID, 2));
-    await manager.handleEvent({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'prt_compaction',
-          messageID: summary.parentID,
-          sessionID,
-          type: 'compaction',
-          auto: true,
-        },
-      },
-    });
-    await manager.handleEvent({
-      type: 'message.updated',
-      properties: { info: summary },
-    });
-    await manager.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID,
-        status: {
-          type: 'retry',
-          attempt: 1,
-          message: 'Rate limit exceeded',
-          next: Date.now() + 2_000,
-        },
-      },
-    });
-    await manager.handleEvent({
-      type: 'session.error',
-      properties: { sessionID, error },
-    });
-    await manager.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: { ...summary, error, time: { created: 3, completed: 4 } },
-      },
-    });
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(manager.getActiveFallback(sessionID)).toBeUndefined();
-  });
-});
 
 describe('foreground fallback redo harness', () => {
   test('FB-01: provider marks expire after 30 minutes for the session and its children', async () => {
@@ -752,48 +589,6 @@ describe('foreground fallback redo harness', () => {
     expect(mocks.messages).not.toHaveBeenCalled();
     expect((manager as any).sessionModel.get('reemitted')).toBe('test/b');
   });
-  test('a newer turn during waiter promotion fences the retry abort', async () => {
-    const promotion = deferred<unknown>();
-    const { manager, mocks } = makeManager({ maxRetries: 0 });
-    currentMockPost = mock(() => promotion.promise);
-    await manager.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'promotion-race', parentID: 'parent' } },
-    });
-    const pending = manager.handleEvent(redoEvents.retry('promotion-race'));
-    await Promise.resolve();
-    await Promise.resolve();
-    await manager.handleEvent(redoEvents.user('promotion-race', 'new-turn'));
-    promotion.resolve({});
-    await pending;
-
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('a newer turn during transcript read fences the replay', async () => {
-    const transcript = deferred<{ data: unknown[] }>();
-    const { manager, mocks } = makeManager({ maxRetries: 0 });
-    currentMockSession = {
-      abort: mocks.abort,
-      messages: mock(() => transcript.promise),
-      promptAsync: mocks.promptAsync,
-    };
-    installGetClientMock();
-    const pending = manager.handleEvent(redoEvents.error('transcript-race'));
-    await Promise.resolve();
-    await manager.handleEvent(redoEvents.user('transcript-race', 'new-turn'));
-    transcript.resolve({
-      data: [
-        {
-          info: { id: 'last-user', role: 'user' },
-          parts: [{ type: 'text', text: 'old turn' }],
-        },
-      ],
-    });
-    await pending;
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
 });
 
 describe('foreground fallback redo: host retry budget', () => {
@@ -1053,7 +848,6 @@ describe('foreground fallback redo: host retry budget', () => {
   test('v2 bookkeeping resets descent state without replay interventions', async () => {
     const mgr = timedManager({
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
-      // replay path off (v2)
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
       initialRetryDelayMs: 0,
@@ -1067,8 +861,7 @@ describe('foreground fallback redo: host retry budget', () => {
       switchModel,
     );
     expect(switchModel).toHaveBeenCalledTimes(1);
-    // A successful host execution resets the descent
-    // bookkeeping even with the replay path disabled.
+    // A successful host execution resets the descent bookkeeping.
     for (const mapped of mapV2EventToV1({
       type: 'session.execution.succeeded',
       data: { sessionID: 'v2-reset' },
@@ -1216,6 +1009,29 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     ).session.messages;
     return { context, messages };
   }
+
+  test('promptAsync is invoked bound: a this-reading implementation must not throw', async () => {
+    const { manager } = fixture();
+    const session = currentMockSession;
+    if (!session) throw new Error('fixture session missing');
+    const receivers: unknown[] = [];
+    session._client = {};
+    session.promptAsync = async function (this: { _client: unknown }) {
+      receivers.push(this);
+      void this._client;
+      return {};
+    };
+    installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() - 1 } },
+    ]);
+
+    for (const event of mapV2EventToV1(noRoute('sess-unbound')))
+      await manager.handleEvent(event);
+    await settle();
+
+    expect(receivers).toEqual([session]);
+    manager.dispose();
+  });
 
   test('v2 no-route continues a root after a long compacted turn', async () => {
     const created = Date.now() - 60_000;
@@ -3330,28 +3146,6 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
   const SPENT = {
     message: 'AI_APICallError: The usage limit has been reached',
   };
-  const failed = (
-    sessionID: string,
-    model: string,
-    error: unknown,
-    id = `assistant-${sessionID}-${model}`,
-  ) => {
-    const [providerID, modelID] = model.split('/');
-    return {
-      type: 'message.updated',
-      properties: {
-        info: {
-          id,
-          sessionID,
-          role: 'assistant',
-          agent: 'orchestrator',
-          providerID,
-          modelID,
-          error,
-        },
-      },
-    };
-  };
   test('v2 retry hook attributes spent quota to the model it names', async () => {
     const { manager } = makeManager({
       chain: ['p1/a', 'p2/b', 'p3/c'],
@@ -3392,26 +3186,6 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
     await manager.handleV2Retry(last, switchModel);
     expect(switchModel).toHaveBeenCalledTimes(2);
     expect(last.decision).toEqual({ retry: true });
-  });
-  test('a same-provider-only chain surfaces the error', async () => {
-    const { manager, mocks } = makeManager({
-      chain: ['openai/luna', 'openai/sol'],
-    });
-    const sid = 'spent-same-provider';
-    await manager.handleEvent(failed(sid, 'openai/luna', SPENT));
-    await manager.handleEvent({
-      type: 'session.error',
-      properties: { sessionID: sid, error: SPENT },
-    });
-    await manager.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: sid,
-        status: { type: 'retry', attempt: 1, message: SPENT.message },
-      },
-    });
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(mocks.abort).not.toHaveBeenCalled();
   });
   test('session delete clears the exhausted providers', () => {
     const coordinator = new SessionLifecycle(() => {});
@@ -3518,520 +3292,6 @@ describe('isPermanentQuotaBillingError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager - disabled
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager (disabled)', () => {
-  test('does nothing when enabled=false', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        v2RetryEnabled: false,
-        input: {
-          directory: '/test',
-        } as any,
-      }),
-    );
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-1',
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ForegroundFallbackManager - session.error
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager session.error', () => {
-  let mocks: ReturnType<typeof createMockClient>['mocks'];
-  let mgr: ForegroundFallbackManager;
-  beforeEach(() => {
-    ({ mocks } = createMockClient());
-    mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        v2RetryEnabled: true,
-        input: {
-          directory: '/test',
-          hostFlavor: 'v2',
-        } as any,
-      }),
-    );
-  });
-  test('does nothing when error is not a rate limit', async () => {
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-1',
-        error: { message: 'invalid request' },
-      },
-    });
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('does nothing when no chain configured for session', async () => {
-    const emptyMgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: {},
-        v2RetryEnabled: true,
-        input: {
-          directory: '/test',
-          hostFlavor: 'v2',
-        } as any,
-      }),
-    );
-    await emptyMgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-1',
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('does not abort when promptAsync is unavailable', async () => {
-    const { mocks } = createMockClient({ includePromptAsync: false });
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        v2RetryEnabled: true,
-        input: {
-          directory: '/test',
-          hostFlavor: 'v2',
-        } as any,
-      }),
-    );
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-no-prompt-async',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('promptAsync is invoked bound: a this-reading implementation must not throw', async () => {
-    // Regression (issue #595): the extracted promptAsync was called as a
-    // free function, so a real SDK implementation reading `this._client`
-    // threw "undefined is not an object (evaluating 'this._client')" and
-    // the fallback attempt died without delivering the replay.
-    const session: Record<string, unknown> = {
-      abort: mock(async () => {}),
-      messages: mock(async () => ({
-        data: [
-          { info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] },
-        ],
-      })),
-      promptAsync: async function (this: { _client: unknown }) {
-        // Mirrors the generated SDK: touching the receiver crashes when
-        // invoked unbound.
-        void this._client;
-        return {};
-      },
-    };
-    currentMockSession = session;
-    installGetClientMock();
-
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        v2RetryEnabled: true,
-        input: {
-          directory: '/test',
-          hostFlavor: 'v2',
-        } as any,
-      }),
-    );
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-unbound',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // No abort, no crash: the bound call delivered the replay directly.
-    expect((session.abort as ReturnType<typeof mock>).mock.calls.length).toBe(
-      0,
-    );
-  });
-});
-// ForegroundFallbackManager - message.updated
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager message.updated', () => {
-  describe('unknown finish streak', () => {
-    beforeEach(() => clock.set(1_015_000));
-
-    const info = {
-      id: 'msgUnknownFinish',
-      sessionID: 'sess-unknown-finish',
-      parentID: 'msgUser',
-      role: 'assistant',
-      agent: 'orchestrator',
-      providerID: 'anthropic',
-      modelID: 'claude-opus-4-5',
-      finish: 'unknown',
-      tokens: {
-        input: 30_000,
-        output: 0,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      },
-      time: { created: 1_000_000, completed: 1_015_000 },
-    };
-    const message = {
-      info,
-      parts: [
-        { type: 'step-start' },
-        {
-          type: 'reasoning',
-          text: '',
-          time: { start: info.time.created, end: info.time.completed },
-        },
-        { type: 'text', text: 'Gateway notice.' },
-        {
-          type: 'step-finish',
-          reason: 'unknown',
-          cost: 0,
-          tokens: info.tokens,
-        },
-      ].map((part, index) => ({
-        ...part,
-        id: `prtUnknown${index}`,
-        sessionID: info.sessionID,
-        messageID: info.id,
-      })),
-    };
-
-    async function update(
-      mgr: ForegroundFallbackManager,
-      mocks: ReturnType<typeof createMockClient>['mocks'],
-      id: string,
-      finish: 'unknown' | 'stop' = 'unknown',
-      parts: Array<{ type: string } & Record<string, unknown>> = message.parts,
-    ) {
-      const updatedInfo = { ...info, id, finish };
-      mocks.message.mockImplementation(async () => ({
-        data: {
-          info: updatedInfo,
-          parts: parts.map((part, index) => ({
-            ...part,
-            id: `prt${id}${index}`,
-            sessionID: info.sessionID,
-            messageID: id,
-            ...(part.type === 'step-finish' ? { reason: finish } : {}),
-          })),
-        },
-      }));
-      await mgr.handleEvent({
-        type: 'message.updated',
-        properties: { info: updatedInfo },
-      });
-    }
-
-    test('a tool-bearing message breaks the streak', async () => {
-      const { mocks } = createMockClient();
-      const mgr = timedManager({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as never,
-      });
-
-      await update(mgr, mocks, 'msgUnknown0');
-      const partsRead = deferred<{ data: typeof message }>();
-      mocks.message.mockImplementationOnce(() => partsRead.promise);
-      const pending = mgr.handleEvent({
-        type: 'message.updated',
-        properties: { info: { ...info, id: 'msgUnknown1' } },
-      });
-      await update(mgr, mocks, 'msgUnknown2', 'unknown', [
-        ...message.parts.slice(0, -1),
-        {
-          type: 'tool',
-          callID: 'callUnknown',
-          tool: 'read',
-          state: {
-            status: 'completed',
-            input: { filePath: 'README.md' },
-            output: 'README',
-            title: 'README.md',
-            metadata: {},
-            time: { start: 1_002_000, end: 1_005_000 },
-          },
-        },
-        ...message.parts.slice(-1),
-      ]);
-      partsRead.resolve({
-        data: { ...message, info: { ...info, id: 'msgUnknown1' } },
-      });
-      await pending;
-      await update(mgr, mocks, 'msgUnknown3');
-      await update(mgr, mocks, 'msgUnknown4');
-
-      expect(mocks.abort).not.toHaveBeenCalled();
-      expect(mocks.promptAsync).not.toHaveBeenCalled();
-      expect(mgr.getActiveFallback(info.sessionID)).toBeUndefined();
-    });
-    test('completed or errored messages and new turns break the streak', async () => {
-      const { mocks } = createMockClient();
-      const mgr = timedManager({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as never,
-      });
-
-      await update(mgr, mocks, 'msgUnknown1');
-      await update(mgr, mocks, 'msgUnknown2');
-      await mgr.handleEvent({
-        type: 'message.updated',
-        properties: {
-          info: {
-            id: 'msgErrored',
-            sessionID: info.sessionID,
-            role: 'assistant',
-            error: {
-              name: 'APIError',
-              data: { statusCode: 400, message: 'Bad Request' },
-            },
-            time: { created: 1_015_000, completed: 1_016_000 },
-          },
-        },
-      });
-      await update(mgr, mocks, 'msgUnknownAfterError');
-      expect(mocks.abort).not.toHaveBeenCalled();
-      expect(mocks.promptAsync).not.toHaveBeenCalled();
-
-      await update(mgr, mocks, 'msgStop', 'stop');
-      await update(mgr, mocks, 'msgUnknown3');
-      await update(mgr, mocks, 'msgUnknown4');
-      await mgr.handleEvent(redoEvents.user(info.sessionID, 'msgUser2'));
-      await update(mgr, mocks, 'msgUnknown5');
-
-      expect(mocks.abort).not.toHaveBeenCalled();
-      expect(mocks.promptAsync).not.toHaveBeenCalled();
-      expect(mgr.getActiveFallback(info.sessionID)).toBeUndefined();
-    });
-  });
-});
-
-describe('ForegroundFallbackManager v2 retry events', () => {
-  const retry = (sessionID: string, attempt = 1) => ({
-    type: 'session.status',
-    properties: {
-      sessionID,
-      status: { type: 'retry', attempt, message: 'rate limit' },
-    },
-  });
-  const manager = () =>
-    new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        v2RetryEnabled: true,
-        input: { directory: '/test', hostFlavor: 'v2' } as any,
-        maxRetries: 0,
-      }),
-    );
-  const seed = (
-    mgr: ForegroundFallbackManager,
-    sessionID: string,
-    modelID = 'claude-opus-4-5',
-  ) =>
-    mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID,
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID,
-        },
-      },
-    });
-
-  test('T1: status retry neither aborts nor replays or marks fallback active', async () => {
-    const { mocks } = createMockClient();
-    const mgr = manager();
-    await seed(mgr, 'sess-parent');
-    await mgr.handleEvent(retry('sess-parent'));
-    expect(mocks.abort).toHaveBeenCalledTimes(0);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
-    expect(mgr.isFallbackInProgress('sess-parent')).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ForegroundFallbackManager - session.status retry
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager session.status', () => {
-  test('ignores session.status with non-rate-limit retry message', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as any,
-      }),
-    );
-
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-4',
-        status: { type: 'retry', message: 'connection timeout, retrying...' },
-      },
-    });
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('does not abort or switch after retries without a failover reason', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: { directory: '/test' } as any,
-        maxRetries: 3,
-      }),
-    );
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-retry-no-reason',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-        },
-      },
-    });
-
-    for (const attempt of [1, 2, 3]) {
-      await mgr.handleEvent({
-        type: 'session.status',
-        properties: {
-          sessionID: 'sess-retry-no-reason',
-          status: { type: 'retry', attempt },
-        },
-      });
-    }
-
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ForegroundFallbackManager - chain exhaustion
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager chain exhaustion', () => {
-  test('does not call promptAsync when the only chain model is already the current model', async () => {
-    // Scenario: chain = ['openai/gpt-b'], current model IS 'openai/gpt-b'.
-    // tryFallback adds 'openai/gpt-b' to tried → chain.find() returns undefined → exhausted.
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: { orchestrator: ['openai/gpt-b'] },
-        input: { directory: '/test' } as any,
-      }),
-    );
-
-    // Seed current model as the only chain entry
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 's',
-          providerID: 'openai',
-          modelID: 'gpt-b',
-        },
-      },
-    });
-
-    // Rate limit fires - only model in chain is already current → nothing to fall back to
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: { sessionID: 's', error: { message: 'rate limit exceeded' } },
-    });
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ForegroundFallbackManager - combined inheritModelFrom + fallback chain
-// ---------------------------------------------------------------------------
-
-// A combined agent (array `model` + `inheritModelFrom`) runs the session's
-// live model, which is typically NOT part of the configured chain. The live
-// model becomes the dynamic chain head; the configured entries back it.
-describe('ForegroundFallbackManager inherit + fallback chain', () => {
-  const LIVE_MODEL = 'test/live-session-model';
-
-  function observe(
-    mgr: ForegroundFallbackManager,
-    sessionID: string,
-    modelID: string,
-    completed = false,
-  ): Promise<void> {
-    const [providerID, id] = modelID.split('/');
-    mgr.registerSessionAgent(sessionID, 'oracle');
-    return mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID,
-          agent: 'oracle',
-          providerID,
-          modelID: id,
-          role: 'assistant',
-          ...(completed ? { time: { created: 1, completed: 2 } } : {}),
-        },
-      },
-    });
-  }
-
-  test('an out-of-chain live model does not resurrect a disabled chain', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: { oracle: ['openai/gpt-a'] },
-        input: { directory: '/test' } as any,
-      }),
-    );
-    mgr.disableChain('oracle');
-    const sessionID = 'sess-combined-disabled';
-
-    await observe(mgr, sessionID, LIVE_MODEL);
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: { sessionID, error: { message: 'rate limit exceeded' } },
-    });
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(mocks.abort).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // ForegroundFallbackManager - session.deleted cleanup
 // ---------------------------------------------------------------------------
 
@@ -4067,11 +3327,10 @@ describe('ForegroundFallbackManager session.deleted', () => {
     (mgr as any).inProgress.add(sessionID);
     expect(mgr.isFallbackInProgress(sessionID)).toBe(true);
 
-    // Session deleted fires (as it does during abort in tryFallbackWithAbort)
+    // Session deletion must not clear the shared in-progress slot.
     coordinator.dispatchSessionDeleted(sessionID);
 
-    // inProgress must survive — the finally block of tryFallback/WithAbort
-    // manages it, not the session.deleted callback
+    // The retry or continuation owns the slot until its finally cleanup.
     expect(mgr.isFallbackInProgress(sessionID)).toBe(true);
     (mgr as any).inProgress.delete(sessionID);
   });
@@ -4505,7 +3764,7 @@ describe('ForegroundFallbackManager chain generation pins', () => {
 
 describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
   test('suppresses fallback when the session agent cannot be resolved', async () => {
-    const { client, mocks } = createMockClient({ getData: null });
+    const { client } = createMockClient({ getData: null });
     const switchModel = mock(async () => {});
     const mgr = new ForegroundFallbackManager(
       makeOptions({
@@ -4520,16 +3779,6 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       }),
     );
 
-    // No agent name tracked, no model tracked - triggers session.error
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'unknown-agent-sess',
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
     await mgr.handleV2Retry(
       {
         sessionID: 'known-without-chain',
@@ -4580,273 +3829,28 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// No-chain sessions (councillor / self-managed agents)
-// ---------------------------------------------------------------------------
-
-describe('ForegroundFallbackManager no-chain sessions', () => {
-  const seedNoChain = (mgr: ForegroundFallbackManager, sessionID: string) => {
-    mgr.registerSessionAgent(sessionID, 'councillor');
-    return mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID,
-          agent: 'councillor',
-          providerID: 'openai',
-          modelID: 'gpt-5.4',
-        },
-      },
-    });
-  };
-  const noChainError = (sessionID: string, id: string, error?: unknown) => ({
-    type: 'session.error',
-    properties: {
-      sessionID,
-      info: { id },
-      error: error ?? { message: 'streaming response failed: 502' },
-    },
-  });
-  test('councillor session.status retry: host retry absorbed, no abort and no re-prompt', async () => {
-    // Councillor is owned by CouncilManager (own model chain + timeout).
-    // The host's own retry is absorbed into the shared sessionRetries
-    // budget instead of racing the council lifecycle with a per-attempt
-    // abort + re-prompt.
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: { directory: '/test' } as any,
-        maxRetries: 3,
-      }),
-    );
-
-    mgr.registerSessionAgent('councillor-sess', 'councillor');
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'councillor-sess',
-          agent: 'councillor',
-          providerID: 'openai',
-          modelID: 'gpt-5.4',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'councillor-sess',
-        status: {
-          type: 'retry',
-          attempt: 1,
-          message: 'rate limit, retrying...',
-        },
-      },
-    });
-
-    // Councillor has no chain → the host retry absorbs into the shared
-    // budget: no abort, no same-model re-prompt on this path.
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('disableChain agent on session.status: no abort (not just no re-prompt)', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: { directory: '/test' } as any,
-        maxRetries: 3,
-      }),
-    );
-    mgr.disableChain('orchestrator');
-
-    mgr.registerSessionAgent('disabled-status', 'orchestrator');
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'disabled-status',
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-        },
-      },
-    });
-
-    // Attempts past the host budget stay silent too: the disabled chain
-    // skips the same-model retry (and its abort) on every path.
-    for (let attempt = 1; attempt <= 4; attempt++) {
-      await mgr.handleEvent({
-        type: 'session.status',
-        properties: {
-          sessionID: 'disabled-status',
-          status: {
-            type: 'retry',
-            attempt,
-            message: 'rate limit, retrying...',
-          },
-        },
-      });
-    }
-
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-  test('deterministic errors skip the same-model retry without charging budget', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as any,
-      }),
-    );
-    await seedNoChain(mgr, 'gate-nc');
-
-    const errors = [
-      { message: 'AI_APICallError: Gone' },
-      { statusCode: 401, message: 'auth failed' },
-      { message: 'personal-team-blocked: spending-limit' },
-    ];
-    for (const [index, error] of errors.entries()) {
-      await mgr.handleEvent(noChainError('gate-nc', `g${index}`, error));
-    }
-
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect((mgr as any).sessionRetries.get('gate-nc')).toBeUndefined();
-  });
-  test('unparseable model never charges the budget', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as any,
-      }),
-    );
-    mgr.registerSessionAgent('unparse-nc', 'councillor');
-    (mgr as any).sessionModel.set('unparse-nc', 'not-a-model');
-
-    await mgr.handleEvent(noChainError('unparse-nc', 'e1'));
-    await mgr.handleEvent(noChainError('unparse-nc', 'e2'));
-
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect((mgr as any).sessionRetries.get('unparse-nc')).toBeUndefined();
-  });
-  test('unresolved child is suppressed; construction-time-disabled agent stays silent', async () => {
-    // S4 race: the disabled set is construction-time state, so silence
-    // applies as soon as the agent name is known — without any
-    // disableChain call.
-    const { mocks } = createMockClient({
-      getData: { id: 's4-nc', parentID: 'parent' },
-    });
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: { ...makeChains(), victim: [] },
-        input: { directory: '/test' } as any,
-      }),
-    );
-
-    // No agent observed: do not guess another agent's chain.
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 's4-nc',
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-
-    // The agent is observed as construction-time-disabled: silence, even
-    // though disableChain was never called.
-    await mgr.handleEvent({
-      type: 'subagent.session.created',
-      properties: { sessionID: 's4-nc', agentName: 'victim' },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 's4-nc',
-        error: { message: 'rate limit exceeded' },
-      },
-    });
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(mocks.abort).not.toHaveBeenCalled();
-  });
-  test('F3: post-terminal status events do not charge the shared budget', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as any,
-      }),
-    );
-    await seedNoChain(mgr, 'f3-nc');
-
-    await mgr.handleEvent(
-      noChainError('f3-nc', 'g1', { message: 'AI_APICallError: Gone' }),
-    );
-    expect((mgr as any).sessionRetries.get('f3-nc')).toBeUndefined();
-
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'f3-nc',
-        status: {
-          type: 'retry',
-          attempt: 1,
-          message: 'AI_APICallError: Gone',
-        },
-      },
-    });
-    expect((mgr as any).sessionRetries.get('f3-nc')).toBeUndefined();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(mocks.abort).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // disableChain API
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager disableChain', () => {
   test('after disableChain, rate-limit error surfaces instead of falling back', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: makeChains(),
-        input: {
-          directory: '/test',
-        } as any,
-      }),
-    );
+    const { manager } = makeManager({ maxRetries: 0 });
+    const switchModel = mock(async () => {});
+    const event = retryEvent('sess-disabled', 'a', { retry: false });
+    manager.disableChain('orchestrator');
 
-    mgr.disableChain('orchestrator');
+    await manager.handleV2Retry(event, switchModel);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(event.decision).toEqual({ retry: false });
 
-    // Seed session with orchestrator model and trigger rate-limit
-    mgr.registerSessionAgent('sess-disabled', 'orchestrator');
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-disabled',
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          error: { message: 'rate limit exceeded' },
-        },
-      },
+    const { manager: enabled } = makeManager({ maxRetries: 0 });
+    const control = retryEvent('sess-enabled', 'a', { retry: false });
+    await enabled.handleV2Retry(control, switchModel);
+    expect(switchModel).toHaveBeenCalledWith('sess-enabled', {
+      providerID: 'test',
+      id: 'b',
     });
-
-    // Chain disabled → no fallback, error surfaces
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(control.decision).toEqual({ retry: true, delay: 0 });
   });
 });
 
@@ -4855,64 +3859,22 @@ describe('ForegroundFallbackManager disableChain', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager dispose', () => {
-  test('dispose abandons an in-flight fallback before the replay reaches the old client', async () => {
-    // Reload fencing (upstream PR #1218 P1): the transcript read can
-    // suspend across dispose(); the continuation must not re-prompt,
-    // abort, or otherwise touch the destroyed generation's client.
-    let resolveMessages!: (value: unknown) => void;
-    const messagesPromise = new Promise((resolve) => {
-      resolveMessages = resolve;
-    });
-    const promptAsync = mock(async () => ({}));
-    const abort = mock(async () => ({}));
-    currentMockSession = {
-      messages: mock(() => messagesPromise),
-      promptAsync,
-      abort,
-    };
-    installGetClientMock();
+  test('dispose leaves a later v2 retry decision untouched', async () => {
+    const { manager } = makeManager({ maxRetries: 0 });
+    const switchModel = mock(async () => {});
+    const event = retryEvent('sess-stale-generation', 'a', { retry: false });
+    manager.dispose();
 
-    const mgr = new ForegroundFallbackManager(
-      makeOptions({
-        chains: { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
-        input: { directory: '/test' } as any,
-        maxRetries: 3,
-        initialRetryDelayMs: 0,
-      }),
-    );
+    await manager.handleV2Retry(event, switchModel);
 
-    // Runs synchronously into the hanging transcript read.
-    const pending = mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-stale-generation',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // Reload happens while the transcript read is suspended.
-    mgr.dispose();
-    resolveMessages({
-      data: [
-        {
-          info: { role: 'user', id: 'm1' },
-          parts: [{ type: 'text', text: 'hello' }],
-        },
-      ],
-    });
-    await pending;
-
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(abort).not.toHaveBeenCalled();
-    // The finally cleanup must still release the process-global
-    // inProgress slot so the reloaded generation is not blocked.
-    expect(mgr.isFallbackInProgress('sess-stale-generation')).toBe(false);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(event.decision).toEqual({ retry: false });
   });
 });
 
 // ---------------------------------------------------------------------------
 
-describe('ForegroundFallbackManager same-model retry classification', () => {
+describe('ForegroundFallbackManager failover classification', () => {
   test('backpressure wording with a deterministic 4xx stays a hard error', () => {
     const message = 'Streaming response failed: [400] invalid request';
     expect(isFailoverError(message)).toBe(false);
@@ -4928,7 +3890,7 @@ describe('ForegroundFallbackManager same-model retry classification', () => {
   });
 });
 
-describe('ForegroundFallbackManager same-model retry hardening', () => {
+describe('ForegroundFallbackManager failover classification hardening', () => {
   test('"upstream error" with a deterministic 4xx status stays a hard error', () => {
     expect(
       isFailoverError({

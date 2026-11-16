@@ -49,14 +49,6 @@ afterEach(() => {
  */
 const stablePrefixFingerprints = stableFingerprints;
 
-function _goalMessages(messages: unknown[]): MessageWithParts[] {
-  return messages.filter(
-    (message): message is MessageWithParts =>
-      (message as MessageWithParts)?.info?.id?.startsWith('deepwork-goal-') ===
-      true,
-  );
-}
-
 describe('cache-safety: turn-over-turn prefix stability', () => {
   test('re-rendering a growing conversation reproduces byte-identical history', async () => {
     const pipeline = createPipeline({ goalPointer: true });
