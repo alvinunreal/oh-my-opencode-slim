@@ -454,6 +454,80 @@ describe('v2 setup feature gates', () => {
     }, 20_000);
   }
 
+  for (const mode of [undefined, 'native', 'managed'] as const) {
+    test(`startup does not inspect retained managed histories (${mode ?? 'default'})`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        ...(mode ? { backgroundJobs: { mode } } : {}),
+      });
+      const configFile = path.join(
+        projectDir,
+        '.opencode',
+        'oh-my-opencode-slim.json',
+      );
+      const before = fs.readFileSync(configFile, 'utf8');
+      const retained = new Map(
+        Array.from({ length: 500 }, (_, index) => {
+          const taskID = `ses_retained_${String(index).padStart(3, '0')}`;
+          return [
+            `omo/bgj/child/${taskID}`,
+            {
+              taskID,
+              parentSessionID: 'ses_retained_parent',
+              agent: 'explorer',
+              background: true,
+              launchedAt: 1,
+              deliveredAt: 2,
+            },
+          ] as const;
+        }),
+      );
+      const { ctx, storageCalls } = makeCtx(projectDir, {
+        get: async (key) => retained.get(key),
+        set: async () => {
+          throw new Error('Startup must not rewrite managed records');
+        },
+        remove: async () => {
+          throw new Error('Startup must not remove managed records');
+        },
+        scan: async ({ prefix, after, limit = 100 }) => {
+          const matches = [...retained.entries()].filter(
+            ([key]) => key.startsWith(prefix) && (!after || key > after),
+          );
+          const page = matches.slice(0, limit);
+          return {
+            entries: page.map(([key, value]) => ({ key, value })),
+            ...(matches.length > limit ? { next: page.at(-1)?.[0] } : {}),
+          };
+        },
+      });
+      const reads = { get: 0, list: 0, context: 0 };
+      Object.assign(ctx.session, {
+        get: async () => {
+          reads.get += 1;
+          throw new Error('Startup must not inspect retained sessions');
+        },
+        list: async () => {
+          reads.list += 1;
+          throw new Error('Startup must not list retained sessions');
+        },
+        context: async () => {
+          reads.context += 1;
+          throw new Error('Startup must not read retained histories');
+        },
+      });
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expect(reads).toEqual({ get: 0, list: 0, context: 0 });
+        expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+        expect(retained.size).toBe(500);
+        expect(fs.readFileSync(configFile, 'utf8')).toBe(before);
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
   // Regression: the bridge's fail-closed guard requires the session-preset
   // wrapper that consumes its admission. Gating that wrapper with the managed
   // lifecycle left the guard armed in `native`/`off`, so every `subagent` call

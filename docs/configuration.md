@@ -238,7 +238,7 @@ All config files support **JSONC** (JSON with Comments):
 Slim requires OpenCode 2.3.0 or newer. See the [upgrade guide](v2-native-upgrade.md)
 for configuration changes.
 
-Every optional subsystem has one switch, all defaulting to on. A
+Optional subsystems can be disabled independently. This
 council-and-observer-only setup turns off the rest:
 
 ```jsonc
@@ -251,7 +251,6 @@ council-and-observer-only setup turns off the rest:
   "liveConfigRefresh": false,
   "fallback": { "enabled": false },
   "webfetch": { "enabled": false },
-  "multiplexer": { "type": "none" },
   "companion": { "enabled": false },
   // Keep council + observer; enable observer by naming only the other
   // built-ins here, then set a vision-capable model for it.
@@ -263,26 +262,41 @@ council-and-observer-only setup turns off the rest:
     "councillor": { "skills": [] }
   },
   "disabled_mcps": ["context7", "gh_grep"],
-  "disabled_commands": ["interview", "implement", "deepwork", "reflect"],
+  "disabled_commands": ["deepwork", "reflect"],
   "disabled_hooks": [
     "phase-reminder", "foreground-fallback", "deepwork-goal",
     "cache-monitor", "json-error-recovery", "tool-loop-guard",
     "search-path-guard", "absolute-path-rescue", "apply-patch"
   ],
-  "disabled_tools": [
-    "ast_grep_search", "ast_grep_replace", "acp_run",
-    "marketplace_inspect", "marketplace_manage",
-    "task_cancel", "task_status", "task_reply", "task_report"
-  ]
+  "disabled_tools": ["ast_grep_search", "ast_grep_replace", "acp_run"]
 }
 ```
+
+### Implied switches
+
+In a resolved configuration, these switches make the listed entries redundant:
+
+| Existing switch | Entries you can omit |
+| --- | --- |
+| `tui: false` | `sidebar: false`, `disabled_commands` entries `killall` and `subagent`, and pane settings under `multiplexer` |
+| `interview.enabled: false` | `disabled_commands` entries `interview` and `implement`, and `disabled_tools` entry `interview_submit_state` |
+| `marketplace.enabled: false` | `disabled_tools` entries `marketplace_inspect` and `marketplace_manage` |
+| `backgroundJobs.mode: "off"` | Slim task-tool entries in `disabled_tools`, including `task_status`, `task_cancel`, `task_reply` and `task_report` |
+| `autoUpdate: false` | `disabled_hooks` entry `auto-update-checker` |
+| `webfetch.enabled: false` | `disabled_tools` entry `webfetch` |
+| `disabled_skills: ["reflect"]` | `disabled_commands` entry `reflect` |
+
+These implications are one-way. Keep granular disables when a subsystem stays
+enabled, or as a veto against re-enablement in a nearer configuration layer.
+
+For a cold fallback disable, use `disabled_hooks: ["foreground-fallback"]`:
+`fallback.enabled: false` retains V2 retry bookkeeping for live session profiles.
 
 `tui: false` gates the whole OMOS TUI surface: the client entry skips loading
 the TUI render stack and the server stops writing sidebar state. The
 server-side council, observer, agents, hooks, and tools keep working. Use
 `sidebar: false` instead when you want the remaining TUI surface without the
-sidebar. `interview.enabled: false` also disables `/implement`, because
-`/implement` feeds the same interview flow.
+sidebar.
 
 A disabled subsystem is not constructed at all: no tools, listeners, timers,
 state files, or servers. On OpenCode v2, native delegation, completion delivery,
@@ -299,8 +313,10 @@ call, and does not bind session-level presets. Delegated children use the
 models, variants, temperature and provider options from the registered agent
 configuration (the `preset` default still selects those at startup). Session
 `/preset` bindings and the related RPC are unavailable in this mode; the
-manager keeps global editing and hides session-only actions. `/preset <name>`
-reports that session routing is disabled. See
+manager keeps global editing and hides session-only actions. Disable the
+`preset` command separately to remove that editor. With `tui: false` as well,
+neither preset command surface is registered. `/preset <name>` reports that
+session routing is disabled. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
