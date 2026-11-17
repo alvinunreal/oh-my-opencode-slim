@@ -2460,13 +2460,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : undefined;
       const promptVariant = promptModel?.variant ?? input.variant ?? undefined;
       if (internalAdmission) {
-        await foregroundFallback?.prepareV2InternalContinuation(
-          input.sessionID,
-          input.model
-            ? `${input.model.providerID}/${input.model.modelID}`
-            : undefined,
-          input.model?.variant ?? input.variant ?? undefined,
-        );
+        // The model on an internal admission may be a state snapshot learned
+        // by the v2 context bridge after an in-place reprobe switch. It does
+        // not prove that the user explicitly selected another model; only an
+        // external turn can carry that intent into fallback restoration.
+        await foregroundFallback?.prepareV2InternalContinuation(input.sessionID);
       }
       if (!internalAdmission) {
         if (inputParts.length || outputParts.length) {

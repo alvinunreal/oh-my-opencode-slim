@@ -1493,23 +1493,11 @@ export class ForegroundFallbackManager {
     }
   }
 
-  /** Probe only on a Slim-recognized internal v2 admission. */
-  async prepareV2InternalContinuation(
-    sessionID: string,
-    model?: string,
-    variant?: string,
-  ): Promise<void> {
+  /** Probe only on a Slim-recognized internal v2 admission. Model snapshots
+   *  are intentionally excluded: the context bridge can report a learned
+   *  primary model during the probe, which is not an explicit user choice. */
+  async prepareV2InternalContinuation(sessionID: string): Promise<void> {
     if (this.reprobeIntervalMs === undefined || this.disposed) return;
-    const descent = this.descent.get(sessionID);
-    if (
-      model !== undefined &&
-      (model !== descent?.fallback ||
-        (variant ?? 'default') !== (descent?.fallbackVariant ?? 'default'))
-    ) {
-      if (descent?.reprobe)
-        this.clearReprobeForManualSelection(sessionID, model);
-      return;
-    }
     await this.restoreV2(sessionID, true);
   }
 

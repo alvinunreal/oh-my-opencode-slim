@@ -45,9 +45,13 @@ import {
   updateSnapshot,
 } from './tui-state';
 import * as compat from './utils/compat';
-import { createInternalAgentTextPart } from './utils/internal-initiator';
+import {
+  createInternalAgentTextPart,
+  INTERNAL_INITIATOR_METADATA_KEY,
+} from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
 import * as zip from './utils/zip-extractor';
+import { createSessionPromptBridge } from './v2/setup';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
@@ -4143,6 +4147,130 @@ describe('plugin foreground fallback host gating', () => {
       first.resolve();
       second.resolve();
       await hooks.dispose?.();
+    }
+  });
+
+  test('learned primary model during an internal probe preserves the held fallback', async () => {
+    jest.useFakeTimers();
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: {
+          enabled: true,
+          maxRetries: 0,
+          reprobe: { afterHours: 5 },
+        },
+        agents: {
+          orchestrator: {
+            model: ['openai/gpt-b', 'openai/gpt-c', 'openai/gpt-d'],
+          },
+        },
+      }),
+    );
+
+    const sessionID = 'internal-primary-probe';
+    let currentModel = { providerID: 'openai', id: 'gpt-b' };
+    const { client } = createFallbackClient();
+    const session = (client as { session: Record<string, unknown> }).session;
+    session.get = mock(async () => ({
+      data: { agent: 'orchestrator', model: { ...currentModel } },
+    }));
+    const switchModel = mock(
+      async (
+        _id: string,
+        model: { providerID: string; id: string; variant?: string },
+      ) => {
+        currentModel = { ...model };
+        return {};
+      },
+    );
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+      hostFlavor: 'v2',
+      experimental_v2: { switchModel },
+    } as never);
+
+    try {
+      const bridge = createSessionPromptBridge(async (input, output) => {
+        await hooks['chat.message']?.(input as never, output as never);
+      });
+      const context = (modelID: string, messages: unknown[] = []) => ({
+        sessionID,
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: modelID },
+        messages,
+      });
+      await bridge.observeContext(
+        context('gpt-b', [
+          {
+            id: 'external-start',
+            role: 'user',
+            content: [{ type: 'text', text: 'start' }],
+          },
+        ]) as never,
+      );
+
+      const retry = (modelID: string) => ({
+        sessionID,
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: modelID },
+        error: { type: 'provider.rate-limit', message: 'rate limit' },
+        decision: { retry: true, delay: 100 },
+      });
+      await hooks['v2.session.retry']?.(
+        retry('gpt-b') as never,
+        switchModel as never,
+      );
+      await hooks['v2.session.retry']?.(
+        retry('gpt-c') as never,
+        switchModel as never,
+      );
+      expect(currentModel.id).toBe('gpt-d');
+
+      // The prompt bridge has learned the held fallback from context before
+      // the internal admission starts its timed primary probe.
+      await bridge.observeContext(context('gpt-d') as never);
+      const internalPrompt = {
+        sessionID,
+        messageID: 'internal-probe-message',
+        prompt: { text: 'continue the internal task' },
+        metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
+      };
+      bridge.observePromptIntent(internalPrompt as never);
+      jest.advanceTimersByTime(5 * 60 * 60 * 1000);
+      await bridge.handlePrompt(internalPrompt as never);
+      expect(currentModel.id).toBe('gpt-b');
+
+      // The next v2 context event reports the learned primary model for the
+      // same internal admission. It is not evidence of an explicit choice.
+      await bridge.observeContext(
+        context('gpt-b', [
+          {
+            id: 'internal-probe-message',
+            role: 'user',
+            content: [{ type: 'text', text: 'continue the internal task' }],
+          },
+        ]) as never,
+      );
+      await hooks['v2.session.retry']?.(
+        retry('gpt-b') as never,
+        switchModel as never,
+      );
+
+      expect(currentModel.id).toBe('gpt-d');
+      expect(switchModel.mock.calls.map(([, model]) => model.id)).toEqual([
+        'gpt-c',
+        'gpt-d',
+        'gpt-b',
+        'gpt-d',
+      ]);
+    } finally {
+      await hooks.dispose?.();
+      jest.useRealTimers();
     }
   });
 

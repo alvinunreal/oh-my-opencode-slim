@@ -13023,11 +13023,11 @@ describe('fallback restoration', () => {
     expect(f.switchModel).toHaveBeenCalledTimes(1);
     expect(f.info.model).toEqual(backup);
 
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(1);
     await clock.advance(1);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
+    await f.manager.prepareV2InternalContinuation(sid);
 
     expect(f.switchModel).toHaveBeenCalledTimes(2);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
@@ -13038,7 +13038,7 @@ describe('fallback restoration', () => {
     const f = fixture({ reprobeAfterHours: 5 });
     await f.retry(origin, outage);
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
 
     expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
     await startStep(f.manager, 'primary-reprobe', origin);
@@ -13065,7 +13065,7 @@ describe('fallback restoration', () => {
     const f = fixture({ reprobeAfterHours: 5 });
     await f.retry(origin, outage);
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     await startStep(f.manager, 'primary-failed-reprobe', origin);
     const event = {
       sessionID: sid,
@@ -13079,13 +13079,13 @@ describe('fallback restoration', () => {
     expect(event.decision).toEqual({ retry: true, delay: 0 });
     expect(f.switchModel).toHaveBeenCalledTimes(3);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, backup);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(3);
     await clock.advance(5 * 60 * 60 * 1000 - 1);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(3);
     await clock.advance(1);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(4);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
@@ -13094,7 +13094,7 @@ describe('fallback restoration', () => {
     const f = fixture({ reprobeAfterHours: 5 });
     await f.retry(origin, outage);
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     await startStep(f.manager, 'primary-policy-reprobe', origin);
     await f.manager.handleEvent({
       type: 'session.step.failed',
@@ -13110,7 +13110,7 @@ describe('fallback restoration', () => {
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, backup);
     expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(3);
   });
 
@@ -13118,7 +13118,7 @@ describe('fallback restoration', () => {
     const billing = fixture({ reprobeAfterHours: 5 });
     await billing.retry(origin, { status: 402, message: 'payment required' });
     await clock.advance(5 * 60 * 60 * 1000);
-    await billing.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await billing.manager.prepareV2InternalContinuation(sid);
     expect(billing.switchModel).toHaveBeenCalledTimes(1);
     billing.manager.dispose();
 
@@ -13126,7 +13126,7 @@ describe('fallback restoration', () => {
     await policy.retry(origin, rejection);
     await policy.retry(backup, outage);
     await clock.advance(5 * 60 * 60 * 1000);
-    await policy.manager.prepareV2InternalContinuation(sid, 'third/c');
+    await policy.manager.prepareV2InternalContinuation(sid);
     expect(policy.switchModel).toHaveBeenCalledTimes(2);
     expect(policy.manager.getActiveFallback(sid)?.model).toBe('third/c');
   });
@@ -13148,7 +13148,7 @@ describe('fallback restoration', () => {
     );
 
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
     await startStep(f.manager, 'quota-recovered', origin);
     await f.manager.handleEvent({
@@ -13209,14 +13209,14 @@ describe('fallback restoration', () => {
     await clock.advance(60 * 60 * 1000);
     await fail('session-b');
     await clock.advance(4 * 60 * 60 * 1000);
-    await manager.prepareV2InternalContinuation('session-a', 'backup/b');
-    await manager.prepareV2InternalContinuation('session-b', 'backup/b');
+    await manager.prepareV2InternalContinuation('session-a');
+    await manager.prepareV2InternalContinuation('session-b');
     expect(
       switchModel.mock.calls.filter((call) => call[1].id === 'a'),
     ).toHaveLength(1);
 
     await clock.advance(60 * 60 * 1000);
-    await manager.prepareV2InternalContinuation('session-b', 'backup/b');
+    await manager.prepareV2InternalContinuation('session-b');
     expect(
       switchModel.mock.calls.filter((call) => call[1].id === 'a'),
     ).toHaveLength(2);
@@ -13230,25 +13230,12 @@ describe('fallback restoration', () => {
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenCalledTimes(1);
 
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(2);
     f.manager.noteExternalTurn(sid, 'manual-turn', 'backup/b', 'manual');
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.manager.getActiveFallback(sid)).toBeUndefined();
     expect(f.switchModel).toHaveBeenCalledTimes(2);
-  });
-
-  test('an explicit internal model or variant selection clears the reprobe hold', async () => {
-    const f = fixture({ reprobeAfterHours: 5 });
-    await f.retry(origin, outage);
-    await clock.advance(5 * 60 * 60 * 1000);
-
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b', 'manual');
-
-    expect(f.switchModel).toHaveBeenCalledTimes(1);
-    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
-    expect(f.switchModel).toHaveBeenCalledTimes(1);
   });
 
   test('stale primary completion and policy rejection do not trigger another probe', async () => {
@@ -13256,7 +13243,7 @@ describe('fallback restoration', () => {
     await startStep(f.manager, 'stale-primary', origin);
     await f.retry(origin, outage);
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     await f.manager.handleEvent({
       type: 'session.step.ended',
       data: {
@@ -13271,7 +13258,7 @@ describe('fallback restoration', () => {
     await f.retry(origin, rejection);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, backup);
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(3);
     expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
   });
@@ -13289,7 +13276,7 @@ describe('fallback restoration', () => {
     expect((f.manager as any).descent.has(sid)).toBe(false);
     expect(f.manager.getActiveFallback(sid)).toBeUndefined();
     await clock.advance(5 * 60 * 60 * 1000);
-    await f.manager.prepareV2InternalContinuation(sid, 'backup/b');
+    await f.manager.prepareV2InternalContinuation(sid);
     expect(f.switchModel).toHaveBeenCalledTimes(1);
   });
 
