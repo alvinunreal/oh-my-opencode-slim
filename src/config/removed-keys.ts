@@ -155,6 +155,8 @@ const REMOVED_DISABLED_VALUES: Readonly<
   disabled_hooks: {
     'council-assembly':
       'council-assembly is no longer a hook: council seat assembly is unconditional and fail-open — remove this entry.',
+    'json-error-recovery':
+      'json-error-recovery is no longer a hook: OpenCode 2.3 rejects tool calls with malformed JSON arguments itself and asks the model to reissue them — remove this entry.',
   },
 };
 

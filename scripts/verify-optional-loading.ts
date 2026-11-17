@@ -52,7 +52,6 @@ const ALL_HOOKS = [
   'deepwork-goal',
   'chat-headers',
   'cache-monitor',
-  'json-error-recovery',
   'tool-loop-guard',
   'search-path-guard',
   'absolute-path-rescue',

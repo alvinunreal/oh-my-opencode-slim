@@ -1666,7 +1666,6 @@ describe('onWarning callback', () => {
         disabled_hooks: [
           'chat-headers',
           'cache-monitor',
-          'json-error-recovery',
           'tool-loop-guard',
           'search-path-guard',
           'absolute-path-rescue',
@@ -1683,7 +1682,6 @@ describe('onWarning callback', () => {
     expect(config.disabled_hooks).toEqual([
       'chat-headers',
       'cache-monitor',
-      'json-error-recovery',
       'tool-loop-guard',
       'search-path-guard',
       'absolute-path-rescue',
@@ -3479,6 +3477,18 @@ describe('removed config keys', () => {
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
     expect(config.disabled_hooks).toBeUndefined();
     expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+  });
+
+  test('a stale json-error-recovery member is dropped with a removal warning', () => {
+    const { config, warnings } = load({
+      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+    });
+
+    expect(config.disabled_hooks).toEqual(['tool-loop-guard']);
+    expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain(
+      'json-error-recovery is no longer a hook',
+    );
   });
 
   test('unknown invalid keys still reject the file', () => {

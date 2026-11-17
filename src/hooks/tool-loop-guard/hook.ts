@@ -46,9 +46,6 @@ import { log } from '../../utils/logger';
  *   of arguments or output. They warn at 2 completed calls and the 3rd call
  *   is refused (#1139). The counter resets on a new user message, a
  *   completed turn, or session deletion.
- *
- * Precedent: json-error-recovery (output warning) and task-session-manager
- * (before-hook refusal).
  */
 
 const LOOP_GUARD_WARN_AT = 3;
