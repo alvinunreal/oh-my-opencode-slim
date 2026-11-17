@@ -2464,7 +2464,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // by the v2 context bridge after an in-place reprobe switch. It does
         // not prove that the user explicitly selected another model; only an
         // external turn can carry that intent into fallback restoration.
-        await foregroundFallback?.prepareV2InternalContinuation(input.sessionID);
+        await foregroundFallback?.prepareV2InternalContinuation(
+          input.sessionID,
+        );
       }
       if (!internalAdmission) {
         if (inputParts.length || outputParts.length) {
