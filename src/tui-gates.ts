@@ -8,7 +8,10 @@
  * heavy modules re-export these names, so every existing importer keeps
  * its path.
  */
-import { resolveFeatureGates } from './config/feature-gates';
+import {
+  resolveFeatureGates,
+  UnsupportedHostConfigError,
+} from './config/feature-gates';
 import { MultiplexerConfigSchema, type MultiplexerType } from './config/schema';
 import {
   type PluginConfigSnapshot,
@@ -56,9 +59,8 @@ export interface TuiGatesSnapshot extends SidebarConfigState {
  * Gates paired with the identity of the shared snapshot they were derived
  * from. The snapshot fingerprint is the poll-time identity: unchanged ⇒ the
  * same inputs produced the gates, so a tick re-reads cheaply
- * (discovery + stats only) and reuses the derived gates. `readFailed` marks
- * a thrown read (fail-open gates); such an outcome is never adopted as the
- * new baseline.
+ * (discovery + stats only) and reuses the derived gates. An unsupported config
+ * is adopted as invalid; other thrown reads do not become the baseline.
  */
 export interface TuiGatesRead {
   gates: TuiGatesSnapshot;
@@ -66,7 +68,7 @@ export interface TuiGatesRead {
   fingerprint: string;
   /** Pane-wiring admission config from the same snapshot. */
   paneConfig: LoadedPaneConfig | undefined;
-  /** True only when the shared read threw (fail-open gates were returned). */
+  /** True for transient read failures, not an unsupported configuration. */
   readFailed: boolean;
 }
 
@@ -156,8 +158,8 @@ export interface TuiGatesProbe {
  * full `readTuiGates` (pane config included, from the same snapshot) for the
  * render path.
  *
- * Fail-open on a thrown read: the TUI and sidebar survive, command gating
- * fails open, and the result is not adopted as the poll baseline.
+ * Unsupported configs remain visible as invalid; other thrown reads fail open
+ * without becoming the poll baseline.
  */
 export function probeTuiGates(
   directory: string,
@@ -176,6 +178,16 @@ export function probeTuiGates(
       snapshot,
     };
   } catch (err) {
+    if (err instanceof UnsupportedHostConfigError) {
+      return {
+        read: {
+          gates: { ...failOpenTuiGates(), configInvalid: true },
+          fingerprint: `refused:${err.message}`,
+          paneConfig: undefined,
+          readFailed: false,
+        },
+      };
+    }
     log('[tui] tui config read failed; keeping TUI and sidebar', String(err));
     return {
       read: {

@@ -10,13 +10,8 @@
   <p><sub>由 <b>Boring Dystopia Development</b> 打造</sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 將你的筆記轉成簡潔、可編輯的 SVG 圖表</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim 是免費的。** 如果它對你有用，請考慮支持動物福利。<br>
+> [向你所在地區的慈善機構捐款](https://ohmyopencodeslim.com/donate) · [查看所有慈善機構](https://ohmyopencodeslim.com/animals)
 
 ## 這是什麼外掛
 
@@ -1004,6 +1003,16 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 支持動物福利
+
+Slim 免費並採用 MIT 授權，今後也會維持如此。我們不收取費用，而是請覺得它有用的使用者支持動物福利。推薦的慈善機構致力於終結動物在農場與屠宰過程中遭受的最痛苦做法：未經適當致昏的宰殺、不使用止痛的手術，以及狹小的禁閉。捐款直接交給這些機構。
+
+- **[捐款](https://ohmyopencodeslim.com/donate)**：開啟你所在地區一家慈善機構的捐款頁面。
+- **[所有慈善機構](https://ohmyopencodeslim.com/animals)**：比較各個選項，並了解選擇它們的理由。
+- **商業使用**：授權不附帶任何義務。我們請仰賴 Slim 的公司每年捐款一次。
 
 ---
 

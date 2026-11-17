@@ -2201,3 +2201,39 @@ describe('experimental_v2 model domain threading', () => {
     ).toBeUndefined();
   });
 });
+
+describe('experimental_v2 native report session threading', () => {
+  test('exposes the same raw native session reference when get+synthetic exist', () => {
+    const ctx = makeCtx({
+      get: async () => ({}),
+      synthetic: async () => ({}),
+    } as never);
+    const input = buildPluginInput(ctx);
+    const experimental = (input as { experimental_v2?: { session?: unknown } })
+      .experimental_v2;
+    // The exact ctx.session object is threaded, not a per-method adapter.
+    expect(experimental?.session).toBe(ctx.session);
+    expect(Object.keys(experimental ?? {})).toEqual(['session']);
+  });
+
+  test('omits experimental_v2.session on reduced/no-get/no-synthetic hosts', () => {
+    const reportSession = (ctx: V2Context) =>
+      (buildPluginInput(ctx) as { experimental_v2?: { session?: unknown } })
+        .experimental_v2?.session;
+
+    expect(reportSession(makeCtx())).toBeUndefined();
+    expect(
+      reportSession(makeCtx({ synthetic: async () => ({}) } as never)),
+    ).toBeUndefined();
+    expect(
+      reportSession(makeCtx({ get: async () => ({}) } as never)),
+    ).toBeUndefined();
+
+    const reduced = buildPluginInput({
+      app: { name: 't', version: '0' },
+    } as never);
+    expect('experimental_v2' in (reduced as Record<string, unknown>)).toBe(
+      false,
+    );
+  });
+});

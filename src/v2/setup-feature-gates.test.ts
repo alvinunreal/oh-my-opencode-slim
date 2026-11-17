@@ -286,6 +286,15 @@ describe('v2 setup feature gates', () => {
     await rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  test('accepts major-zero preview hosts but rejects unsupported releases', async () => {
+    const { ctx } = makeCtx(projectDir);
+    ctx.app.version = '0.0.0-beta-19507';
+    const cleanup = await createV2Setup()(ctx);
+    await cleanup();
+    ctx.app.version = '2.2.4';
+    await expect(createV2Setup()(ctx)).rejects.toThrow(/unsupported/i);
+  });
+
   test('interview disabled: no command marker, no context dispatch', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
@@ -445,6 +454,80 @@ describe('v2 setup feature gates', () => {
     }, 20_000);
   }
 
+  for (const mode of [undefined, 'native', 'managed'] as const) {
+    test(`startup does not inspect retained managed histories (${mode ?? 'default'})`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        ...(mode ? { backgroundJobs: { mode } } : {}),
+      });
+      const configFile = path.join(
+        projectDir,
+        '.opencode',
+        'oh-my-opencode-slim.json',
+      );
+      const before = fs.readFileSync(configFile, 'utf8');
+      const retained = new Map(
+        Array.from({ length: 500 }, (_, index) => {
+          const taskID = `ses_retained_${String(index).padStart(3, '0')}`;
+          return [
+            `omo/bgj/child/${taskID}`,
+            {
+              taskID,
+              parentSessionID: 'ses_retained_parent',
+              agent: 'explorer',
+              background: true,
+              launchedAt: 1,
+              deliveredAt: 2,
+            },
+          ] as const;
+        }),
+      );
+      const { ctx, storageCalls } = makeCtx(projectDir, {
+        get: async (key) => retained.get(key),
+        set: async () => {
+          throw new Error('Startup must not rewrite managed records');
+        },
+        remove: async () => {
+          throw new Error('Startup must not remove managed records');
+        },
+        scan: async ({ prefix, after, limit = 100 }) => {
+          const matches = [...retained.entries()].filter(
+            ([key]) => key.startsWith(prefix) && (!after || key > after),
+          );
+          const page = matches.slice(0, limit);
+          return {
+            entries: page.map(([key, value]) => ({ key, value })),
+            ...(matches.length > limit ? { next: page.at(-1)?.[0] } : {}),
+          };
+        },
+      });
+      const reads = { get: 0, list: 0, context: 0 };
+      Object.assign(ctx.session, {
+        get: async () => {
+          reads.get += 1;
+          throw new Error('Startup must not inspect retained sessions');
+        },
+        list: async () => {
+          reads.list += 1;
+          throw new Error('Startup must not list retained sessions');
+        },
+        context: async () => {
+          reads.context += 1;
+          throw new Error('Startup must not read retained histories');
+        },
+      });
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expect(reads).toEqual({ get: 0, list: 0, context: 0 });
+        expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+        expect(retained.size).toBe(500);
+        expect(fs.readFileSync(configFile, 'utf8')).toBe(before);
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
   // Regression: the bridge's fail-closed guard requires the session-preset
   // wrapper that consumes its admission. Gating that wrapper with the managed
   // lifecycle left the guard armed in `native`/`off`, so every `subagent` call
@@ -528,44 +611,39 @@ describe('v2 setup feature gates', () => {
     }
   }, 20_000);
 
-  test('explicit managed mode fails before registrations or storage reads', async () => {
+  test('managed project layer migrates inert keys and overrides user off mode', async () => {
+    const configDir = process.env.OPENCODE_CONFIG_DIR as string;
+    await mkdir(configDir, { recursive: true });
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ backgroundJobs: { mode: 'off' } }),
+    );
     await writeProjectConfig({
       companion: { enabled: false },
-      backgroundJobs: { mode: 'managed' },
+      backgroundJobs: {
+        mode: 'managed',
+        maxSessionsPerAgent: 2,
+        stopConfirmationMs: 5000,
+        wallClockTimeoutMs: 0,
+        concurrency: {
+          defaultConcurrency: 0,
+          providerConcurrency: { openai: 0 },
+        },
+        sameProviderPolicy: { openai: 'foreground' },
+        waitForUserGuard: true,
+        childInputWake: true,
+        childInputWakeKinds: { question: true },
+        pruneEvictedSessions: false,
+      },
     });
-    const { ctx, hooks, commandAdds, toolUpdates, storageCalls } =
-      makeCtx(projectDir);
-    await expect(createV2Setup()(ctx)).rejects.toThrow(/managed/i);
-    expect(hooks).toEqual([]);
-    expect(commandAdds).toEqual([]);
-    expect(toolUpdates).toEqual([]);
-    expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+    const { ctx, commandAdds } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(commandAdds.map((entry) => entry.name)).toContain('preset');
+    } finally {
+      await cleanup();
+    }
   });
-
-  test.each([
-    { concurrency: {} },
-    { wallClockTimeoutMs: 0 },
-    { maxSessionsPerAgent: 2 },
-    { stopConfirmationMs: 5_000 },
-  ])(
-    'retired V2 limit %j refuses setup before storage or registrations',
-    async (limit) => {
-      await writeProjectConfig({
-        companion: { enabled: false },
-        backgroundJobs: { mode: 'native', ...limit },
-      });
-      const { ctx, hooks, commandAdds, toolUpdates, storageCalls } =
-        makeCtx(projectDir);
-
-      await expect(createV2Setup()(ctx)).rejects.toThrow(
-        `Unsupported backgroundJobs.${Object.keys(limit)[0]}`,
-      );
-      expect(hooks).toEqual([]);
-      expect(commandAdds).toEqual([]);
-      expect(toolUpdates).toEqual([]);
-      expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
-    },
-  );
 
   test('native default leaves the native subagent description untouched', async () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);

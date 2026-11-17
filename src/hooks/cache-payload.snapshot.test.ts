@@ -24,6 +24,7 @@ import {
   createPipeline,
   renderTurn,
 } from './cache-safety-harness.test';
+import { appendRefusalCorrections } from './refusal-corrections';
 
 describe('cache-impact snapshots (update deliberately — see file header)', () => {
   test('phase reminder text', () => {
@@ -52,5 +53,17 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
     const output = await renderTurn(pipeline, history, history.length - 1);
 
     expect(output.messages).toMatchSnapshot();
+  });
+
+  test('fallback continuation is a trailing volatile notice', () => {
+    const history = buildHistory();
+    const prefix = JSON.stringify(history);
+    appendRefusalCorrections(history, 'ses_parent', 'orchestrator', [
+      { taskID: 'ses_refused_child', model: 'test/fallback' },
+    ]);
+    expect(JSON.stringify(history.slice(0, -1))).toBe(prefix);
+    expect(
+      (history.at(-1) as { parts: Array<{ text: string }> }).parts[0]?.text,
+    ).toMatchSnapshot();
   });
 });

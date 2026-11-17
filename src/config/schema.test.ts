@@ -897,258 +897,83 @@ describe('PluginConfigSchema backgroundJobs', () => {
   beforeEach(() => {
     resetBackgroundJobsDiagnostics();
     warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    warnSpy.mockClear();
   });
 
-  afterEach(() => {
-    warnSpy.mockRestore();
-  });
+  afterEach(() => warnSpy.mockRestore());
 
-  it('leaves backgroundJobs.mode unset by default so the runtime resolves managed', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.mode).toBeUndefined();
+  it('keeps mode absent by default and accepts native and off', () => {
+    expect(
+      PluginConfigSchema.parse({ backgroundJobs: {} }).backgroundJobs?.mode,
+    ).toBeUndefined();
+    for (const mode of ['native', 'off'] as const) {
+      expect(
+        PluginConfigSchema.parse({ backgroundJobs: { mode } }).backgroundJobs
+          ?.mode,
+      ).toBe(mode);
     }
   });
 
-  it('documents lifecycle modes, retirement, and sameProvider across V1/V2', () => {
-    const jsonSchema = z.toJSONSchema(PluginConfigSchema, {
-      io: 'input',
-    }) as {
-      properties?: {
-        backgroundJobs?: {
-          properties?: Record<string, { description?: string }>;
-        };
-      };
-    };
-
-    const properties = jsonSchema.properties?.backgroundJobs?.properties ?? {};
-
-    const modeDesc = properties.mode?.description ?? '';
-    expect(modeDesc).toContain('"managed" (default on V1 hosts)');
-    expect(modeDesc).toContain('"native" (default on OpenCode v2 hosts)');
-    expect(modeDesc).toContain(
-      'task_reply for the orchestrator and task_report for child subagents',
-    );
-    expect(modeDesc).toContain(
-      'request acceptance, not confirmed interruption',
-    );
-    expect(modeDesc).not.toContain('atomic interruption');
-
-    expect(properties.concurrency?.description).toContain(
-      'V1 managed lifecycle only',
-    );
-    expect(properties.maxSessionsPerAgent?.description).toContain(
-      'V1 managed lifecycle only',
-    );
-    expect(properties.wallClockTimeoutMs?.description).toContain(
-      'V1 managed lifecycle only',
-    );
-    expect(properties.stopConfirmationMs?.description).toContain(
-      'V1 managed lifecycle only',
-    );
-    expect(properties.sameProviderPolicy?.description).toContain(
-      'inert when backgroundJobs.mode is "off"',
-    );
-    expect(properties.sameProviderPolicy?.description).toContain(
-      'this key is v1-only',
-    );
-    expect(properties.sameProviderPolicy?.description).toContain(
-      'an explicit value on v2 emits an unsupported-host warning and is ignored',
-    );
-    expect(properties.waitForUserGuard?.description).toContain(
-      'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
-    );
-    expect(properties.childInputWakeKinds?.description).toContain(
-      'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
-    );
-  });
-
-  it('rejects the removed enabled alias and names backgroundJobs.mode', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: { enabled: false, maxSessionsPerAgent: 4 },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(
-        expect.objectContaining({
-          path: ['backgroundJobs', 'enabled'],
-          message: expect.stringContaining('use backgroundJobs.mode'),
-        }),
-      );
-    }
-  });
-
-  it('accepts mode: "off" and keeps the otherwise-inert lifecycle keys', () => {
-    // mode off only turns the managed lifecycle off; the sibling keys stay
-    // accepted (validated as usual, then inert at runtime).
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        mode: 'off',
-        maxSessionsPerAgent: 4,
-        orchestratorWake: { enabled: false, intervalMs: 120_000 },
-        wallClockTimeoutMs: 60_000,
-        stopConfirmationMs: 2_000,
-        concurrency: { defaultConcurrency: 2 },
-        sameProviderPolicy: { provider: 'foreground' },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.mode).toBe('off');
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-      expect(result.data.backgroundJobs?.wallClockTimeoutMs).toBe(60_000);
-      expect(result.data.backgroundJobs?.concurrency?.defaultConcurrency).toBe(
-        2,
-      );
-      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({
-        provider: 'foreground',
-      });
-    }
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it('drops one invalid key and keeps the rest of the config layer (#1291)', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: { maxSessionsPerAgent: 16 },
-      presets: { review: { explorer: { model: 'valid/model' } } },
+  it('drops invalid mode without discarding the rest of the layer (#1291)', () => {
+    const raw = {
+      backgroundJobs: { mode: 'bogus' },
       agents: { oracle: { model: 'valid/model' } },
-      disabled_agents: ['designer'],
-      disabled_tools: ['ast_grep_search'],
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(2);
-      expect(result.data.presets?.review?.explorer?.model).toBe('valid/model');
-      expect(result.data.agents?.oracle?.model).toBe('valid/model');
-      expect(result.data.disabled_agents).toEqual(['designer']);
-      expect(result.data.disabled_tools).toEqual(['ast_grep_search']);
-    }
+    };
+    const before = JSON.stringify(raw);
+    const result = PluginConfigSchema.parse(raw);
+    expect(result.backgroundJobs?.mode).toBeUndefined();
+    expect(result.agents?.oracle?.model).toBe('valid/model');
+    expect(JSON.stringify(raw)).toBe(before);
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = warnSpy.mock.calls[0]?.[0] as string;
-    expect(message).toContain('Invalid backgroundJobs config value');
-    expect(message).toContain('maxSessionsPerAgent');
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('mode');
   });
 
-  it('drops a non-object backgroundJobs value and keeps the layer', () => {
-    const result = PluginConfigSchema.safeParse({
+  it('drops a non-object backgroundJobs value without discarding the layer', () => {
+    const result = PluginConfigSchema.parse({
       backgroundJobs: 'invalid',
       agents: { oracle: { model: 'valid/model' } },
     });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(2);
-      expect(result.data.agents?.oracle?.model).toBe('valid/model');
-    }
+    expect(result.backgroundJobs).toEqual({});
+    expect(result.agents?.oracle?.model).toBe('valid/model');
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves valid nested siblings when one nested value is invalid', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        orchestratorWake: { enabled: false, intervalMs: 1_000 },
-        concurrency: {
-          defaultConcurrency: 4,
-          providerConcurrency: { openai: -1 },
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.concurrency?.defaultConcurrency).toBe(
-        4,
-      );
-      expect(
-        result.data.backgroundJobs?.concurrency?.providerConcurrency,
-      ).toEqual({});
-    }
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = warnSpy.mock.calls[0]?.[0] as string;
-    expect(message).toContain('concurrency.providerConcurrency');
-  });
-
-  it('ignores keys that collide with inherited object members', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        constructor: 'nope',
-        toString: 1,
-        maxSessionsPerAgent: 4,
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-    }
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it('ignores a JSON-parsed __proto__ own property without polluting prototypes', () => {
+  it('ignores inherited names and JSON __proto__ without polluting prototypes', () => {
     const raw = JSON.parse(
-      '{"backgroundJobs":{"__proto__":{"polluted":true},"maxSessionsPerAgent":4}}',
+      '{"backgroundJobs":{"__proto__":{"polluted":true},"constructor":"nope","toString":1,"mode":"off"}}',
     );
-    const result = PluginConfigSchema.safeParse(raw);
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-    }
-    expect(warnSpy).not.toHaveBeenCalled();
+    expect(PluginConfigSchema.parse(raw).backgroundJobs?.mode).toBe('off');
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('drops a strict-nested concurrency block wholesale when it carries an unknown key', () => {
-    // Known residual (follow-up): inside the strict concurrency object an
-    // unknown key is not stripped, so the parent safeParse fails and the
-    // whole block is dropped — the diagnostic names the parent key only.
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        maxSessionsPerAgent: 4,
-        concurrency: { defaultConcurrency: 4, notAKey: 1 },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-      expect(result.data.backgroundJobs?.concurrency?.defaultConcurrency).toBe(
-        0,
-      );
-    }
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = warnSpy.mock.calls[0]?.[0] as string;
-    expect(message).toContain('concurrency');
-    expect(message).not.toContain('notAKey');
-  });
-
-  it('does not mutate the raw config while sanitizing', () => {
-    const raw = {
-      backgroundJobs: {
-        maxSessionsPerAgent: 16,
-        orchestratorWake: { enabled: false, intervalMs: 1_000 },
-      },
-    };
-    const before = JSON.stringify(raw);
-    PluginConfigSchema.safeParse(raw);
-    expect(JSON.stringify(raw)).toBe(before);
-  });
-
-  it('boards render structurally with no board keys on the schema', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(2);
-      expect('strategy' in (result.data.backgroundJobs ?? {})).toBe(false);
-    }
-  });
+  it.each([
+    'maxSessionsPerAgent',
+    'stopConfirmationMs',
+    'wallClockTimeoutMs',
+    'concurrency',
+    'sameProviderPolicy',
+    'waitForUserGuard',
+    'childInputWake',
+    'childInputWakeKinds',
+    'pruneEvictedSessions',
+  ] as const)(
+    'rejects retired backgroundJobs.%s at the schema boundary',
+    (key) => {
+      const result = PluginConfigSchema.safeParse({
+        backgroundJobs: { [key]: 0 },
+      });
+      expect(result.success).toBe(false);
+      if (!result.success)
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            path: ['backgroundJobs', key],
+            message: expect.stringContaining(
+              'removed with the managed lifecycle',
+            ),
+          }),
+        );
+    },
+  );
 
   it('rejects every removed board key', () => {
     const result = PluginConfigSchema.safeParse({
@@ -1159,10 +984,9 @@ describe('PluginConfigSchema backgroundJobs', () => {
         maxContextLines: 10,
         readContextMinLines: 1,
         readContextMaxFiles: 2,
-        abortGraceMs: 10_000,
+        abortGraceMs: 10000,
       },
     });
-
     expect(result.success).toBe(false);
   });
 
@@ -1170,303 +994,31 @@ describe('PluginConfigSchema backgroundJobs', () => {
     'rejects removed backgroundJobs.%s independently',
     (key) => {
       const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { [key]: key === 'boardInjection' ? true : 10_000 },
+        backgroundJobs: { [key]: key === 'boardInjection' ? true : 10000 },
       });
       expect(result.success).toBe(false);
-      if (!result.success) {
+      if (!result.success)
         expect(result.error.issues).toContainEqual(
           expect.objectContaining({
             path: ['backgroundJobs', key],
             message: expect.stringContaining(`${key} was removed`),
           }),
         );
-      }
     },
   );
 
-  it('defaults backgroundJobs.stopConfirmationMs to 5 seconds', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.stopConfirmationMs).toBe(5_000);
-    }
-  });
-
-  it('accepts explicit stopConfirmationMs within bounds and drops out-of-bounds values', () => {
-    for (const stopConfirmationMs of [1_000, 5_000, 60_000]) {
-      expect(
-        PluginConfigSchema.safeParse({
-          backgroundJobs: { stopConfirmationMs },
-        }).success,
-      ).toBe(true);
-    }
-    for (const stopConfirmationMs of [999, 60_001, 0, -1]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { stopConfirmationMs },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.stopConfirmationMs).toBe(5_000);
-      }
-    }
-  });
-
-  it('defaults the wall-clock supervisor to disabled', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.wallClockTimeoutMs).toBe(0);
-    }
-  });
-
-  it('defaults pruneEvictedSessions to disabled and accepts an explicit on', () => {
-    const defaults = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-    expect(defaults.success).toBe(true);
-    if (defaults.success) {
-      expect(defaults.data.backgroundJobs?.pruneEvictedSessions).toBe(false);
-    }
-
-    const on = PluginConfigSchema.safeParse({
-      backgroundJobs: { pruneEvictedSessions: true },
-    });
-    expect(on.success).toBe(true);
-    if (on.success) {
-      expect(on.data.backgroundJobs?.pruneEvictedSessions).toBe(true);
-    }
-  });
-
-  it('defaults background task concurrency limits to disabled', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.concurrency).toEqual({
-        defaultConcurrency: 0,
-        providerConcurrency: {},
-        modelConcurrency: {},
-      });
-    }
-  });
-
-  it('accepts default, provider, and model concurrency limits', () => {
+  it('rejects the removed enabled alias and names backgroundJobs.mode', () => {
     const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        concurrency: {
-          defaultConcurrency: 2,
-          providerConcurrency: { openai: 3 },
-          modelConcurrency: { 'openai/gpt-6-luna': 1 },
-        },
-      },
+      backgroundJobs: { enabled: false },
     });
-
-    expect(result.success).toBe(true);
-  });
-
-  it('drops invalid background task concurrency limits back to the defaults', () => {
-    for (const concurrency of [
-      { defaultConcurrency: -1 },
-      { defaultConcurrency: 1001 },
-      { defaultConcurrency: 1.5 },
-      { providerConcurrency: { openai: -1 } },
-      { providerConcurrency: { openai: 1.5 } },
-      { modelConcurrency: { 'openai/gpt-6-luna': -1 } },
-      { modelConcurrency: { 'openai/gpt-6-luna': 1.5 } },
-    ]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { concurrency },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(
-          result.data.backgroundJobs?.concurrency?.defaultConcurrency,
-        ).toBe(0);
-      }
-    }
-  });
-
-  it('accepts zero as unlimited for provider and model caps', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        concurrency: {
-          defaultConcurrency: 2,
-          providerConcurrency: { openai: 0 },
-          modelConcurrency: { 'openai/gpt-6-luna': 0 },
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(
-        result.data.backgroundJobs?.concurrency?.providerConcurrency,
-      ).toEqual({ openai: 0 });
-      expect(result.data.backgroundJobs?.concurrency?.modelConcurrency).toEqual(
-        { 'openai/gpt-6-luna': 0 },
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['backgroundJobs', 'enabled'],
+          message: expect.stringContaining('use backgroundJobs.mode'),
+        }),
       );
-    }
-  });
-
-  it('accepts the documented wall-clock supervisor bounds', () => {
-    expect(
-      PluginConfigSchema.safeParse({
-        backgroundJobs: {
-          wallClockTimeoutMs: 0,
-        },
-      }).success,
-    ).toBe(true);
-    expect(
-      PluginConfigSchema.safeParse({
-        backgroundJobs: {
-          wallClockTimeoutMs: 60_000,
-        },
-      }).success,
-    ).toBe(true);
-    expect(
-      PluginConfigSchema.safeParse({
-        backgroundJobs: {
-          wallClockTimeoutMs: 2_147_483_647,
-        },
-      }).success,
-    ).toBe(true);
-  });
-
-  it('drops wall-clock supervisor values outside the safe integer bounds', () => {
-    const invalid = [
-      { wallClockTimeoutMs: -1 },
-      { wallClockTimeoutMs: 1 },
-      { wallClockTimeoutMs: 59_999 },
-      { wallClockTimeoutMs: 2_147_483_648 },
-      { wallClockTimeoutMs: 60_000.5 },
-    ];
-
-    for (const backgroundJobs of invalid) {
-      const result = PluginConfigSchema.safeParse({ backgroundJobs });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.wallClockTimeoutMs).toBe(0);
-      }
-    }
-  });
-
-  it('accepts sameProviderPolicy entries with the foreground policy', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        sameProviderPolicy: { 'lm-nexus': 'foreground' },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({
-        'lm-nexus': 'foreground',
-      });
-    }
-  });
-
-  it('accepts an empty sameProviderPolicy map', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: { sameProviderPolicy: {} },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({});
-    }
-  });
-
-  it('leaves default behavior unchanged when sameProviderPolicy is omitted', () => {
-    const withDefaults = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-    expect(withDefaults.success).toBe(true);
-    if (withDefaults.success) {
-      expect(withDefaults.data.backgroundJobs?.sameProviderPolicy).toEqual({});
-    }
-
-    const absent = PluginConfigSchema.safeParse({});
-    expect(absent.success).toBe(true);
-    if (absent.success) {
-      expect(absent.data.backgroundJobs).toBeUndefined();
-    }
-  });
-
-  it('drops invalid sameProviderPolicy values back to the empty default', () => {
-    for (const sameProviderPolicy of [
-      { foo: 'background' },
-      { foo: 1 },
-      'foreground',
-    ]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { sameProviderPolicy },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({});
-      }
-    }
-  });
-
-  it('defaults childInputWake to enabled', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.childInputWake).toBe(true);
-    }
-  });
-
-  it('accepts an explicit childInputWake override', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: { childInputWake: false },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.childInputWake).toBe(false);
-    }
-  });
-
-  it('defaults childInputWakeKinds to permission-off, question-on', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.childInputWakeKinds).toEqual({
-        permission: false,
-        question: true,
-      });
-    }
-  });
-
-  it('defaults a missing childInputWakeKinds field', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: { childInputWakeKinds: { question: false } },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.childInputWakeKinds).toEqual({
-        permission: false,
-        question: false,
-      });
-    }
-  });
-
-  // Unlike sibling keys, .catch() swallows invalid input without the
-  // backgroundJobs diagnostic — accepted per review.
-  it('falls back to defaults for invalid childInputWakeKinds', () => {
-    for (const childInputWakeKinds of [{ permission: 'yes' }, 'question']) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { childInputWakeKinds },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.childInputWakeKinds).toEqual({
-          permission: false,
-          question: true,
-        });
-      }
-    }
   });
 });
 

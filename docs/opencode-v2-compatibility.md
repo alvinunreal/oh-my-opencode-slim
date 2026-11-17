@@ -826,11 +826,10 @@ emulated. Slim constructs no V2 job board, alias authority, reusable-session
 admission, terminal gate, wall-clock watchdog, concurrency queue,
 orchestrator-wake scheduler, child-input wake, persistence/tombstone/delivery
 ledger, or structured-launch executor wrapper. `backgroundJobs.mode: "managed"`
-is rejected during V2 configuration; an unset mode resolves to `native`. The
-V1-only `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
-`stopConfirmationMs` settings are rejected when explicitly set on V2;
-`sameProviderPolicy` warns and is ignored because V2 subagents always run in
-background. The remaining native controls are exact-ID host reads:
+is applied as `native` with a warning. Inert managed settings are removed with
+warnings in the log and `doctor`. Positive `concurrency` and
+`wallClockTimeoutMs` limits are rejected with the file and full key because
+Slim cannot enforce them. The remaining native controls are exact-ID host reads:
 `task_status`, `task_cancel`,
 permission-only `task_reply`, and child `task_report`. OpenCode reports
 every settled child busy period — native `subagent(sessionID, prompt)` and

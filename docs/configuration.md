@@ -243,7 +243,7 @@ All config files support **JSONC** (JSON with Comments):
 Slim requires OpenCode 2.3.0 or newer. See the [upgrade guide](v2-native-upgrade.md)
 for configuration changes.
 
-Every optional subsystem has one switch, all defaulting to on. A
+Optional subsystems can be disabled independently. This
 council-and-observer-only setup turns off the rest:
 
 ```jsonc
@@ -256,7 +256,6 @@ council-and-observer-only setup turns off the rest:
   "liveConfigRefresh": false,
   "fallback": { "enabled": false },
   "webfetch": { "enabled": false },
-  "multiplexer": { "type": "none" },
   "companion": { "enabled": false },
   // Keep council + observer; enable observer by naming only the other
   // built-ins here, then set a vision-capable model for it.
@@ -268,26 +267,41 @@ council-and-observer-only setup turns off the rest:
     "councillor": { "skills": [] }
   },
   "disabled_mcps": ["context7", "gh_grep"],
-  "disabled_commands": ["interview", "implement", "deepwork", "reflect"],
+  "disabled_commands": ["deepwork", "reflect"],
   "disabled_hooks": [
     "phase-reminder", "foreground-fallback", "deepwork-goal",
     "cache-monitor", "json-error-recovery", "tool-loop-guard",
     "search-path-guard", "absolute-path-rescue", "apply-patch"
   ],
-  "disabled_tools": [
-    "ast_grep_search", "ast_grep_replace", "acp_run",
-    "marketplace_inspect", "marketplace_manage",
-    "task_cancel", "task_message", "task_status", "task_reply"
-  ]
+  "disabled_tools": ["ast_grep_search", "ast_grep_replace", "acp_run"]
 }
 ```
+
+### Implied switches
+
+In a resolved configuration, these switches make the listed entries redundant:
+
+| Existing switch | Entries you can omit |
+| --- | --- |
+| `tui: false` | `sidebar: false`, `disabled_commands` entries `killall` and `subagent`, and pane settings under `multiplexer` |
+| `interview.enabled: false` | `disabled_commands` entries `interview` and `implement`, and `disabled_tools` entry `interview_submit_state` |
+| `marketplace.enabled: false` | `disabled_tools` entries `marketplace_inspect` and `marketplace_manage` |
+| `backgroundJobs.mode: "off"` | Slim task-tool entries in `disabled_tools`, including `task_status`, `task_cancel`, `task_reply` and `task_report` |
+| `autoUpdate: false` | `disabled_hooks` entry `auto-update-checker` |
+| `webfetch.enabled: false` | `disabled_tools` entry `webfetch` |
+| `disabled_skills: ["reflect"]` | `disabled_commands` entry `reflect` |
+
+These implications are one-way. Keep granular disables when a subsystem stays
+enabled, or as a veto against re-enablement in a nearer configuration layer.
+
+For a cold fallback disable, use `disabled_hooks: ["foreground-fallback"]`:
+`fallback.enabled: false` retains V2 retry bookkeeping for live session profiles.
 
 `tui: false` gates the whole OMOS TUI surface: the client entry skips loading
 the TUI render stack and the server stops writing sidebar state. The
 server-side council, observer, agents, hooks, and tools keep working. Use
 `sidebar: false` instead when you want the remaining TUI surface without the
-sidebar. `interview.enabled: false` also disables `/implement`, because
-`/implement` feeds the same interview flow.
+sidebar.
 
 A disabled subsystem is not constructed at all: no tools, listeners, timers,
 state files, or servers. On OpenCode v2, native delegation, completion delivery,
@@ -305,8 +319,10 @@ call, and does not bind session-level presets. Delegated children use the
 models, variants, temperature and provider options from the registered agent
 configuration (the `preset` default still selects those at startup). Session
 `/preset` bindings and the related RPC are unavailable in this mode; the
-manager keeps global editing and hides session-only actions. `/preset <name>`
-reports that session routing is disabled. See
+manager keeps global editing and hides session-only actions. Disable the
+`preset` command separately to remove that editor. With `tui: false` as well,
+neither preset command surface is registered. `/preset <name>` reports that
+session routing is disabled. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
@@ -415,9 +431,13 @@ an MCP tool remains authoritative.
 These keys were removed. A config file that still contains one keeps loading:
 the key is dropped before validation and a warning names it, for example
 `Config key "fallback.timeoutMs" was removed in this version and is ignored;
-see docs/configuration.md`. Values are **not** migrated (the one exception is
-`backgroundJobs.enabled: false`, still applied as `mode: "off"`), so set the
-replacement yourself where one exists.
+see docs/configuration.md`. The exceptions are `backgroundJobs.enabled: false`,
+applied as `mode: "off"`, and `backgroundJobs.mode: "managed"`, applied as
+`"native"` in the same layer. Other values are not migrated.
+
+On V2, positive concurrency or wall-clock limits are rejected instead of
+removed. The error identifies the file, key and value; Slim cannot enforce
+those limits.
 
 | Removed key | Use instead |
 |-------------|-------------|
@@ -426,7 +446,17 @@ replacement yourself where one exists.
 | `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
 | `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
 | `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
-| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → host default (`"managed"` on V1, `"native"` on V2), `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
+| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → host default, `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
+| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning; use `"off"` to disable Slim task tools and session presets. |
+| `backgroundJobs.maxSessionsPerAgent` | None; Slim no longer retains a reusable-session pool. |
+| `backgroundJobs.stopConfirmationMs` | None; the managed terminal gate was removed. |
+| `backgroundJobs.wallClockTimeoutMs` | None; positive values are rejected on V2. |
+| `backgroundJobs.concurrency` | None; positive default, provider or model limits are rejected on V2. |
+| `backgroundJobs.sameProviderPolicy` | None; V2 subagents run in the background. |
+| `backgroundJobs.waitForUserGuard` | None; the managed guard was removed. |
+| `backgroundJobs.childInputWake` | None; the managed wake was removed. |
+| `backgroundJobs.childInputWakeKinds` | None; the managed wake was removed. |
+| `backgroundJobs.pruneEvictedSessions` | None; Slim no longer prunes managed sessions. |
 | `backgroundJobs.continueOnIdle`, `backgroundJobs.orchestratorWake` | OpenCode delivers native subagent completions. The periodic idle reminder was removed. |
 | `backgroundJobs.maxContextLines` | None; reusability is state-based (terminal, reconciled, status-certain). See [Background Job Management](#background-job-management) |
 | `backgroundJobs.readContextMinLines` | None; the per-session read-context list is path-only with an internal display cap |

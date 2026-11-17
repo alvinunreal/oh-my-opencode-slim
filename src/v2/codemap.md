@@ -91,6 +91,9 @@ child switches and continues in place; OpenCode 2.3+ reports each settled period
 to the parent. The host remains the sole owner of child completion delivery.
 The client shim treats `idle` and
 `model-switched` markers as system entries when inspecting child results.
+It also exposes the same native `get`/`synthetic` session domain to
+`task_report`, which skips the V1 prompt adapter and records its synthetic
+message ID through the existing internal-admission tracker before admission.
 Interview receives `session.text.*` with `assistantMessageID`; its v2 bridge is
 the only Interview owner on this host. Event payload extraction is shared, but
 recovery/permission/profile owners remain distinct. One native-event batch

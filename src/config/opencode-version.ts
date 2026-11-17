@@ -1,12 +1,20 @@
-import { gte, valid } from 'semver';
+import { stripVTControlCharacters } from 'node:util';
+import { gte, major, valid } from 'semver';
 
 export const MINIMUM_OPENCODE_VERSION = '2.3.0';
 
 export function parseOpenCodeVersion(output: string): string | null {
-  return valid(output.trim().replace(/^opencode\s+/i, ''));
+  return valid(
+    stripVTControlCharacters(output)
+      .trim()
+      .replace(/^opencode\s+/i, ''),
+  );
 }
 
-export function isSupportedOpenCodeVersion(output: string): boolean {
+export function classifyOpenCodeVersion(
+  output: string,
+): 'supported' | 'unsupported' | 'unknown' {
   const version = parseOpenCodeVersion(output);
-  return version !== null && gte(version, MINIMUM_OPENCODE_VERSION);
+  if (!version || major(version) === 0) return 'unknown';
+  return gte(version, MINIMUM_OPENCODE_VERSION) ? 'supported' : 'unsupported';
 }
