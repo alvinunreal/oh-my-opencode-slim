@@ -850,6 +850,8 @@ export const DISABLED_COMMANDS_VALUES = [
   'deepwork',
   'reflect',
   'preset',
+  'preset-status',
+  'preset-default',
   'killall',
   'subagent',
 ] as const;
@@ -892,7 +894,7 @@ const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when oh-my-opencode-slim.json(c) changes on disk. When false, v2 does not watch config files and file edits apply only after a restart; explicit /preset writes still refresh the current generation where applicable. Defaults to true.',
+        'v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when oh-my-opencode-slim.json(c) changes on disk. When false, v2 does not watch config files and file edits apply only after a restart; explicit /preset-default writes still refresh the current generation. Defaults to true.',
       ),
     stripOrchestratorModel: z
       .boolean()
@@ -967,7 +969,7 @@ const RawPluginConfigSchema = z
       .describe(
         'Slash-command names to disable completely. Valid values: ' +
           DISABLED_COMMANDS_VALUES.join(', ') +
-          '. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when "reflect" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Disabling "preset" disables the whole preset command group and its UI/RPC controls; "preset-status" and "preset-default" can each be disabled independently. The /reflect command is also disabled when "reflect" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     // Multiplexer config
     multiplexer: MultiplexerConfigSchema.optional(),

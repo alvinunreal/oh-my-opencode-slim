@@ -218,7 +218,7 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 ```
 
 Presets can inherit from one base preset with `extends`: a `design` preset can
-extend `base` and override only its designer model. On v2, `/preset` lets you
+extend `base` and override only its designer model. In the v2 TUI, `/preset` lets you
 apply subagent inference settings to **Current session** or change the
 **Global default**.
 `/preset <name>` applies the preset to the session you are
@@ -231,6 +231,10 @@ adopts the parent's updated inference settings while retaining its ID and
 history. This is best-effort: a failed continuation can leave the native
 model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
+In the paired Web app and Desktop, use `/preset <name>` for the current
+session, `/preset-default <name>` for the global default, and
+`/preset-status` to inspect the binding and default sources. These server
+commands run without a model turn; the interactive manager remains in the TUI.
 The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job

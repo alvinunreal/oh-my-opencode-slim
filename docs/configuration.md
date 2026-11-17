@@ -321,7 +321,7 @@ and [Council](council.md) for what remains.
 | `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes. `tui: false` implies this off. |
 | `sidebarShowHiddenAgents` | boolean | `false` | Render internal Council agents (`council`, `councillor`, and the dynamic `councillor-<seat>` agents) as OMOS TUI sidebar rows. When `true`, each row carries the same model, variant, status dot, and session expansion as any other agent. Affects the sidebar only: agent registration, availability, and the host agent picker are unchanged. |
 | `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar and its server-side state, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack, and the server writes no sidebar state; server-side agents, council, observer, hooks, and tools remain active. |
-| `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
+| `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; `/preset-default <name>` still explicitly refreshes the current generation's runtime profiles |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
 | `routingBlock` | boolean | `true` | When false, removes the `<Agents>` routing block from the built-in orchestrator prompt. The host's native delegation-tool roster still lists every enabled agent with its one-line description, but it carries no Delegate/Don't routing criteria — the block's routing guidance (~300 tokens) has no roster equivalent, so `false` trades routing quality for tokens, or drops stock routing claims that drift against custom agent prompts (`agents.<name>.prompt`). Applies on v1 and v2 hosts. No effect when an orchestrator.md override already replaces the whole prompt. |
 | `presets` | object | - | Named preset configurations. New preset names are limited to letters, digits, `-`, and `_`; `__omo_*` and JavaScript reserved property names (`__proto__`, `constructor`, `prototype`) are rejected for new presets (pre-existing entries with other names stay visible and applicable) |
@@ -376,7 +376,7 @@ and [Council](council.md) for what remains.
 | `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
 | `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. Either `auto-update-checker` here or `autoUpdate: false` turns the whole update feature off (check, notice, install); the hook entry also keeps the hook off if the feature switch is later re-enabled. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
-| `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
+| `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `preset-status`, `preset-default`, `killall`, `subagent`. Disabling `preset` also removes `/preset-status` and `/preset-default`; each can be disabled separately. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
 | `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not loaded or registered and OpenCode's built-in is used. Listing `webfetch` in `disabled_tools` has the same cold behavior without changing the feature config. See [Webfetch](webfetch.md) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
 | `fallback.maxRetries` | integer | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches. Recovery re-arms it: a completed successful assistant response on v1, or a raw `session.step.ended` with `finish` `stop`, `tool-calls` or `length`, or `session.execution.succeeded` on v2. A confirmed new v1 user turn, an observed return to the configured primary outside our committed fallback for a fresh descent, or session deletion also re-arms it. A new v2 user turn alone does not reset the budget; an explicit model change is recorded so returning to the configured primary can re-arm the descent. Landing on the configured head through a committed fallback does not re-arm this budget, including for inherit+chain agents. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
@@ -455,7 +455,7 @@ config file invalid.
 
 ### Runtime Preset Switching
 
-On v2, `/preset` opens a manager with two application scopes:
+In the v2 TUI, `/preset` opens a manager with two application scopes:
 
 - **Current session** saves that session's subagent inference configuration
   without changing the configuration file's selected preset. It affects
@@ -467,6 +467,16 @@ On v2, `/preset` opens a manager with two application scopes:
   to project and environment overrides.
   `/preset <name>` does not touch it: the command applies the preset to the
   session it runs in, like the manager's Current session action.
+
+The paired Web app and Desktop use `/preset <name>` for the current session
+and `/preset-default <name>` for the global default. `/preset-status` reports
+the binding, explicit/default-derived selection and default sources;
+default-derived roots refresh on their next admission. Bare `/preset-default`
+only lists the defaults and choices. A default write uses the
+TUI manager's project/environment conflict checks and explicitly refreshes the
+runtime profiles, including when `liveConfigRefresh` is disabled. Feedback
+distinguishes a saved configuration from a refresh failure. All three server
+commands avoid model turns; preset creation and editing stay in the TUI.
 
 Each work session binds its resolved inference settings before its first
 managed prompt. New children inherit their direct parent's snapshot,
@@ -1252,7 +1262,7 @@ Disable built-in commands via `disabled_commands`:
 { "disabled_commands": ["interview", "deepwork"] }
 ```
 
-Available commands: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. `/killall` and `/subagent` are TUI commands; `tui: false` removes the whole TUI surface, while `disabled_commands` removes only the named command.
+Available commands: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `preset-status`, `preset-default`, `killall`, `subagent`. Disabling `preset` also removes `/preset-status` and `/preset-default`; disable either name separately to keep the other preset commands. All three server preset commands are absent with `backgroundJobs.mode: "off"`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. `/killall` and `/subagent` are TUI commands; `tui: false` removes the whole TUI surface while server commands remain available.
 
 Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies — it is not an explicit empty override.
 

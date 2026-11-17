@@ -24,6 +24,7 @@ import {
   mergePluginConfigs,
 } from '../config/loader';
 import { mergePresetMaps, resolvePresetDefinition } from '../config/presets';
+import type { PluginConfigSnapshot } from '../config/snapshot';
 import {
   isPrototypeSensitiveName,
   ownPresetValue,
@@ -92,6 +93,8 @@ export interface PresetSelectionState {
   global?: string;
   projectAvailable: string[];
   globalAvailable: string[];
+  /** Snapshot-backed only: runtime-interpolated declarations before inheritance resolution. */
+  rawDefinitions?: PresetMap;
 }
 
 type PersistPresetResult = { ok: true } | { ok: false; message: string };
@@ -270,30 +273,68 @@ export function switchPresetOnDisk(
 export function getPresetSelectionState(
   directory: string,
   hostFlavor?: string,
+  snapshot?: PluginConfigSnapshot,
 ): PresetSelectionState {
-  const userConfig = readUserConfig(directory);
+  // Command callers already read the runtime snapshot. Reject file-level
+  // fallback instead of reporting guessed defaults.
+  const failure = snapshot?.warnings.find(
+    ({ kind, presetName }) =>
+      kind === 'invalid-json' ||
+      (kind === 'invalid-schema' && presetName === undefined) ||
+      kind === 'read-error',
+  );
+  if (failure) {
+    throw new Error(`${failure.path}: ${failure.message}`);
+  }
+  const userConfig = snapshot
+    ? snapshot.paths.userConfigPath
+      ? loadRawPluginConfigFromPath(snapshot.paths.userConfigPath, {
+          hostFlavor,
+          silent: true,
+        })
+      : null
+    : readUserConfig(directory);
+  const userPresets = userConfig?.presets;
   const projectConfig = readProjectConfig(directory, hostFlavor);
   const globalPreset =
-    typeof userConfig?.preset === 'string' &&
-    interpolateConfigEnvironment(userConfig.preset).trim()
-      ? interpolateConfigEnvironment(userConfig.preset).trim()
+    typeof userConfig?.preset === 'string'
+      ? (snapshot
+          ? userConfig.preset.trim()
+          : interpolateConfigEnvironment(userConfig.preset).trim()) || undefined
       : undefined;
   const projectPreset =
-    typeof projectConfig?.preset === 'string' && projectConfig.preset.trim()
-      ? projectConfig.preset.trim()
+    typeof projectConfig?.preset === 'string'
+      ? projectConfig.preset.trim() || (snapshot ? '' : undefined)
       : undefined;
   const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET?.trim() || undefined;
 
   return {
-    effective: envPreset ?? projectPreset ?? globalPreset,
+    effective: snapshot
+      ? snapshot.config.preset
+      : (envPreset ?? projectPreset ?? globalPreset),
     project: projectPreset,
     global: globalPreset,
+    ...(snapshot
+      ? {
+          rawDefinitions:
+            mergePresetMaps(
+              userPresets as RawPluginConfig['presets'],
+              projectConfig?.presets as RawPluginConfig['presets'],
+            ) ?? {},
+        }
+      : {}),
     projectAvailable: Object.keys(
-      getAllConfiguredPresets(directory, hostFlavor),
+      snapshot
+        ? (snapshot.config.presets ?? {})
+        : getAllConfiguredPresets(directory, hostFlavor),
     ).sort((a, b) => a.localeCompare(b)),
-    globalAvailable: Object.keys(readUserPresets(directory)).sort((a, b) =>
-      a.localeCompare(b),
-    ),
+    globalAvailable: Object.keys(
+      userPresets &&
+        typeof userPresets === 'object' &&
+        !Array.isArray(userPresets)
+        ? userPresets
+        : {},
+    ).sort((a, b) => a.localeCompare(b)),
   };
 }
 

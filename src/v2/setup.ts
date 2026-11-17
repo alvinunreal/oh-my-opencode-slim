@@ -109,7 +109,14 @@ import {
   recordInternalAdmission,
 } from './internal-admissions';
 import type { V2InterviewBridge } from './interview-bridge';
-import { createPresetCommand, PRESET_COMMAND_NAME } from './preset-command';
+import {
+  createPresetCommand,
+  createPresetDefaultCommand,
+  createPresetStatusCommand,
+  PRESET_COMMAND_NAME,
+  PRESET_DEFAULT_COMMAND_NAME,
+  PRESET_STATUS_COMMAND_NAME,
+} from './preset-command';
 import { sessionPresetRpc } from './preset-rpc';
 import {
   applyRuntimeProfileOptions,
@@ -3114,6 +3121,41 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                   presets.readState(sessionID),
               }),
             );
+            if (
+              isCommandEnabled(PRESET_STATUS_COMMAND_NAME, { disabledCommands })
+            ) {
+              draft.add(
+                createPresetStatusCommand({
+                  directory,
+                  readSessionPreset: (sessionID) =>
+                    presets.readState(sessionID),
+                }),
+              );
+            }
+            if (
+              isCommandEnabled(PRESET_DEFAULT_COMMAND_NAME, {
+                disabledCommands,
+              })
+            ) {
+              draft.add(
+                createPresetDefaultCommand({
+                  directory,
+                  refreshDefault: async () => {
+                    const configSnapshot = readPluginConfigSnapshot(directory, {
+                      hostFlavor: 'v2',
+                      fresh: true,
+                    });
+                    const result = await refreshProfiles({ configSnapshot });
+                    if (!result.ok) return result;
+                    currentProfiles = reconcileRuntimeProfileOptionKeys(
+                      currentProfiles,
+                      result.profiles,
+                    );
+                    return { ok: true };
+                  },
+                }),
+              );
+            }
           });
           disposers.push(() => reg.dispose());
         }

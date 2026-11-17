@@ -1,7 +1,8 @@
 # Preset Switching
 
-Use `/preset` to choose a session's subagent inference configuration or change
-the default for future sessions.
+Use `/preset <name>` to choose a session's subagent inference configuration,
+`/preset-default <name>` to change the global default, and `/preset-status`
+to inspect both. The TUI also provides an interactive manager.
 
 ## Controls
 
@@ -14,7 +15,7 @@ the built-in `/models`, so it triggers no LLM turn.
 | 2. Agent arrangement | Choose a Base preset, add / remove / edit local agents, then Save (or Save & Apply) |
 | 3. Edit agent | Pick model → variant (thinking strength) → temperature → options (JSON) |
 
-> `/preset` is a TUI-only slash command (like `/models`). On v1 hosts invoke
+> The interactive `/preset` manager is TUI-only (like `/models`). On v1 hosts invoke
 > it via autocomplete selection or a keybind — typing `/preset` + Enter does
 > not open the manager (same design as `/models`), and it takes no name
 > argument.
@@ -25,22 +26,47 @@ the built-in `/models`, so it triggers no LLM turn.
 > `/preset <name>` is the fast path for the first choice: it binds the preset
 > to the session on screen, so it is equivalent to Manager → Current session
 > without the dialogs. It never writes the global default.
->
-> Non-TUI clients (OpenChamber, SDK consumers, ACP hosts) get a server-side
-> `/preset <name>` command with the same meaning. No argument lists the
-> available presets; a name binds the invoking session; an unknown name reports
-> the valid options. It is apply-only — create, edit and delete stay in the TUI
-> manager — and the client reports the result without a model turn, so no turn
-> or context is spent and the binding applies to that session's next
-> delegation. Listing `preset` in `disabled_commands` removes both the TUI
-> entry and the server command.
+
+### Web and Desktop commands
+
+The paired Web app, Desktop and other non-TUI clients use server commands.
+The user configuration belongs to the OpenCode server running the session:
+
+| Command | Result |
+|---------|--------|
+| `/preset` | List available presets, the session binding and default sources |
+| `/preset <name>` | Apply the preset to the invoking session |
+| `/preset-status` | Read the session binding, selection mode, global default and effective project default |
+| `/preset-default` | List presets and show the global and effective defaults |
+| `/preset-default <name>` | Save the global default using the same writer as the TUI manager |
+
+These commands run without a model turn or a message entering the conversation.
+Clients display their feedback through the command-error surface, including
+successful operations; read the feedback text for the result.
+Create, edit and delete remain in the TUI manager.
+
+`/preset-status` distinguishes an unbound session and explicit/default-derived
+bindings. Default-derived roots refresh on their next admission. A saved team
+without a preset name is still bound.
+Status reads leave the binding and configuration unchanged. A binding read
+failure is reported as unreadable, rather than inferred from the default.
+
+`/preset-default <name>` writes the user configuration, leaving session bindings
+and project configuration unchanged. A conflicting project or environment
+selection refuses the change with an explanation, including a project that
+explicitly selects no named preset.
+The result distinguishes a completed save from a failed runtime refresh.
+
+Listing `preset` in `disabled_commands` removes the TUI entry, session-preset RPC
+and all three server commands. `preset-status` and `preset-default` can also be
+disabled individually.
 
 To choose a preset for new work, open a new session and run
 `/preset <name>` in it.
 
 > **`backgroundJobs.mode: "off"` disables session bindings.** Session bindings
 > remain available in the V2 `native` default; `off` leaves
-> native delegation untouched: no session `/preset` command, RPC, or child
+> native delegation untouched: no server preset commands, session-preset RPC, or child
 > snapshot. Children use the registered agent configuration, and the `preset`
 > global default still selects those settings at startup.
 
@@ -82,6 +108,7 @@ named-preset bindings stay pinned until explicitly reapplied.
 | Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New children and explicit same-agent continuations of bound children |
 | `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New children and explicit same-agent continuations of bound children |
 | Manager → Global default | The selected preset in the user configuration | Unbound sessions and default-bound roots on their next admission, subject to project and environment overrides |
+| `/preset-default <name>` | The same global-default selection in the user configuration | Unbound sessions and default-bound roots on their next admission; explicit bindings stay fixed |
 | Edit the user configuration's `preset` | The global default | Future bindings and default-bound roots on their next admission |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project and default-bound roots on their next admission |
 | Edit a preset definition or its `extends` base; manager → Save | The shared preset definition | Future bindings and default-bound roots on their next admission, or a named-preset session that explicitly reapplies it |
@@ -168,12 +195,13 @@ contract, so every v2 host can apply a session-only preset; the runtime probe
 remains as a guard, and a host that genuinely omitted them fails the apply with
 explicit errors instead of silently writing the default.
 
-User and project configuration files are still watched, including `.json`
-and `.jsonc` candidates created after startup. A successful configuration
-write requests refresh; it does not acknowledge the separate server-side
-watcher's completion. Invalid configuration preserves the last-known-good
-defaults. Fix the configuration before retrying the refresh or applying it
-to a session.
+With `liveConfigRefresh` enabled, the server watches user and project files,
+including `.json` and `.jsonc` candidates created after startup. TUI/editor
+saves do not acknowledge the server watcher's completion. `/preset-default`
+instead waits for runtime profile refresh and reports its outcome separately
+from saving, even with the watcher disabled. Invalid configuration preserves
+the last-known-good defaults. Fix the configuration before retrying the refresh
+or applying it to a session.
 
 On v1, `/preset` retains its configuration-writing behavior. **Reload
 OpenCode** after applying a preset.

@@ -310,6 +310,8 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'deepwork',
         'reflect',
         'preset',
+        'preset-status',
+        'preset-default',
       ],
     });
 
@@ -325,6 +327,8 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'deepwork',
         'reflect',
         'preset',
+        'preset-status',
+        'preset-default',
       ]);
     }
   });
@@ -360,6 +364,8 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'deepwork',
       'reflect',
       'preset',
+      'preset-status',
+      'preset-default',
       'killall',
       'subagent',
     ]);
