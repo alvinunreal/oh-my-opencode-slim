@@ -22,24 +22,20 @@ type PathOperations = Pick<typeof path, 'isAbsolute' | 'join' | 'resolve'>;
 /**
  * Resolve a search path the same way as the corresponding host tool.
  *
- * v1's grep uses path.join while v1's glob uses path.resolve. The v2 tool
- * adapter uses path.resolve for both tools. `pathOperations` is injectable so
+ * The host uses path.resolve for both tools. `pathOperations` is injectable so
  * path flavor behavior can be tested deterministically without a Windows CI
  * runner; production uses Node's native path flavor, as does the host.
  */
 export function resolveSearchPath(
-  tool: string,
-  hostFlavor: string | undefined,
   directory: string | undefined,
   raw: string,
   pathOperations: PathOperations = path,
 ): string | null {
   if (!directory) return null;
   if (
-    hostFlavor === 'v2' &&
-    (raw === '~' ||
-      raw.startsWith('~/') ||
-      (process.platform === 'win32' && raw.startsWith('~\\')))
+    raw === '~' ||
+    raw.startsWith('~/') ||
+    (process.platform === 'win32' && raw.startsWith('~\\'))
   ) {
     return pathOperations.resolve(
       directory,
@@ -47,15 +43,10 @@ export function resolveSearchPath(
     );
   }
   if (pathOperations.isAbsolute(raw)) return raw;
-  if (hostFlavor === 'v2' || tool === 'glob') {
-    return pathOperations.resolve(directory, raw);
-  }
-  return pathOperations.join(directory, raw);
+  return pathOperations.resolve(directory, raw);
 }
 
 export function createSearchPathGuardHook(ctx: PluginInput) {
-  const hostFlavor = (ctx as PluginInput & { hostFlavor?: string }).hostFlavor;
-
   return {
     'tool.execute.before': async (
       input: ToolExecuteBeforeInput,
@@ -70,28 +61,19 @@ export function createSearchPathGuardHook(ctx: PluginInput) {
         return;
       }
 
-      // Only v2 glob treats the literal placeholders as an absent path.
+      // Glob treats the literal placeholders as an absent path.
       const raw = args.path;
       if (
         typeof raw !== 'string' ||
         raw === '' ||
-        (hostFlavor === 'v2' &&
-          input.tool === 'glob' &&
-          (raw === 'undefined' || raw === 'null'))
+        (input.tool === 'glob' && (raw === 'undefined' || raw === 'null'))
       ) {
         return;
       }
 
-      // Mirror each host tool's resolution rule exactly. grep uses join while
-      // glob uses resolve; that distinction matters for relative paths on
-      // Windows, including drive-relative paths such as `C:src`.
+      // Mirror the host's resolution rule, including drive-relative paths.
       // Without a resolution base, never block (conservative fallback).
-      const resolved = resolveSearchPath(
-        input.tool,
-        hostFlavor,
-        ctx.directory,
-        raw,
-      );
+      const resolved = resolveSearchPath(ctx.directory, raw);
       if (resolved === null) {
         return;
       }

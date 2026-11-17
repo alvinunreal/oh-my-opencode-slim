@@ -37,9 +37,9 @@ function hasLiveInstance(directory: string): boolean {
   return (liveDirectories().get(directory) ?? 0) > 0;
 }
 
-/** True while at least one plugin instance (any location) is live. */
-export function hasLiveInstances(): boolean {
-  return liveDirectories().size > 0;
+/** @public Test seam: count directories with active claims. */
+export function liveDirectoryCountForTests(): number {
+  return liveDirectories().size;
 }
 
 /** Test seam: forget every live-directory claim. */

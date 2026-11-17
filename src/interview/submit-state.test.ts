@@ -3,12 +3,19 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { InterviewConfigSchema } from '../config/schema';
-import { normalizeAssistantState, parseAssistantState } from './parser';
+import { findLatestAssistantState, normalizeAssistantState } from './parser';
 import type { InterviewSessionRuntime } from './runtime';
 import { createInterviewService } from './service';
 import type { InterviewMessage, InterviewState } from './types';
 
 const tempDirs: string[] = [];
+
+function parseStateFromAssistantText(text: string, maxQuestions?: number) {
+  return findLatestAssistantState(
+    [{ info: { role: 'assistant' }, parts: [{ type: 'text', text }] }],
+    maxQuestions,
+  );
+}
 
 afterEach(async () => {
   while (tempDirs.length > 0) {
@@ -117,7 +124,7 @@ describe('interview submitState (tool path)', () => {
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/duplicate/i);
     expect(
-      parseAssistantState(blockText(JSON.stringify(raw))).state,
+      parseStateFromAssistantText(blockText(JSON.stringify(raw))).state,
     ).toBeNull();
   });
 
@@ -171,7 +178,7 @@ describe('interview submitState (tool path)', () => {
     );
     expect(result.ok).toBe(true);
 
-    const parserOutput = parseAssistantState(
+    const parserOutput = parseStateFromAssistantText(
       blockText(JSON.stringify(raw)),
       2,
     ).state;
@@ -289,43 +296,22 @@ describe('interview submitState (tool path)', () => {
   });
 });
 
-describe('interview text.complete fallback', () => {
-  test('applies a valid block and removes it from the returned text', async () => {
+describe('interview submitted state', () => {
+  test('applies a valid state', async () => {
     const harness = await createHarness();
     const interviewId = await startInterview(harness);
-
-    const text = blockText(
-      JSON.stringify({
-        summary: 'Fallback draft',
-        questions: [{ id: 'q-1', question: 'What?' }],
-      }),
-    );
-    const result = await harness.service.completeInterviewText(
-      'ses-submit',
-      text,
-    );
-
-    expect(result).not.toContain('<interview_state>');
-    expect(result).not.toContain('"summary"');
-
+    await harness.service.submitState('ses-submit', {
+      summary: 'Fallback draft',
+      questions: [{ id: 'q-1', question: 'What?' }],
+    });
     const state = await harness.service.getInterviewState(interviewId);
     expect(state.document).toContain('Fallback draft');
     expect(state.questions).toHaveLength(1);
-    // A stripped block should not create a missing-block error.
     expect(state.lastParseError).toBeUndefined();
     expect(state.mode).toBe('awaiting-user');
   });
 
-  test('leaves malformed text unchanged', async () => {
-    const harness = await createHarness();
-    await startInterview(harness);
-    const text = blockText('{not valid json');
-    expect(
-      await harness.service.completeInterviewText('ses-submit', text),
-    ).toBe(text);
-  });
-
-  test('keeps the accepted state and questions after a text patch failure', async () => {
+  test('keeps the accepted state and questions after a patch failure', async () => {
     const harness = await createHarness();
     const interviewId = await startInterview(harness);
     await harness.service.submitState('ses-submit', {
@@ -344,41 +330,15 @@ describe('interview text.complete fallback', () => {
         properties: { sessionID: 'ses-submit', status: { type: 'busy' } },
       },
     });
-    const text = blockText(
-      JSON.stringify({
-        summary: 'Rejected text spec',
-        patch: 'not a unified diff',
-        questions: [{ id: 'q-2', question: 'Do not keep this?' }],
-      }),
-    );
-
-    await harness.service.completeInterviewText('ses-submit', text);
+    await harness.service.submitState('ses-submit', {
+      summary: 'Rejected text spec',
+      patch: 'not a unified diff',
+      questions: [{ id: 'q-2', question: 'Do not keep this?' }],
+    });
     const state = await harness.service.getInterviewState(interviewId);
     expect(state.mode).toBe('error');
     expect(state.document).toContain('Accepted text spec');
     expect(state.questions.map((question) => question.id)).toEqual(['q-1']);
-  });
-
-  test('leaves non-interview text unchanged', async () => {
-    const harness = await createHarness();
-    const text = blockText('{"summary":"x","questions":[]}');
-    expect(
-      await harness.service.completeInterviewText('other-session', text),
-    ).toBe(text);
-  });
-
-  test('leaves text unchanged in printState mode', async () => {
-    const harness = await createHarness({
-      maxQuestions: 2,
-      outputFolder: 'interview',
-      autoOpenBrowser: false,
-      printState: true,
-    });
-    await startInterview(harness);
-    const text = blockText('{"summary":"printState","questions":[]}');
-    expect(
-      await harness.service.completeInterviewText('ses-submit', text),
-    ).toBe(text);
   });
 });
 
@@ -876,7 +836,7 @@ describe('interview remembered/tool state scoping', () => {
     expect(state.questions.map((question) => question.id)).toEqual(['q-tool']);
   });
 
-  test('text.complete skips a block printed in the tool-applied message', async () => {
+  test('tool-applied state remains authoritative', async () => {
     const harness = await createHarness();
     const interviewId = await startInterview(harness);
 
@@ -888,19 +848,20 @@ describe('interview remembered/tool state scoping', () => {
       },
       'msg-1',
     );
-
-    const text = blockText(
-      JSON.stringify({
-        summary: 'Printed block',
-        questions: [{ id: 'q-text', question: 'Text?' }],
-      }),
-    );
-    const stripped = await harness.service.completeInterviewText(
-      'ses-submit',
-      text,
-      'msg-1',
-    );
-    expect(stripped).not.toContain('<interview_state>');
+    harness.messages.push({
+      info: { role: 'assistant', id: 'msg-1' },
+      parts: [
+        {
+          type: 'text',
+          text: blockText(
+            JSON.stringify({
+              summary: 'Printed block',
+              questions: [{ id: 'q-text', question: 'Text?' }],
+            }),
+          ),
+        },
+      ],
+    });
 
     const state = await harness.service.getInterviewState(interviewId);
     expect(state.document).toContain('Tool state');

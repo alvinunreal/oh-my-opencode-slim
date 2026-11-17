@@ -219,7 +219,7 @@ export function normalizeAssistantState(
   return { summary, patch, title, questions };
 }
 
-export function parseAssistantState(
+function parseAssistantState(
   text: string,
   maxQuestions = 2,
 ): {

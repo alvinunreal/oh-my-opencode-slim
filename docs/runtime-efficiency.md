@@ -2,8 +2,8 @@
 
 Slim keeps the same features and enabled defaults while avoiding repeated work.
 Feature switches stay independent: disabling the sidebar does not remove pane
-management, and disabling managed jobs does not remove native subagents, council
-or observer.
+management, and disabling background task controls does not remove native
+subagents, council or observer.
 
 ## Configuration reads
 
@@ -46,13 +46,8 @@ The server entry keeps shared coordination in small leaf modules. Optional
 implementations load inside their existing activation gates instead of through
 hook, tool or utility barrels:
 
-- `backgroundJobs.mode: "managed"` (V1 only) loads the board, supervisor,
-  admission state, recovery and managed tools. `"native"` (the V2 default) loads
-  only the thin host-read controls and, on V2, the child report; `"off"`
-  loads neither implementation. On V2 the managed gates are structurally false,
-  so the board, persistence, recovery, adoption and wake modules are never
-  resolved, independent of configuration. The v1 wake scheduler is separate from
-  the pure message helpers used on both hosts.
+- `backgroundJobs.mode: "native"` loads thin host-read controls and the child
+  report; `"off"` loads neither implementation.
 - `autoUpdate: false` or the disabled `auto-update-checker` hook skips loading
   the v1 update implementation. On v2 the v1 server updater is never loaded
   (it cannot install there and its toast is a shim no-op); the host owns
@@ -92,9 +87,8 @@ usage advice advertising it. User-authored prompt overrides remain untouched.
 
 ## State and events
 
-Board lookup and boolean predicates do not sort; ordered history still does.
-TUI projection reads one board view, and native event batches coalesce recorder
-writes and projection work into one locked commit. Cross-process locks, atomic
+Native event batches coalesce recorder writes and projection work into one
+locked commit. Cross-process locks, atomic
 publication, retries and per-owner disposal remain in place.
 
 The v2 event subscription freezes the union required by enabled consumers.

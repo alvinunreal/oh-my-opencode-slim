@@ -4,11 +4,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isUserMessageWithParts } from '../hooks/types';
-import { classifyTerminalEvidence } from '../utils/child-transcript';
-import {
-  createInternalAgentTextPart,
-  TERMINAL_DELTA_METADATA_KEY,
-} from '../utils/internal-initiator';
+import { readUntrackedEvidence } from '../tools/untracked-task-observation';
+import { createInternalAgentTextPart } from '../utils/internal-initiator';
 import { buildPluginInput } from './client-shim';
 import type { V2Context } from './types';
 
@@ -324,99 +321,6 @@ describe('v2 client shim delegation', () => {
     expect(res.data).toHaveLength(1);
   });
 
-  test('compacted transcript restores ordered persisted history across pages', async () => {
-    const calls: unknown[] = [];
-    const input = buildPluginInput(
-      makeCtx({
-        context: async () => [
-          { id: 'compact', type: 'compaction', status: 'completed' },
-          { id: 'answer', type: 'assistant' },
-        ],
-        messages: async (args) => {
-          calls.push(args);
-          return args.cursor
-            ? {
-                data: [{ id: 'baseline', type: 'user' }],
-                cursor: { next: 'even-older' },
-              }
-            : {
-                data: [
-                  { id: 'answer', type: 'assistant' },
-                  { id: 'compact', type: 'compaction', status: 'completed' },
-                ],
-                cursor: { next: 'older' },
-              };
-        },
-      }),
-    );
-    const result = await (
-      input.client as {
-        session: { messages: (args: unknown) => Promise<unknown> };
-      }
-    ).session.messages({
-      path: { id: 'ses_1' },
-      historyBoundary: 'baseline',
-    });
-    expect(result).toMatchObject({
-      data: [
-        { info: { id: 'baseline' } },
-        { info: { id: 'compact' } },
-        { info: { id: 'answer' } },
-      ],
-      page: { source: 'session.messages', complete: false },
-    });
-    expect(calls).toEqual([
-      { sessionID: 'ses_1', limit: 100, order: 'desc' },
-      { sessionID: 'ses_1', limit: 100, order: 'desc', cursor: 'older' },
-    ]);
-  });
-
-  test.each(['unavailable', 'malformed', 'repeated-cursor', 'empty'])(
-    'compacted history handles %s pages without trusting partial results',
-    async (scenario) => {
-      let calls = 0;
-      const input = buildPluginInput(
-        makeCtx({
-          context: async () => [
-            { id: 'compact', type: 'compaction', status: 'completed' },
-          ],
-          messages: async () => {
-            calls++;
-            if (calls === 1) {
-              return {
-                data: [{ id: 'answer', type: 'assistant' }],
-                cursor: { next: 'older' },
-              };
-            }
-            if (scenario === 'unavailable') throw new Error('history failed');
-            if (scenario === 'malformed') return { data: [null] };
-            return {
-              data: scenario === 'empty' ? [] : [{ id: 'old', type: 'user' }],
-              cursor: { next: 'older' },
-            };
-          },
-        }),
-      );
-      const pending = (
-        input.client as {
-          session: { messages: (args: unknown) => Promise<unknown> };
-        }
-      ).session.messages({
-        path: { id: 'ses_1' },
-        historyBoundary: 'baseline',
-      });
-      if (scenario === 'empty') {
-        expect(await pending).toMatchObject({
-          data: [{ info: { id: 'answer' } }],
-          page: { source: 'session.messages', complete: true },
-        });
-      } else {
-        await expect(pending).rejects.toThrow();
-      }
-      expect(calls).toBe(2);
-    },
-  );
-
   test('compacted context remains incomplete on hosts without persisted messages', async () => {
     const input = buildPluginInput(
       makeCtx({
@@ -432,136 +336,13 @@ describe('v2 client shim delegation', () => {
         }
       ).session.messages({
         path: { id: 'ses_1' },
-        historyBoundary: 'baseline',
       }),
     ).toMatchObject({
       page: { source: 'session.context', complete: false },
     });
   });
 
-  test.each(['missing', 'last-page', 'too-far', 'oversized'])(
-    'compacted history enforces its total page budget for %s boundaries',
-    async (scenario) => {
-      let calls = 0;
-      const input = buildPluginInput(
-        makeCtx({
-          context: async () => [
-            { id: 'compact', type: 'compaction', status: 'completed' },
-          ],
-          messages: async () => {
-            calls++;
-            const found =
-              (scenario === 'last-page' && calls === 10) ||
-              (scenario === 'too-far' && calls === 11);
-            return {
-              data:
-                scenario === 'oversized'
-                  ? Array.from({ length: 101 }, (_, i) => ({ id: `msg_${i}` }))
-                  : [{ id: found ? 'baseline' : `msg_${calls}`, type: 'user' }],
-              cursor: { next: `cursor_${calls}` },
-            };
-          },
-        }),
-      );
-      const pending = (
-        input.client as {
-          session: { messages: (args: unknown) => Promise<unknown> };
-        }
-      ).session.messages({
-        path: { id: 'ses_1' },
-        historyBoundary: 'baseline',
-      });
-      if (scenario === 'last-page') {
-        const result = (await pending) as { data: unknown[] };
-        expect(result.data[0]).toMatchObject({ info: { id: 'baseline' } });
-      } else {
-        await expect(pending).rejects.toThrow();
-      }
-      expect(calls).toBe(scenario === 'oversized' ? 1 : 10);
-    },
-  );
-
-  test('compacted history has one time budget shared across all pages', async () => {
-    let now = 0;
-    let calls = 0;
-    const clock = spyOn(performance, 'now').mockImplementation(() => now);
-    try {
-      const input = buildPluginInput(
-        makeCtx({
-          context: async () => [
-            { id: 'compact', type: 'compaction', status: 'completed' },
-          ],
-          messages: async () => {
-            calls++;
-            now += 2500;
-            return {
-              data: [{ id: calls === 2 ? 'baseline' : 'msg_1', type: 'user' }],
-              cursor: { next: `cursor_${calls}` },
-            };
-          },
-        }),
-      );
-      await expect(
-        (
-          input.client as {
-            session: { messages: (args: unknown) => Promise<unknown> };
-          }
-        ).session.messages({
-          path: { id: 'ses_1' },
-          historyBoundary: 'baseline',
-        }),
-      ).rejects.toThrow('history read budget exceeded');
-      expect(calls).toBe(2);
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  test('a held history page times out and cannot resume scanning when it resolves', async () => {
-    let calls = 0;
-    let release!: (page: unknown) => void;
-    try {
-      const input = buildPluginInput(
-        makeCtx({
-          context: async () => [
-            { id: 'compact', type: 'compaction', status: 'completed' },
-          ],
-          messages: async () => {
-            calls++;
-            return new Promise((resolve) => {
-              release = resolve;
-            });
-          },
-        }),
-      );
-      const pending = (
-        input.client as {
-          session: { messages: (args: unknown) => Promise<unknown> };
-        }
-      ).session.messages({
-        path: { id: 'ses_1' },
-        historyBoundary: 'baseline',
-      });
-      const rejected = expect(pending).rejects.toThrow(
-        'history read budget exceeded',
-      );
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(calls).toBe(1);
-      await rejected;
-      release({
-        data: [{ id: 'old', type: 'user' }],
-        cursor: { next: 'older' },
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(calls).toBe(1);
-    } finally {
-      release?.({ data: [] });
-    }
-  });
-
-  test('compacted context with its identity boundary does not read history', async () => {
+  test('compacted context does not read persisted history', async () => {
     let historyCalls = 0;
     const input = buildPluginInput(
       makeCtx({
@@ -581,7 +362,6 @@ describe('v2 client shim delegation', () => {
       }
     ).session.messages({
       path: { id: 'ses_1' },
-      historyBoundary: 'baseline',
     });
     expect(result).toMatchObject({
       page: { source: 'session.context', complete: false },
@@ -824,19 +604,7 @@ describe('v2 client shim delegation', () => {
     expect(result).toMatchObject({ admitted: true });
   });
 
-  test('promptAsync forwards the terminal-delta fence to session.synthetic without unrelated metadata', async () => {
-    // Completed-job pushes fence the exact run in part metadata. The
-    // synthetic admission must carry that fence instead of dropping it,
-    // while unrelated part metadata is not copied onto the host prompt.
-    // Host persistence and inbound consumption are outside this test.
-    const fences = [
-      {
-        taskID: 'ses_done',
-        generation: 2,
-        terminalRevision: 3,
-        state: 'completed' as const,
-      },
-    ];
+  test('promptAsync forwards the internal marker without unrelated metadata', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const input = buildPluginInput(
       makeCtx({
@@ -860,7 +628,6 @@ describe('v2 client shim delegation', () => {
         agent: 'orchestrator',
         parts: [
           createInternalAgentTextPart('wake reminder', {
-            [TERMINAL_DELTA_METADATA_KEY]: fences,
             unrelated: 'drop-me',
           }),
         ],
@@ -873,7 +640,6 @@ describe('v2 client shim delegation', () => {
       .metadata;
     expect(metadata).toEqual({
       'oh-my-opencode-slim.internalInitiator': true,
-      [TERMINAL_DELTA_METADATA_KEY]: fences,
     });
   });
 
@@ -1751,11 +1517,7 @@ describe('v2 client shim foreground-fallback integration', () => {
     expect(result.data[0]).toMatchObject({ parts: [{ metadata }] });
   });
 
-  test('messages retains the terminal-delta fence on synthetic history', async () => {
-    // The v2 delivery that session.synthetic admits carries its metadata
-    // on the synthetic transcript entry. The v1 mapping must keep the exact
-    // run fence (generation, terminal revision, state) instead of dropping
-    // it. Host-side persistence and retirement are not proven here.
+  test('messages retains metadata on synthetic history', async () => {
     const fences = [
       {
         taskID: 'ses_done',
@@ -1766,7 +1528,7 @@ describe('v2 client shim foreground-fallback integration', () => {
     ];
     const metadata = {
       'oh-my-opencode-slim.internalInitiator': true,
-      [TERMINAL_DELTA_METADATA_KEY]: fences,
+      'example.fence': fences,
     };
     const input = buildPluginInput(
       makeCtx({
@@ -1910,15 +1672,14 @@ describe('v2 client shim foreground-fallback integration', () => {
         ],
       } as never),
     );
-    const result = await input.client.session.messages({
-      path: { id: 'child' },
+    const { round } = await readUntrackedEvidence({ input }, 'child', {
+      outcome: 'succeeded',
+      time: { idle: 6 },
     });
-    expect(
-      classifyTerminalEvidence(result, {
-        runStartedAt: 1,
-        terminalOutcomeConfirmed: true,
-      }),
-    ).toEqual({ verdict: 'completed', text: 'CHILD_OK' });
+    expect({ verdict: round?.verdict, text: round?.text }).toEqual({
+      verdict: 'completed',
+      text: 'CHILD_OK',
+    });
   });
 
   test('messages preserves assistant error and finish state for failed turns', async () => {

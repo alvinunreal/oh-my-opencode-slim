@@ -25,7 +25,7 @@ The config system follows a layered architecture:
 | Abstraction | Purpose | Location |
 |-------------|---------|----------|
 | `PluginConfig` | Root configuration object with agents, presets, and feature flags | schema.ts |
-| `FeatureGates` | Frozen host-aware optional-subsystem projection: V1 defaults to managed, V2 to native; explicit V2 managed is rejected before construction | feature-gates.ts |
+| `FeatureGates` | Frozen optional-subsystem projection; defaults to native and rejects a direct managed-mode seed | feature-gates.ts |
 | `AgentOverrideConfig` | Per-agent configuration (model, temperature, skills, MCPs) | schema.ts |
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
@@ -182,7 +182,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `multiplexer`: Unified pane management config (type, layout, sizes, viewer surface)
 - `interview`: Interview feature configuration
 - `backgroundJobs`: Background job configuration
-- `backgroundJobs.concurrency`: Optional default, provider, and model caps for V1 managed background task admission. V2 rejects explicit concurrency, wall-clock, retention, and stop-confirmation settings before schema defaults; `sameProviderPolicy` applies only to V1 managed and warns as ignored on V2.
+- Removed managed settings include `backgroundJobs.concurrency`, `sameProviderPolicy`, `wallClockTimeoutMs`, and `stopConfirmationMs`. The v2 loader rejects positive concurrency and wall-clock limits; other removed keys are stripped with a warning before schema validation.
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration

@@ -43,32 +43,27 @@ describe('modelAcceptsImageInput', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('reads the v1 providers catalog (boolean record shape) and caches it', async () => {
+  test('reads the model registry and caches it', async () => {
     let calls = 0;
     const deps: ModelImageCapabilityDeps = {
       cache: {},
-      client: {
-        config: {
-          providers: async () => {
-            calls++;
-            return {
-              data: {
-                providers: [
-                  {
-                    id: 'p',
-                    models: {
-                      vision: {
-                        capabilities: { input: { text: true, image: true } },
-                      },
-                      'text-only': {
-                        capabilities: { input: { text: true, image: false } },
-                      },
-                    },
-                  },
-                ],
+      modelDomain: {
+        list: async () => {
+          calls++;
+          return {
+            data: [
+              {
+                providerID: 'p',
+                modelID: 'vision',
+                capabilities: { input: ['text', 'image'] },
               },
-            };
-          },
+              {
+                providerID: 'p',
+                modelID: 'text-only',
+                capabilities: { input: ['text'] },
+              },
+            ],
+          };
         },
       },
     };
@@ -79,7 +74,7 @@ describe('modelAcceptsImageInput', () => {
       modelAcceptsImageInput({ providerID: 'p', id: 'text-only' }, deps),
     ).resolves.toBe(false);
     await expect(
-      modelAcceptsImageInput({ providerID: 'p', modelID: 'unknown' }, deps),
+      modelAcceptsImageInput({ providerID: 'p', id: 'unknown' }, deps),
     ).resolves.toBeUndefined();
     // The catalog is fetched once per generation.
     expect(calls).toBe(1);

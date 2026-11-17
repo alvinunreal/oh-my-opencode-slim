@@ -17,21 +17,21 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Core Abstractions
 
-- **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map with absent/unknown distinction; reduces the `session.get` outcome/idleAt projection to terminal/pending/unknown verdicts for v2 recovery triage (`hostRoundStateOf`), and classifies one live session for a probe (`classifyLiveSession`: `running`/`idle`/an attributable host terminal outcome read through a bounded, timer-injectable shared host read on hosts without the map).
-- **Session Info Read** (`session-info-read.ts`): Single-flight raw `session.get` per client session domain and task id, shared by the probe, the ownership gate, and the gate's rehydration observer; a consumer deadline releases only its waiter, never the underlying read, and a differing identity is refused while the read is open (`raceEvidenceDeadline` bounds waits deterministically).
+- **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the OpenCode session-status map with absent/unknown distinction and reduces the `session.get` outcome/idleAt projection to terminal/pending/unknown verdicts for v2 recovery triage (`hostRoundStateOf`).
+- **Session Info Read** (`session-info-read.ts`): `raceEvidenceDeadline` bounds a host read for its waiter without cancelling the underlying read; tests can inject its timer seam.
 - **Session Metadata** (`session-metadata.ts`): Bounded session → agent/directory map with LRU eviction and active orchestrator protection
-- **Child Transcript** (`child-transcript.ts`): Child session transcript evidence extraction and terminal evidence classification; the startup historical idle classifier complements on-demand host-outcome attribution. A marker-free migrated v1 history retains its v1 closure for startup and untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it. Diagnostic tails enforce UTF-8 budgets in one pass.
+- **Child Transcript** (`child-transcript.ts`): Extracts transcripts and classifies rounds through `classifyAssistantTurnEvidence`, `classifyCurrentDeliveredRound`, and `classifyMigratedV1Round`. A marker-free migrated v1 history retains its v1 closure for untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it. Diagnostic tails enforce UTF-8 budgets in one pass.
 - **Host Transcript Attribution** (`child-transcript.ts`, `attributeHostRoundToTranscript`): Validates parsed host terminal evidence against assistant creation/completion after the latest delivered input; newer activity stays pending and unreadable timestamps stay unknown. Recovery and untracked reads retain the shared host-round parser/composer.
 - **TestTimers** (`test-timers.ts`): Test-only deterministic timer harness (manual clock, injected `setTimeout`/`clearTimeout` seams, zero-duration `tick` drain); wire into timer-seam components, see AGENTS.md "Test Time"
 - **JSDOM Probe** (`jsdom.ts`): JSDOM runtime detection without making it a prerequisite
-- **Redact** (`redact.ts`): Shape-based secret redaction for logging and task output structure masking
+- **Redact** (`redact.ts`): Shape-based secret redaction for logging
 
 ### Session & Task Utilities
 
 - **Session** (`session.ts`): Timeout handling, session abort coordination, and model reference parsing
 - **Prompt Agent** (`prompt-agent.ts`): Resolves explicit v1 prompt identity from safe hints, session records, or a bounded user-message tail; rejects internal system agents and suppresses unresolved targets. `withAgent` never constructs an agent-less body; the adjacent test scans v1 prompt call sites.
 - **Task** (`task.ts`): XML-inspired task output parsing for extracting task IDs, states, and results; header-only parsing avoids reading result bodies when only identity and state are needed
-- **Question Reply** (`question-reply.ts`): Shared v1 question reply transport, host-result validation and v2 form answer conversion used by `task_reply` and question timeout.
+- **Question Reply** (`question-reply.ts`): Host-result validation and v2 form answer conversion used by the v2 question timeout (`v2/question-timeout-tui.ts`).
 - **Agent Variant** (`agent-variant.ts`): Agent name normalization (trim/@ prefix) and display name rewriting utilities
 
 ### Infrastructure & Security Utilities
@@ -60,7 +60,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 ### Child Transcript Flow
 1. fetchChildTranscript() retrieves child session messages via SDK
 2. classifyAssistantTurnEvidence() evaluates each turn for completion
-3. verdictFromEvidence() produces terminal evidence verdict
+3. Host outcome and transcript attribution compose the current-round verdict; migrated v1 history uses classifyMigratedV1Round()
 
 ### Logging Flow
 1. The first plugin instance in a process calls initLogger() — the sink is
@@ -71,9 +71,9 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 4. Write queuing prevents blocking; fallback to stderr on failure
 
 ### Redaction Flow
-1. redactSecretsForLog() applies token masking and structure-preserving value hiding
-2. Pattern-based token redaction keeps 4 leading + 2 trailing characters
-3. XML/HTML/structured format masking fully hides values behind [masked] placeholder
+1. redactSecretsForLog() applies shape-based token masking to log entries
+2. Rules identify vendor prefixes, authorization credentials, URL passwords and long opaque runs
+3. Masks retain 4 leading and 2 trailing characters, or an ellipsis for very short tokens
 
 ## Integration
 
@@ -128,7 +128,7 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 | `session.ts` | Session timeout, abort, and model-reference utilities |
 | `session-metadata.ts` | Bounded session → agent/directory store |
 | `session-runtime-status.ts` | Bounded live session-status map reads; on-demand host round-state verdicts from the session info projection, with transcript text bound to the host idle |
-| `child-transcript.ts` | Child session transcript evidence extraction; v1/startup idle classification, on-demand v2 binding of latest input and assistant text to the host idle (malformed entries fail closed) |
+| `child-transcript.ts` | Child session transcript evidence extraction; migrated v1 history classification and on-demand v2 binding of latest input and assistant text to the host idle (malformed entries fail closed) |
 | `jsdom.ts` | JSDOM runtime detection without prerequisite |
 | `redact.ts` | Shape-based secret redaction for logging |
 | `logger.ts` | Process-wide file logging (pid-suffixed) |

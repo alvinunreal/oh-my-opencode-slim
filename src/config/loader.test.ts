@@ -184,7 +184,7 @@ describe('loadPluginConfig', () => {
           hostFlavor,
           silent: true,
         });
-        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+        expect(resolveFeatureGates(config)).toMatchObject({
           updateChecker: false,
           webfetch: false,
         });
@@ -199,7 +199,7 @@ describe('loadPluginConfig', () => {
           hostFlavor,
           silent: true,
         });
-        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+        expect(resolveFeatureGates(config)).toMatchObject({
           updateChecker: true,
           webfetch: true,
         });

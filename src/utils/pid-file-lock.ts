@@ -9,7 +9,6 @@ import {
 import * as path from 'node:path';
 import { log } from './logger';
 
-const RETRY_INTERVAL_MS = 25;
 const YOUNG_LOCK_MS = 5_000;
 
 export function isProcessAlive(pid: number): boolean {
@@ -259,23 +258,4 @@ export function acquirePidFileLock(
     }
   }
   return null;
-}
-
-/**
- * Retries {@link acquirePidFileLock} until `timeoutMs` has elapsed. Waits via
- * setTimeout so the JS thread is never blocked. Returns a release function, or
- * null when the lock stayed held for the whole budget.
- */
-export async function acquirePidFileLockWithRetryAsync(
-  file: string,
-  timeoutMs: number,
-  maxAgeMs?: number,
-): Promise<PidFileLockRelease | null> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const release = acquirePidFileLock(file, maxAgeMs);
-    if (release) return release;
-    if (Date.now() >= deadline) return null;
-    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
-  }
 }

@@ -12,12 +12,10 @@ describe('search-path-guard hook', () => {
 
   const createHook = (
     directory: string,
-    hostFlavor?: string,
   ): ReturnType<typeof createSearchPathGuardHook> =>
     createSearchPathGuardHook({
       client: {} as PluginInput['client'],
       directory,
-      hostFlavor,
     } as PluginInput);
 
   const runHook = (
@@ -109,19 +107,16 @@ describe('search-path-guard hook', () => {
     await expect(runHook(hook, 'grep', { path: '' })).resolves.toBeUndefined();
   });
 
-  test('blocks literal undefined/null strings like the host would resolve them', async () => {
+  test('blocks literal undefined strings in grep paths', async () => {
     const hook = createHook(tempRoot);
 
     await expect(runHook(hook, 'grep', { path: 'undefined' })).rejects.toThrow(
       path.join(tempRoot, 'undefined'),
     );
-    await expect(runHook(hook, 'glob', { path: 'null' })).rejects.toThrow(
-      path.join(tempRoot, 'null'),
-    );
   });
 
   test('v2 follows host home expansion and glob placeholder defaults', async () => {
-    const v2 = createHook(tempRoot, 'v2');
+    const v2 = createHook(tempRoot);
     await expect(runHook(v2, 'grep', { path: '~' })).resolves.toBeUndefined();
     await expect(runHook(v2, 'glob', { path: '~/' })).resolves.toBeUndefined();
     await expect(
@@ -131,9 +126,6 @@ describe('search-path-guard hook', () => {
       runHook(v2, 'glob', { path: 'null' }),
     ).resolves.toBeUndefined();
     await expect(runHook(v2, 'grep', { path: 'undefined' })).rejects.toThrow();
-    await expect(
-      runHook(createHook(tempRoot, 'v1'), 'glob', { path: 'null' }),
-    ).rejects.toThrow();
   });
 
   test('preserves significant whitespace when resolving and blocking', async () => {
@@ -174,13 +166,13 @@ describe('search-path-guard hook', () => {
     ).rejects.toThrow(/not a directory.*ENOTDIR/);
   });
 
-  test('uses the host grep and glob resolution rules separately', async () => {
+  test('uses the host resolution rule for grep and glob', async () => {
     const directory = path.relative(process.cwd(), tempRoot);
     const raw = 'missing-search-path';
     const hook = createHook(directory);
 
     await expect(runHook(hook, 'grep', { path: raw })).rejects.toThrow(
-      path.join(directory, raw),
+      path.resolve(directory, raw),
     );
     await expect(runHook(hook, 'glob', { path: raw })).rejects.toThrow(
       path.resolve(directory, raw),
@@ -194,7 +186,7 @@ describe('search-path-guard hook', () => {
       const hook = createHook(tempRoot);
 
       await expect(runHook(hook, 'grep', { path: raw })).rejects.toThrow(
-        path.join(tempRoot, raw),
+        path.resolve(tempRoot, raw),
       );
       await expect(runHook(hook, 'glob', { path: raw })).rejects.toThrow(
         path.resolve(tempRoot, raw),
@@ -206,12 +198,9 @@ describe('search-path-guard hook', () => {
     const directory = 'D:\\workspace';
     const raw = 'C:src';
 
-    expect(resolveSearchPath('grep', 'v2', directory, raw, path.win32)).toBe(
+    expect(resolveSearchPath(directory, raw, path.win32)).toBe(
       path.win32.resolve(directory, raw),
     );
-    expect(
-      resolveSearchPath('grep', undefined, directory, raw, path.win32),
-    ).toBe(path.win32.join(directory, raw));
   });
 
   test('allows grep when the path points to an existing file', async () => {

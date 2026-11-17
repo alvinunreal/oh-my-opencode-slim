@@ -75,7 +75,6 @@ function createTools(
   options?: {
     noGet?: boolean;
     noAbort?: boolean;
-    flavor?: 'v1' | 'v2';
     abortResponse?: unknown;
     abortImpl?: () => Promise<unknown>;
     messages?: () => Promise<unknown>;
@@ -118,7 +117,7 @@ function createTools(
     input: {
       directory: '/test/project',
       client,
-      ...(options?.flavor === 'v1' ? {} : { hostFlavor: 'v2' }),
+      hostFlavor: 'v2',
     } as never,
     ...(options?.abortTimeoutMs !== undefined
       ? { abortTimeoutMs: options.abortTimeoutMs }
@@ -331,24 +330,6 @@ describe('native task controls', () => {
     expect(output).not.toContain('Interrupt accepted');
   });
 
-  test('v1 {data:false} is reported as nothing interrupted', async () => {
-    const { tools } = createTools({}, { abortResponse: { data: false } });
-    const output = await tools.task_cancel.execute(
-      { sessionID: 'ses_child' },
-      v2Context,
-    );
-    expect(output).toContain('No active execution interrupted');
-  });
-
-  test('v1 {data:true} is reported as accepted', async () => {
-    const { tools } = createTools({}, { abortResponse: { data: true } });
-    const output = await tools.task_cancel.execute(
-      { sessionID: 'ses_child' },
-      v2Context,
-    );
-    expect(output).toContain('Interrupt accepted');
-  });
-
   test('an absent outcome is never reported as a stop or a failure', async () => {
     const { tools } = createTools({}, { abortResponse: {} });
     const output = await tools.task_cancel.execute(
@@ -429,20 +410,6 @@ describe('native task controls', () => {
     await expect(
       tools.task_status.execute({ task_id: 'ses_child' } as never, v2Context),
     ).rejects.toThrow('task_status requires sessionID');
-  });
-
-  test('the v1 native surface stays status and cancel only', async () => {
-    const { tools } = createTools({}, { flavor: 'v1' });
-    expect(Object.keys(tools.task_status.args)).toEqual(['task_id']);
-    expect(Object.keys(tools.task_cancel.args)).toEqual(['task_id']);
-    expect(tools.task_reply).toBeUndefined();
-  });
-
-  test('v1 native retains the sessionID runtime alias for task_id', async () => {
-    const { tools } = createTools({}, { flavor: 'v1' });
-    await expect(
-      tools.task_status.execute({ sessionID: 'ses_child' }, v2Context),
-    ).resolves.toContain('Session ses_child');
   });
 
   test('task_status lists the owned child pending permissions', async () => {

@@ -24,9 +24,9 @@ export function collapseSystemInPlace(system: string[]): void {
 }
 
 /**
- * Heuristic for v1 hosts, where the system transform only receives the
- * sessionID: the session's tracked agent says "orchestrator" but auxiliary
- * LLM requests (title generation, compaction) run in the SAME session
+ * Heuristic when the system transform lacks the request agent: the session's
+ * tracked agent says "orchestrator" but auxiliary LLM requests (title
+ * generation, compaction) run in the SAME session
  * under their own agent. Those requests are built with `system: []` and
  * never include the core's environment block, while every main chat
  * request does (the core prepends it to the request system). Structured

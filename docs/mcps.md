@@ -14,9 +14,8 @@ Enable the built-in tool by setting these environment variables in your shell pr
 env OPENCODE_ENABLE_EXA=true OPENCODE_ENABLE_PARALLEL=true opencode
 ```
 
-The oh-my-opencode-slim installer sets `OPENCODE_ENABLE_EXA=1` alongside its
-background-subagents export when you accept the environment setup. Parallel
-search remains opt-in.
+The oh-my-opencode-slim installer sets `OPENCODE_ENABLE_EXA=1` when you accept
+the environment setup. Parallel search remains opt-in.
 
 The built-in tool is Exa-backed (optionally Parallel), needs no API key, and is only available when using the `opencode` provider OR when those flags are set. Control access per agent with `permission: { "websearch": "allow" }` (all tools are allowed by default).
 
@@ -31,7 +30,7 @@ The built-in tool is Exa-backed (optionally Parallel), needs no API key, and is 
 
 ### User-defined entries win
 
-If you define an MCP server with the same name in `opencode.json` / `opencode.jsonc` (for example `mcp.gh_grep`), your entry is used as-is and the plugin does not inject its built-in for that key. A partial entry is used as-is too: fields missing from your entry are not back-filled from the built-in. `disabled_mcps` omits the built-in and filters Slim's agent capability selection; it does not remove an existing user server. Disable that server in the host MCP configuration (`mcp.servers.<name>.disabled` on v2, `mcp.<name>.enabled: false` on v1).
+If you define an MCP server with the same name in the host configuration, your entry is used as-is and the plugin does not inject its built-in for that key. A partial entry is used as-is too: fields missing from your entry are not back-filled from the built-in. `disabled_mcps` omits the built-in and filters Slim's agent capability selection; it does not remove an existing user server. Disable that server in the host MCP configuration with `mcp.servers.<name>.disabled`.
 
 ---
 

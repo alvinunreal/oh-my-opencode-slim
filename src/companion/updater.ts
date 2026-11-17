@@ -106,33 +106,6 @@ export function getCompanionBinaryPath(): string {
   );
 }
 
-export function loadCompanionManifestFromPackageRoot(
-  packageRoot: string,
-): CompanionManifest | null {
-  const manifestPath = path.join(
-    packageRoot,
-    'src',
-    'companion',
-    'companion-manifest.json',
-  );
-  try {
-    const parsed = JSON.parse(
-      readFileSync(manifestPath, 'utf8'),
-    ) as Partial<CompanionManifest>;
-    if (parsed.version && parsed.tag && parsed.repo) {
-      return {
-        version: parsed.version,
-        tag: parsed.tag,
-        repo: parsed.repo,
-        checksums: parsed.checksums,
-      };
-    }
-  } catch (err) {
-    log('[updater] manifest read failed', String(err));
-  }
-  return null;
-}
-
 export async function ensureCompanionVersion(
   options: {
     config?: CompanionConfig;
