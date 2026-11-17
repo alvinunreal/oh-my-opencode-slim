@@ -58,6 +58,8 @@ export interface ExperimentalV2 {
   readonly modelDomain?: {
     readonly list?: (input?: unknown) => Promise<unknown>;
   };
+  /** Raw `ctx.session` reference for task_report; both get+synthetic required. */
+  readonly session?: Pick<V2Context['session'], 'get' | 'synthetic'>;
 }
 
 /** Directory from the host-reported location; cwd on hosts without
@@ -905,6 +907,8 @@ export function buildPluginInput(
   const directory = resolveV2Directory(ctx);
   const wait = typeof s.wait === 'function' ? s.wait.bind(s) : undefined;
   const switchModel = s.switchModel?.bind(s);
+  // Same raw reference, only when the host offers both get and synthetic.
+  const nativeReportSession = s.get && s.synthetic ? s : undefined;
   return {
     client,
     hostFlavor: 'v2',
@@ -916,7 +920,11 @@ export function buildPluginInput(
     worktree: directory,
     experimental_workspace: { register() {} },
     $: typeof Bun !== 'undefined' ? Bun.$ : undefined,
-    ...(extras?.modelDomain || wait || switchModel || (s.prompt && s.context)
+    ...(extras?.modelDomain ||
+    wait ||
+    switchModel ||
+    (s.prompt && s.context) ||
+    nativeReportSession
       ? {
           experimental_v2: {
             ...(s.prompt && s.context ? { queuedPromptIdentity: true } : {}),
@@ -933,6 +941,7 @@ export function buildPluginInput(
                     wait({ sessionID }),
                 }
               : {}),
+            ...(nativeReportSession ? { session: nativeReportSession } : {}),
           },
         }
       : {}),

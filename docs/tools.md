@@ -103,8 +103,10 @@ session is never deleted and stays continuable.
 On V2 native, a child can use `task_report` for a material milestone,
 consequential finding, blocker, or decision request. The recipient is always
 read from the child session's host-owned `parentID`; callers cannot choose
-another session. Reports enter the host's serialized inbox with
-`delivery: "steer"`. The tool requests a wake (`resume: true`) unless the
+another session. Native child and parent reads verify the relationship and
+check the parent's interruption state; `session.synthetic` admits the update
+without changing its agent/model. Reports enter the host's serialized inbox
+with `delivery: "steer"`. The tool requests a wake (`resume: true`) unless the
 parent's outcome is `interrupted`; a busy parent consumes reports at a step
 boundary. Acceptance does not confirm that the parent read the report. The
 parent can reply by continuing the same child session with the native V2
