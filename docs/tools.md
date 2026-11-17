@@ -4,7 +4,7 @@ What Slim adds to OpenCode. Native tools are documented upstream; this page cove
 
 ## apply_patch rescue
 
-Slim intercepts the native patch tool — v1's `apply_patch` and v2's `patch` — before it runs. It rewrites recoverable stale patches, canonizes safe tolerant matches against the real file when unicode/trim drift is the only mismatch, keeps the authored `new_lines` bytes intact, preserves the existing file EOL/final-newline state for updates, validates malformed patches strictly before helper execution, uses a conservative bounded LCS fallback, accumulates helper state when the same path appears in multiple `Update File` hunks, blocks the call before native execution if any patch path falls outside the allowed root/worktree, and fails on ambiguity instead of guessing. It does not rewrite `edit` or `write` inputs. Disable with `disabled_hooks: ["apply-patch"]` (see [Hooks](configuration.md#hooks)).
+Slim intercepts the native `patch` tool before it runs. It rewrites recoverable stale patches, canonizes safe tolerant matches against the real file when unicode/trim drift is the only mismatch, keeps the authored `new_lines` bytes intact, preserves the existing file EOL/final-newline state for updates, validates malformed patches strictly before helper execution, uses a conservative bounded LCS fallback, accumulates helper state when the same path appears in multiple `Update File` hunks, blocks the call before native execution if any patch path falls outside the allowed root/worktree, and fails on ambiguity instead of guessing. It does not rewrite `edit` or `write` inputs. Disable with `disabled_hooks: ["apply-patch"]` (see [Hooks](configuration.md#hooks)).
 
 ---
 
@@ -62,9 +62,8 @@ If the report is truncated, the output distinguishes successful writes from
 dry-run previews and does not claim complete replacement or file totals.
 
 Before the built-in `grep`/`glob` tools run, the plugin pre-checks that the
-requested `path` is valid, using the same resolution rules as the host:
-v1 `grep` joins relative paths, while v1 `glob` resolves them; v2 resolves
-relative paths for both tools. Missing paths and paths with a non-directory
+requested `path` is valid, using the host's resolution rules for both tools.
+Missing paths and paths with a non-directory
 component fail fast with an actionable error instead of an opaque "ripgrep
 execution failed" message or a silent search of the parent directory.
 Resolution uses the host process's native path flavor, preserving Windows
@@ -138,13 +137,11 @@ modified) never counts toward a block — and responds:
 The count is confirmed in `tool.execute.after`, so overlapping parallel
 calls cannot inflate it before their results are known.
 
-Exempt from the entire guard: `task`, `task_cancel`, `task_message`, and
-`task_revive` — they legitimately re-issue identical calls while a background
-task runs. `task_status` is warn-only (never hard-blocked), so a repeated
-status read cannot deadlock result retrieval. The wait tools (`wait_for_user`,
-`wait_for_background_tasks`) run a stricter per-turn counter of their own: the
-second repeat warns, and the guard refuses further repeats in that turn.
+`task`, `task_cancel`, `task_message`, and `task_revive` are exempt from the
+guard. `task_status` is warn-only (never hard-blocked), so a repeated status
+read cannot deadlock result retrieval. `wait_for_user` and
+`wait_for_background_tasks` share a per-turn counter: the second completed
+wait warns and subsequent waits are blocked.
 
 Disable with `disabled_hooks: ["tool-loop-guard"]` (see
 [Hooks](configuration.md#hooks)).
-

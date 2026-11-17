@@ -17,7 +17,6 @@ import {
   ensureCompanionVersion,
   getCompanionBinaryPath,
   getCompanionTarget,
-  loadCompanionManifestFromPackageRoot,
 } from './updater';
 
 const TEST_DIR = path.join(
@@ -350,31 +349,15 @@ describe('companion updater', () => {
     });
   });
 
-  test('loads a companion manifest from an installed package root', () => {
-    const packageRoot = path.join(TEST_DIR, 'package');
-    const manifestDir = path.join(packageRoot, 'src', 'companion');
-    mkdirSync(manifestDir, { recursive: true });
-    writeFileSync(
-      path.join(manifestDir, 'companion-manifest.json'),
-      JSON.stringify({
-        version: '0.2.0',
-        tag: 'companion-v0.2.0',
-        repo: 'owner/repo',
-      }),
-    );
-
-    expect(loadCompanionManifestFromPackageRoot(packageRoot)).toEqual({
-      version: '0.2.0',
-      tag: 'companion-v0.2.0',
-      repo: 'owner/repo',
-    });
-  });
-
   test('bundled JSON manifest matches the runtime manifest constant', () => {
     const packageRoot = path.resolve(import.meta.dir, '..', '..');
-    expect(loadCompanionManifestFromPackageRoot(packageRoot)).toEqual(
-      COMPANION_MANIFEST,
+    const manifest = JSON.parse(
+      readFileSync(
+        path.join(packageRoot, 'src/companion/companion-manifest.json'),
+        'utf8',
+      ),
     );
+    expect(manifest).toEqual(COMPANION_MANIFEST);
   });
 
   test('bundled companion manifest pins the standalone native release', () => {
@@ -404,20 +387,6 @@ describe('companion updater', () => {
         Object.defineProperty(process, 'arch', originalArch);
       }
     }
-  });
-
-  test('returns null on corrupt manifest without throwing', () => {
-    const brokenDir = path.join(TEST_DIR, 'broken-manifest');
-    mkdirSync(path.join(brokenDir, 'src', 'companion'), { recursive: true });
-    writeFileSync(
-      path.join(brokenDir, 'src', 'companion', 'companion-manifest.json'),
-      'not-json',
-    );
-
-    const result = loadCompanionManifestFromPackageRoot(brokenDir);
-
-    // Must gracefully return null instead of throwing
-    expect(result).toBeNull();
   });
 
   test('fails gracefully when metadata file is corrupt', () => {

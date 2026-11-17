@@ -95,7 +95,7 @@ export function createMessageTransformView(
  * Resolve the view a transform should use: the caller's view when it covers
  * the current array (same identity, same length), a freshly built one
  * otherwise. Identity+length catches the two structural events a view must
- * not survive — the job board's tail append and a volatile-zone strip — but
+ * not survive — a volatile-tail append and a volatile-zone strip — but
  * not a strip and an append that cancel out; the root rebuild points are the
  * contract, this is only the failsafe. A mismatch silently falls back to the
  * transform's pre-view behavior.

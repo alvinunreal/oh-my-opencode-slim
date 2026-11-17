@@ -1,4 +1,3 @@
-import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ColorInput, parseColor, RGBA } from '@opentui/core';
 import type { JSX } from '@opentui/solid';
@@ -1914,13 +1913,10 @@ export function renderUpdateBadge(latest: string, color: unknown): JSX.Element {
 // client-side field for the render path (the thin entry uses the light
 // `readTuiGatesOnly` instead and never pulls the multiplexer client).
 export {
-  configStateOfGates,
   loadTuiGates,
   readConfigState,
   retainLastGoodConfigState,
-  type SidebarConfigState,
   type TuiGatesRead,
-  type TuiGatesSnapshot,
 } from './tui-gates';
 
 import {
@@ -1950,55 +1946,6 @@ export function readTuiGates(
       warningsMakeConfigInvalid(snapshot.warnings),
     ),
   };
-}
-
-const DEFAULT_SIDEBAR_SLOT_ORDER = 900;
-
-/** Extract the spec string from a plugin-list entry: `"spec"` or `[spec, options]`. */
-function pluginSpecOf(entry: unknown): string | undefined {
-  if (typeof entry === 'string') return entry;
-  if (Array.isArray(entry) && typeof entry[0] === 'string') return entry[0];
-  return undefined;
-}
-
-/**
- * Position slim's sidebar section according to its index in the host's
- * effective plugin list (`tuiConfig.plugin`): index 0 → 110 (right after
- * the host's context section, above most third-party plugins), each later
- * index one band of 100 later. This only moves slim's own slot; other
- * plugins retain their own order, and no relative ordering with them is
- * guaranteed. v1 hosts only — the v2 slot claim API has no order
- * parameter. When the spec is absent or the list is unavailable, the
- * historic default (900) applies.
- */
-export function resolveSidebarSlotOrder(
-  pluginList: unknown,
-  pluginName: string,
-): number {
-  if (!Array.isArray(pluginList)) return DEFAULT_SIDEBAR_SLOT_ORDER;
-  const index = pluginList.findIndex((entry) => {
-    const spec = pluginSpecOf(entry);
-    if (spec === undefined) return false;
-    if (spec === pluginName) return true;
-    if (spec.startsWith('file://')) {
-      // Filesystem checkout: match by exact path or basename. A trailing
-      // slash is tolerated; directory names are taken literally.
-      const stripped = spec.replace(/^file:\/\//, '');
-      return stripped === pluginName || path.basename(stripped) === pluginName;
-    }
-    if (path.isAbsolute(spec)) {
-      // Plain local path, as the installer writes for source installs.
-      return path.basename(spec) === pluginName;
-    }
-    // npm spec: strip a trailing @version (never contains a slash). A
-    // scoped package (@scope/name) is a different package and must not
-    // match by basename.
-    const stripped = spec.replace(/@[^/]*$/, '');
-    if (stripped.startsWith('@')) return false;
-    return stripped === pluginName;
-  });
-  if (index === -1) return DEFAULT_SIDEBAR_SLOT_ORDER;
-  return 110 + index * 100;
 }
 
 // Mirrors the OpenCode v2 TUI context surface (dist/tui/context.d.ts);

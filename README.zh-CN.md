@@ -130,7 +130,7 @@ bun run build
 2. **刷新并列出 OpenCode 可以调用的模型**：
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **打开您的插件配置文件**，路径为 `~/.config/opencode/oh-my-opencode-slim.json`
 

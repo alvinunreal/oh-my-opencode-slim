@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import * as pluginFactory from '../index';
 import {
-  hasLiveInstances,
+  liveDirectoryCountForTests,
   resetLiveDirectoriesForTests,
 } from '../utils/event-directory-scope';
 import { flushLoggerForTesting, initLogger } from '../utils/logger';
@@ -233,7 +233,7 @@ describe('v2 setup directory claim', () => {
     await expect(
       createV2Setup()(makeSetupCtx(path.join(fixtureRoot, 'project'))),
     ).rejects.toThrow(/wallClockTimeoutMs/i);
-    expect(hasLiveInstances()).toBe(false);
+    expect(liveDirectoryCountForTests()).toBe(0);
   });
 
   test('factory failure propagates and releases the directory claim', async () => {
@@ -245,7 +245,7 @@ describe('v2 setup directory claim', () => {
       await expect(
         createV2Setup()(makeSetupCtx(path.join(fixtureRoot, 'project'))),
       ).rejects.toBe(failure);
-      expect(hasLiveInstances()).toBe(false);
+      expect(liveDirectoryCountForTests()).toBe(0);
     } finally {
       factory.mockRestore();
     }
@@ -270,7 +270,7 @@ describe('v2 setup directory claim', () => {
     };
 
     await expect(createV2Setup()(ctx)).rejects.toThrow('context hook rejected');
-    expect(hasLiveInstances()).toBe(false);
+    expect(liveDirectoryCountForTests()).toBe(0);
   }, 20_000);
 });
 

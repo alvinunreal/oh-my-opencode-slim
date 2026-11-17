@@ -4657,23 +4657,6 @@ describe('createV2Setup e2e', () => {
     expect(calls.disposed).toContain('mcp.transform');
   }, 20_000);
 
-  test('missing MCP transform degrades gracefully (v1 host embedded v2 core)', async () => {
-    const { ctx } = makeMockV2Context(projectDir);
-    const mcp = ctx.mcp as unknown as { transform?: unknown };
-    mcp.transform = undefined;
-
-    // Should succeed with degraded MCP snapshot instead of failing
-    const cleanup = await createV2Setup()(ctx);
-    await flushLoggerForTesting();
-    const logText = readPluginLog();
-    expect(logText).toContain(
-      '[v2] ctx.mcp.transform unavailable; skipping MCP snapshot (v1 host embedded v2 core)',
-    );
-    expect(logText).toContain('[v2] agents registered');
-
-    await cleanup();
-  }, 20_000);
-
   test('backgroundJobs.mode off still applies configured agent options to requests', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),

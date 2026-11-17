@@ -176,7 +176,7 @@ bun run build
 2. **重新整理並列出 OpenCode 看得到的模型**：
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
    在 OpenCode v2 上請改用 `opencode models`。
 3. **開啟你的外掛設定檔** `~/.config/opencode/oh-my-opencode-slim.json`

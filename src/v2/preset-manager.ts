@@ -1,8 +1,7 @@
 /**
  * OpenCode v2 TUI preset manager.
  *
- * Promise-based port of the v1 three-level `/preset` manager
- * (`src/tui-preset.ts`):
+ * Promise-based three-level `/preset` manager:
  *   Level 1 — preset list (Apply / Edit / Create / Delete)
  *   Level 2 — agents in a preset (Base preset / Add / Remove / Save /
  *             Save & Apply)
@@ -182,7 +181,7 @@ export interface V2LiveRefreshResult {
   reason?: string;
 }
 
-// --- action sentinels (shared with the v1 manager through the domain module) ---
+// --- action sentinels from the preset editor domain ---
 
 const ACTION_NEW_PRESET = PRESET_ACTION.NEW_PRESET;
 const ACTION_ADD_AGENT = PRESET_ACTION.ADD_AGENT;

@@ -10,7 +10,7 @@ import { buildOrchestratorPrompt } from '../agents/orchestrator';
 import type { PluginConfig } from '../config';
 import { CouncilConfigSchema } from '../config';
 import { RuntimeConfig } from '../config/runtime';
-import { controlParamName, delegationVocabulary } from './adapters';
+import { delegationWording } from './delegation';
 
 const TEST_DIRECTORY = 'runtime-test-native-delegation-wording';
 
@@ -38,36 +38,13 @@ function orchestratorPromptFor(hostFlavor?: string): string {
   return orchestrator?.config.prompt as string;
 }
 
-describe('delegationVocabulary', () => {
+describe('delegationWording', () => {
   test("v2 → { tool: 'subagent', agentParam: 'agent', resumeParam: 'sessionID' }", () => {
-    expect(delegationVocabulary('v2')).toEqual({
+    expect(delegationWording()).toEqual({
       tool: 'subagent',
       agentParam: 'agent',
       resumeParam: 'sessionID',
     });
-  });
-
-  test("v1/default → { tool: 'task', agentParam: 'subagent_type', resumeParam: 'task_id' }", () => {
-    expect(delegationVocabulary(undefined)).toEqual({
-      tool: 'task',
-      agentParam: 'subagent_type',
-      resumeParam: 'task_id',
-    });
-    expect(delegationVocabulary('v1')).toEqual({
-      tool: 'task',
-      agentParam: 'subagent_type',
-      resumeParam: 'task_id',
-    });
-  });
-
-  test('controlParamName shares the delegation resume param per flavor', () => {
-    expect(controlParamName('v2')).toBe('sessionID');
-    expect(controlParamName('v1')).toBe('task_id');
-    expect(controlParamName(undefined)).toBe('task_id');
-    expect(delegationVocabulary('v2').resumeParam).toBe(controlParamName('v2'));
-    expect(delegationVocabulary(undefined).resumeParam).toBe(
-      controlParamName(undefined),
-    );
   });
 });
 

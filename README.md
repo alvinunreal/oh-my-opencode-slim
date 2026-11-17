@@ -186,7 +186,7 @@ Then:
 2. **Refresh and list the models OpenCode can see**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
    On OpenCode v2, use `opencode models` instead.
 3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`

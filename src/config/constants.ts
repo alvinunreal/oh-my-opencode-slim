@@ -85,9 +85,6 @@ export const TOAST_DURATION_MS = 10_000;
  *  by removing from disabled_agents and configuring an appropriate model. */
 export const DEFAULT_DISABLED_AGENTS: string[] = ['observer'];
 
-/** Internal display cap for the per-session read-context path list. */
-export const DEFAULT_CONTEXT_FILE_CAP = 8;
-
 /**
  * Maximum session metadata entries retained per plugin instance.
  * Prevents unbounded growth when session.deleted events are missed.

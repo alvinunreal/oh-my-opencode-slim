@@ -4,9 +4,12 @@ import { RuntimeConfig } from '../config/runtime';
 import { createAgents, getAgentConfigs } from './index';
 
 const TEST_DIRECTORY = 'runtime-test-agents-custom';
-function runtimeFor(config: PluginConfig | undefined = {}) {
+function runtimeFor(
+  config: PluginConfig | undefined = {},
+  hostFlavor?: string,
+) {
   RuntimeConfig.reset(TEST_DIRECTORY);
-  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {}, hostFlavor);
   return RuntimeConfig.get(TEST_DIRECTORY);
 }
 
@@ -543,7 +546,7 @@ describe('permission edge cases', () => {
       },
     };
 
-    const agents = createAgents(runtimeFor(config));
+    const agents = createAgents(runtimeFor(config, 'v2'), { hostFlavor: 'v2' });
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
 
     expect(orchestrator).toBeDefined();
@@ -581,27 +584,6 @@ describe('nested-dispatch default', () => {
       unknown
     >;
     expect(permission.task).toEqual({ '*': 'deny' });
-  });
-
-  test('v1 hosts carry no nested-dispatch entries at all', () => {
-    const agents = createAgents(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          reviewer: {
-            model: 'openai/gpt-6',
-            prompt: 'You are the custom reviewer agent.',
-          },
-        },
-      }),
-    );
-    for (const agent of agents) {
-      const permission = (agent.config.permission ?? {}) as Record<
-        string,
-        unknown
-      >;
-      expect(permission.task).toBeUndefined();
-    }
   });
 
   test('the orchestrator is exempt from the nested-dispatch default', () => {

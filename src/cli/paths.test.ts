@@ -10,9 +10,7 @@ import {
   getConfigJsonc,
   getExistingConfigPath,
   getExistingLiteConfigPath,
-  getExistingTuiConfigPath,
   getLiteConfig,
-  getOpenCodeConfigPaths,
 } from '../config/paths';
 
 describe('paths', () => {
@@ -29,18 +27,18 @@ describe('paths', () => {
     Object.assign(process.env, originalEnv);
   });
 
-  test('getOpenCodeConfigPaths() returns both json and jsonc paths', () => {
+  test('config paths include json and jsonc', () => {
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
-    expect(getOpenCodeConfigPaths()).toEqual([
+    expect([getConfigJson(), getConfigJsonc()]).toEqual([
       '/tmp/xdg-config/opencode/opencode.json',
       '/tmp/xdg-config/opencode/opencode.jsonc',
     ]);
   });
 
-  test('getOpenCodeConfigPaths() respects OPENCODE_CONFIG_DIR', () => {
+  test('config paths respect OPENCODE_CONFIG_DIR', () => {
     process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
-    expect(getOpenCodeConfigPaths()).toEqual([
+    expect([getConfigJson(), getConfigJsonc()]).toEqual([
       '/custom/directory/opencode.json',
       '/custom/directory/opencode.jsonc',
     ]);
@@ -71,8 +69,7 @@ describe('paths', () => {
   test('selects the last OpenCode file defining plugin and prefers JSONC otherwise', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opencode-paths-'));
     process.env.OPENCODE_CONFIG_DIR = dir;
-    delete process.env.OPENCODE_TUI_CONFIG;
-    for (const name of ['opencode', 'tui', 'oh-my-opencode-slim']) {
+    for (const name of ['opencode', 'oh-my-opencode-slim']) {
       writeFileSync(join(dir, `${name}.json`), '{}');
       writeFileSync(join(dir, `${name}.jsonc`), '{}');
     }
@@ -83,7 +80,6 @@ describe('paths', () => {
     writeFileSync(join(dir, 'opencode.json'), '{}');
     writeFileSync(join(dir, 'opencode.jsonc'), '{}');
     expect(getExistingConfigPath()).toBe(join(dir, 'opencode.jsonc'));
-    expect(getExistingTuiConfigPath()).toBe(join(dir, 'tui.jsonc'));
     expect(getExistingLiteConfigPath()).toBe(
       join(dir, 'oh-my-opencode-slim.jsonc'),
     );

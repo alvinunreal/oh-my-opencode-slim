@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { getConfigDir } from '../../config/paths';
 import { writeAtomic } from '../../marketplace/lease';
 import { log } from '../../utils/logger';
-import { acquirePidFileLockWithRetryAsync } from '../../utils/pid-file-lock';
+import { acquirePidFileLock } from '../../utils/pid-file-lock';
 
 const FILE_NAME = 'omos-quota-cooldowns.json';
 const STORE_VERSION = 1;
@@ -11,6 +11,7 @@ const MAX_ENTRIES = 256;
 const MAX_STORE_BYTES = 64 * 1024;
 const MAX_DATE_MS = 8_640_000_000_000_000;
 const LOCK_TIMEOUT_MS = 250;
+const LOCK_RETRY_INTERVAL_MS = 25;
 
 type QuotaCooldownStore = {
   version: 1;
@@ -46,6 +47,22 @@ function defaultFilePath(): string {
 function errnoCode(error: unknown): string | undefined {
   if (!error || typeof error !== 'object' || !('code' in error)) return;
   return typeof error.code === 'string' ? error.code : undefined;
+}
+
+/** Preserve the cooldown store's bounded retry behavior on the native lock API. */
+async function acquireQuotaCooldownLock(
+  filePath: string,
+  timeoutMs: number,
+): Promise<ReturnType<typeof acquirePidFileLock>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const release = acquirePidFileLock(filePath);
+    if (release) return release;
+    if (Date.now() >= deadline) return null;
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, LOCK_RETRY_INTERVAL_MS),
+    );
+  }
 }
 
 function validDeadline(value: unknown): value is number {
@@ -154,9 +171,9 @@ export async function recordQuotaCooldown(
   if (!validDeadline(expiresAt) || expiresAt <= now) return false;
 
   const filePath = options.filePath ?? defaultFilePath();
-  let release: Awaited<ReturnType<typeof acquirePidFileLockWithRetryAsync>>;
+  let release: ReturnType<typeof acquirePidFileLock>;
   try {
-    release = await acquirePidFileLockWithRetryAsync(
+    release = await acquireQuotaCooldownLock(
       filePath,
       options.lockTimeoutMs ?? LOCK_TIMEOUT_MS,
     );

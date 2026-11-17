@@ -13,16 +13,15 @@ Then authenticate and refresh models:
 
 ```bash
 opencode auth login
-opencode models --refresh
+opencode models
 ```
 
 On OpenCode v2, use `opencode models` instead.
 
 ## Switch at Runtime
 
-If both presets are already in your config, switch from inside OpenCode:
-- **v2 hosts:** type `/preset openai` to apply directly (reload still required)
-- **v1 hosts:** open `/preset` from autocomplete and pick Apply
+If both presets are already in your config, type `/preset openai` inside
+OpenCode to apply it directly (reload still required).
 
 See [Preset Switching](preset-switching.md) for the full runtime switching
 workflow.

@@ -4,7 +4,7 @@
  * Every optional subsystem reads one frozen object, so the enable/disable
  * decisions live in one place and cannot drift between the v1 factory, the v2
  * setup pre-flight, the TUI gates, and the runtime getters. No IO or registry;
- * the host flavor selects the lifecycle supported by the two adapters.
+ * the v2 host owns the native background lifecycle.
  *
  * Fallback is deliberately not projected here: `fallback.enabled` and the
  * `foreground-fallback` hook differ on v2 (the former keeps retry bookkeeping
@@ -104,7 +104,6 @@ export function validateExplicitHostConfig(
 /** Resolved enable/disable decisions for the optional subsystems. */
 export interface FeatureGates {
   readonly backgroundJobsMode: BackgroundJobsMode;
-  readonly managedJobs: boolean;
   readonly presetRouting: boolean;
   readonly tui: boolean;
   readonly sidebar: boolean;
@@ -122,13 +121,11 @@ export interface FeatureGates {
  */
 export function resolveFeatureGates(
   config: FeatureGateConfig = {},
-  hostFlavor?: string,
 ): Readonly<FeatureGates> {
-  if (hostFlavor === 'v2' && config.backgroundJobs?.mode === 'managed') {
+  if (config.backgroundJobs?.mode === 'managed') {
     throw new UnsupportedHostConfigError(UNSUPPORTED_MANAGED_MODE_MESSAGE);
   }
-  const backgroundJobsMode =
-    config.backgroundJobs?.mode ?? (hostFlavor === 'v2' ? 'native' : 'managed');
+  const backgroundJobsMode = config.backgroundJobs?.mode ?? 'native';
   const tui = config.tui !== false;
   // User-edited config can be malformed despite the declared type; treat a
   // non-array disabled list as empty instead of failing plugin init.
@@ -140,7 +137,6 @@ export function resolveFeatureGates(
     : [];
   return Object.freeze({
     backgroundJobsMode,
-    managedJobs: hostFlavor !== 'v2' && backgroundJobsMode === 'managed',
     presetRouting: backgroundJobsMode !== 'off',
     tui,
     sidebar: tui && config.sidebar !== false,

@@ -55,7 +55,7 @@ export interface OrchestratorPromptOptions {
   /** Per-agent skill grant summaries; when set, each routing line names the
    *  skills that agent can load and the block closes with a short note. */
   agentSkills?: AgentSkillGrants;
-  /** 'v2' on OpenCode v2 hosts; anything else renders v1 tool vocabulary. */
+  /** Host flavor supplied by agent configuration. */
   hostFlavor?: string;
   /** false drops the whole <Agents> block. */
   routingBlock?: boolean;
@@ -64,8 +64,7 @@ export interface OrchestratorPromptOptions {
 /**
  * Build the orchestrator system prompt.
  *
- * One template for every host; only the resume channel differs between v1
- * and v2. Output depends only on the options (no time, randomness, or
+ * Output depends only on the options (no time, randomness, or
  * per-request state), so it stays byte-stable for a session's lifetime —
  * pinned by snapshot tests.
  */
@@ -75,11 +74,8 @@ export function buildOrchestratorPrompt({
   onlyAgents,
   customDescriptions,
   agentSkills,
-  hostFlavor,
   routingBlock = true,
 }: OrchestratorPromptOptions = {}): string {
-  const _v2 = hostFlavor === 'v2';
-
   // A scope renders through the scoped-catalog renderer so in-scope custom
   // specialists appear with their description fallback; the unscoped path
   // keeps the built-in slim routing lines.

@@ -235,7 +235,7 @@ describe('RuntimeConfig', () => {
 
   test('core feature and display getter defaults with an empty config', () => {
     resetRegistry();
-    const runtime = RuntimeConfig.init(DIRECTORY, {});
+    const runtime = RuntimeConfig.init(DIRECTORY, {}, 'v2');
     expect(runtime.preset).toBeUndefined();
     expect(runtime.updateCheckerEnabled).toBe(true);
     expect(runtime.stripOrchestratorModel).toBe(false);
@@ -243,16 +243,14 @@ describe('RuntimeConfig', () => {
     expect(runtime.setDefaultAgent).toBe(true);
     expect(runtime.compactSidebar).toBe(true);
     expect(runtime.sidebarEnabled).toBe(true);
-    expect(runtime.backgroundJobsEnabled).toBe(true);
-    expect(runtime.backgroundJobsMode).toBe('managed');
+    expect(runtime.backgroundJobsMode).toBe('native');
     expect(runtime.interviewEnabled).toBe(true);
     expect(runtime.liveConfigRefresh).toBe(true);
     expect(runtime.imageRouting).toBe('direct');
     expect(runtime.companion).toBeUndefined();
     expect(runtime.council).toBeUndefined();
     expect(runtime.featureGates).toEqual({
-      backgroundJobsMode: 'managed',
-      managedJobs: true,
+      backgroundJobsMode: 'native',
       presetRouting: true,
       tui: true,
       sidebar: true,
@@ -267,7 +265,7 @@ describe('RuntimeConfig', () => {
   test('featureGates is frozen, cached per generation, and defaults while unseeded', () => {
     resetRegistry();
     const unseeded = RuntimeConfig.get(DIRECTORY).featureGates;
-    expect(unseeded.backgroundJobsMode).toBe('managed');
+    expect(unseeded.backgroundJobsMode).toBe('native');
     expect(RuntimeConfig.get(DIRECTORY).featureGates).toBe(unseeded);
 
     const runtime = RuntimeConfig.init(DIRECTORY, {});
@@ -290,7 +288,6 @@ describe('RuntimeConfig', () => {
       interview: { enabled: false },
       sidebar: false,
     });
-    expect(off.backgroundJobsEnabled).toBe(false);
     expect(off.backgroundJobsMode).toBe('off');
     expect(off.interviewEnabled).toBe(false);
     expect(off.sidebarEnabled).toBe(false);
@@ -299,7 +296,6 @@ describe('RuntimeConfig', () => {
       backgroundJobs: { mode: 'off' },
       interview: { maxQuestions: 5 },
     });
-    expect(partial.backgroundJobsEnabled).toBe(false);
     expect(partial.interviewEnabled).toBe(true);
     expect(partial.sidebarEnabled).toBe(true);
     expect(partial.liveConfigRefresh).toBe(true);
@@ -321,22 +317,12 @@ describe('RuntimeConfig', () => {
       backgroundJobs: { mode: 'native' },
     });
     expect(native.backgroundJobsMode).toBe('native');
-    // Only the managed mode constructs the board-shaped lifecycle.
-    expect(native.backgroundJobsEnabled).toBe(false);
 
     RuntimeConfig.reset(DIRECTORY);
     const off = RuntimeConfig.init(DIRECTORY, {
       backgroundJobs: { mode: 'off' },
     });
     expect(off.backgroundJobsMode).toBe('off');
-    expect(off.backgroundJobsEnabled).toBe(false);
-
-    RuntimeConfig.reset(DIRECTORY);
-    const managed = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: { mode: 'managed' },
-    } as unknown as PluginConfig);
-    expect(managed.backgroundJobsMode).toBe('managed');
-    expect(managed.backgroundJobsEnabled).toBe(true);
   });
 
   test('host flavor controls cached feature gates for reseeded and detached runtimes', () => {
@@ -345,8 +331,7 @@ describe('RuntimeConfig', () => {
     v1.captureHostConfig({ default_agent: 'v1-agent' });
     v1.everModelSwitched('explorer');
     const v1Gates = v1.featureGates;
-    expect(v1Gates.backgroundJobsMode).toBe('managed');
-    expect(v1Gates.managedJobs).toBe(true);
+    expect(v1Gates.backgroundJobsMode).toBe('native');
 
     // Switching host flavor from v1 to v2 creates a clean instance to prevent
     // stale v1 singleton state (switched models, host snapshot) from polluting v2.
@@ -357,10 +342,9 @@ describe('RuntimeConfig', () => {
     expect(v2.featureGates).not.toBe(v1Gates);
     expect(v2.featureGates).toMatchObject({
       backgroundJobsMode: 'native',
-      managedJobs: false,
       presetRouting: true,
     });
-    expect(v1Gates.backgroundJobsMode).toBe('managed');
+    expect(v1Gates.backgroundJobsMode).toBe('native');
     expect(RuntimeConfig.get(DIRECTORY)).toBe(v2);
     expect(RuntimeConfig.get(DIRECTORY).featureGates).toBe(v2.featureGates);
 
@@ -371,7 +355,6 @@ describe('RuntimeConfig', () => {
     );
     expect(detached.featureGates).toMatchObject({
       backgroundJobsMode: 'off',
-      managedJobs: false,
       presetRouting: false,
     });
     expect(v2.featureGates.backgroundJobsMode).toBe('native');
