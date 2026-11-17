@@ -146,7 +146,7 @@ Key event flows:
 
 3. **Tool Execution**:
    - `tool.execute.before` → apply patch, path guards, and council seat resolution
-   - `tool.execute.after` → post-tool hooks (retry guidance, JSON error recovery)
+   - `tool.execute.after` → post-tool hooks (tool-loop-guard repeated-call warnings)
 
 4. **Chat Integration**:
    - `chat.message` → track session → agent/model mapping and mark TUI activity

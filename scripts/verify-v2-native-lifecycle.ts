@@ -453,7 +453,6 @@ function pluginConfig(mode: Mode) {
       'auto-update-checker',
       'foreground-fallback',
       'phase-reminder',
-      'json-error-recovery',
       'absolute-path-rescue',
       'cache-monitor',
       'apply-patch',

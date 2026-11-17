@@ -30,7 +30,6 @@ import { RuntimeConfig } from './config/runtime';
 import { isTaggedPart } from './hooks/cache-safe-injection';
 import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
 import { ForegroundFallbackManager } from './hooks/foreground-fallback';
-import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
 import { LOOP_GUARD_WARNING } from './hooks/tool-loop-guard/hook';
 import type { MessageWithParts } from './hooks/types';
@@ -1416,7 +1415,6 @@ describe('plugin reload generation cleanup', () => {
       JSON.stringify({
         companion: { enabled: false },
         disabled_hooks: [
-          'json-error-recovery',
           'tool-loop-guard',
           'search-path-guard',
           'absolute-path-rescue',
@@ -1476,20 +1474,6 @@ describe('plugin reload generation cleanup', () => {
         );
         expect(output.output).toBe('...file contents...');
       }
-
-      // json-error-recovery: the malformed output surfaces raw.
-      const jsonOutput = {
-        title: 'Tool Error',
-        output: "JSON parse error: expected '}' in JSON body",
-        metadata: {},
-      };
-      await hooks['tool.execute.after']?.(
-        { tool: 'Edit', sessionID: 'guards-off', callID: 'g-7' } as never,
-        jsonOutput as never,
-      );
-      expect(jsonOutput.output).toBe(
-        "JSON parse error: expected '}' in JSON body",
-      );
     } finally {
       await hooks.dispose?.();
     }
@@ -1550,18 +1534,6 @@ describe('plugin reload generation cleanup', () => {
         );
       }
       expect(String(thirdOutput?.output)).toContain(LOOP_GUARD_WARNING);
-
-      // json-error-recovery appends the reminder.
-      const jsonOutput = {
-        title: 'Tool Error',
-        output: "JSON parse error: expected '}' in JSON body",
-        metadata: {},
-      };
-      await hooks['tool.execute.after']?.(
-        { tool: 'invalid', sessionID: 'guards-on', callID: 'c-7' } as never,
-        jsonOutput as never,
-      );
-      expect(String(jsonOutput.output)).toContain(JSON_ERROR_REMINDER);
     } finally {
       await hooks.dispose?.();
     }

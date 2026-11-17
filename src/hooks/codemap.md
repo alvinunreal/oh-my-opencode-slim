@@ -39,7 +39,6 @@ from its owning module, that returns the hook points OpenCode invokes.
 |---|---|---|
 | Prompt transforms | `createPhaseReminderHook`, `createCouncilInjectHook`, `createChatHeadersHook`, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
 | Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook` | `tool.execute.before` / `tool.execute.after` |
-| Error recovery | `createJsonErrorRecoveryHook` | message transform, tool-execute after |
 | Lifecycle/event | `createCacheMonitorHook` | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
 | Model fallback | `ForegroundFallbackManager` | session retry hook; execution and step events |
@@ -100,7 +99,6 @@ remains trailing-most; the cache-safety harness mirrors this wiring.
 | `council-seats/` | Council seat-result assembly seam: `Seats:`-line rewrite hook and native host-session resolver |
 | `deepwork/` | `/deepwork` runtime command |
 | `foreground-fallback/` | Interactive-session model fallback on rate-limit/errors |
-| `json-error-recovery/` | Malformed JSON/tool-output recovery helpers |
 | `phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases |
 | `reflect/` | `/reflect` runtime command |
 | `search-path-guard/` | Pre-checks `grep`/`glob` `args.path` validity in `tool.execute.before`, using each host tool's path resolution semantics, and fails fast with an actionable error instead of upstream "ripgrep execution failed" noise or silent parent-directory searches |

@@ -494,9 +494,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let jsonErrorRecoveryAfter:
-    | ((i: unknown, o: unknown) => Promise<void>)
-    | undefined;
   let releaseRuntimeConfig: (() => void) | undefined;
   let collapseActiveInterviewHistory:
     | typeof collapseInterviewHistory
@@ -697,34 +694,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       webfetch = createWebfetchTool(ctx);
     }
     sessionLifecycle = new SessionLifecycle(log);
-    // Initialize hooks and wrapPostToolHook helper for error isolation
-
-    // Wrap tool.execute.after handlers with per-hook error isolation.
-    // Preserves the old runPostToolHook behavior: one failing hook doesn't
-    // block the rest.
-    const wrapPostToolHook = (
-      name: string,
-      fn: (i: unknown, o: unknown) => Promise<void>,
-    ): ((i: unknown, o: unknown) => Promise<void>) => {
-      return async (i, o) => {
-        try {
-          await fn(i, o);
-        } catch (error) {
-          const meta = i as {
-            tool?: string;
-            sessionID?: string;
-            callID?: string;
-          };
-          log('[plugin] post-tool hook failed open', {
-            hook: name,
-            tool: meta.tool,
-            sessionID: meta.sessionID,
-            callID: meta.callID,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      };
-    };
 
     if (!runtime.disabledHooks.has('phase-reminder')) {
       phaseReminder = createPhaseReminderHook();
@@ -840,15 +809,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       absolutePathRescue = createAbsolutePathRescueHook(ctx);
     }
 
-    if (!runtime.disabledHooks.has('json-error-recovery')) {
-      const { createJsonErrorRecoveryHook } = await import(
-        './hooks/json-error-recovery/hook'
-      );
-      const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
-      jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
-        jsonErrorRecoveryHook['tool.execute.after'](i as never, o as never),
-      );
-    }
     if (!runtime.disabledHooks.has('tool-loop-guard')) {
       const { createToolLoopGuardHook } = await import(
         './hooks/tool-loop-guard/hook'
@@ -2560,16 +2520,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    'tool.execute.after':
-      jsonErrorRecoveryAfter || toolLoopGuard
-        ? async (input, output) => {
-            await jsonErrorRecoveryAfter?.(input, output);
-            await toolLoopGuard?.['tool.execute.after'](
-              input as never,
-              output as never,
-            );
-          }
-        : undefined,
+    'tool.execute.after': toolLoopGuard
+      ? async (input, output) => {
+          await toolLoopGuard?.['tool.execute.after'](
+            input as never,
+            output as never,
+          );
+        }
+      : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
