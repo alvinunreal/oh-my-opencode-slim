@@ -734,12 +734,25 @@ function getProcessFallbacksInProgress(): Set<string> {
 
 export type ForegroundFallbackModel = string | { id: string; variant?: string };
 
+type FallbackReprobe =
+  | { state: 'waiting'; deadline: number }
+  | {
+      state: 'switching' | 'awaiting-execution';
+      deadline: number;
+      attempt: number;
+      epoch: number;
+      afterStepID?: string;
+      stepID?: string;
+    }
+  | { state: 'blocked' };
+
 type FallbackDescent = {
   model: string;
   variant?: string;
   fallback: string;
   fallbackVariant?: string;
   midTurnAt?: number;
+  reprobe?: FallbackReprobe;
 };
 
 export type ForegroundFallbackOptions = {
@@ -798,6 +811,8 @@ export type ForegroundFallbackOptions = {
    *  decision and calls session.switchModel, so it can run on v2 hosts.
    *  Defaults to `enabled` for hosts where both paths apply. */
   v2RetryEnabled?: boolean;
+  /** Delay before the v2 host may re-probe the original model after fallback. */
+  reprobeAfterHours?: number;
   timers?: ForegroundFallbackTimers;
 };
 
@@ -813,6 +828,7 @@ export class ForegroundFallbackManager {
   private readonly maxRetries: number;
   private readonly initialRetryDelayMs: number;
   private readonly retryDelayMs: number;
+  private readonly reprobeIntervalMs?: number;
   private readonly hasRunningChildren?: (sessionID: string) => boolean;
   private readonly v2RetryEnabled: boolean;
   private readonly chainSource: Record<
@@ -840,6 +856,7 @@ export class ForegroundFallbackManager {
   private readonly awaitingRun = new Set<string>();
   private readonly restoreTimers = new Map<string, TimerHandle>();
   private readonly restoring = new Set<string>();
+  private reprobeSequence = 0;
   /** Provider failure timestamps survive internal returns to the primary. */
   private readonly downProviders = new Map<string, Map<string, number>>();
   /** sessionID → agent name (populated from message.updated info.agent field) */
@@ -1392,10 +1409,20 @@ export class ForegroundFallbackManager {
     sessionID: string,
     messageID: string | undefined,
     model?: string,
+    variant?: string,
   ): void {
     if (messageID && this.observedUserMessageIds.get(sessionID)?.has(messageID))
       return;
     const descent = this.descent.get(sessionID);
+    if (
+      this.reprobeIntervalMs !== undefined &&
+      descent?.reprobe &&
+      model !== undefined &&
+      (model !== descent.fallback ||
+        (variant ?? 'default') !== (descent.fallbackVariant ?? 'default'))
+    ) {
+      this.clearReprobeForManualSelection(sessionID, model);
+    }
     if (
       descent &&
       model !== undefined &&
@@ -1452,6 +1479,26 @@ export class ForegroundFallbackManager {
     this.restoredFrom.delete(sessionID);
     this.rememberUserMessage(sessionID, messageID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+    const descent = this.descent.get(sessionID);
+    const reprobe = descent?.reprobe;
+    if (
+      descent &&
+      reprobe &&
+      (reprobe.state === 'switching' || reprobe.state === 'awaiting-execution')
+    ) {
+      this.descent.set(sessionID, {
+        ...descent,
+        reprobe: this.nextReprobeHold(),
+      });
+    }
+  }
+
+  /** Probe only on a Slim-recognized internal v2 admission. Model snapshots
+   *  are intentionally excluded: the context bridge can report a learned
+   *  primary model during the probe, which is not an explicit user choice. */
+  async prepareV2InternalContinuation(sessionID: string): Promise<void> {
+    if (this.reprobeIntervalMs === undefined || this.disposed) return;
+    await this.restoreV2(sessionID, true);
   }
 
   private isKnownUserMessage(
@@ -1645,6 +1692,7 @@ export class ForegroundFallbackManager {
       readBackgroundGeneration,
       hasRunningChildren,
       v2RetryEnabled = enabled,
+      reprobeAfterHours,
       timers,
     } = options;
     this.enabled = enabled;
@@ -1652,6 +1700,17 @@ export class ForegroundFallbackManager {
     this.maxRetries = maxRetries;
     this.initialRetryDelayMs = initialRetryDelayMs;
     this.retryDelayMs = retryDelayMs;
+    const reprobeIntervalMs =
+      typeof reprobeAfterHours === 'number'
+        ? reprobeAfterHours * 60 * 60 * 1000
+        : undefined;
+    this.reprobeIntervalMs =
+      (input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2' &&
+      reprobeIntervalMs !== undefined &&
+      Number.isFinite(reprobeIntervalMs) &&
+      reprobeIntervalMs > 0
+        ? reprobeIntervalMs
+        : undefined;
     this.hasRunningChildren = hasRunningChildren;
     this.v2RetryEnabled = v2RetryEnabled;
     this.chainSource = chains;
@@ -1749,23 +1808,94 @@ export class ForegroundFallbackManager {
     midTurn = false,
   ): { model: string; variant?: string } | undefined {
     const descent = this.descent.get(sessionID);
+    const reprobe = descent?.reprobe;
+    const reprobeDue =
+      this.reprobeIntervalMs !== undefined &&
+      midTurn &&
+      reprobe?.state === 'waiting' &&
+      this.now() >= reprobe.deadline;
     if (
       !descent ||
       this.disposed ||
-      (midTurn
-        ? descent.midTurnAt === undefined || this.now() < descent.midTurnAt
-        : this.busy.has(sessionID)) ||
+      (this.reprobeIntervalMs !== undefined && !reprobeDue) ||
+      (!reprobeDue &&
+        (midTurn
+          ? descent.midTurnAt === undefined || this.now() < descent.midTurnAt
+          : this.busy.has(sessionID))) ||
       this.awaitingRun.has(sessionID) ||
       this.isFallbackInProgress(sessionID) ||
-      this.getDownProviders(sessionID).has(
-        parseModelReference(descent.model)?.providerID ?? '',
-      )
+      (!reprobeDue &&
+        this.getDownProviders(sessionID).has(
+          parseModelReference(descent.model)?.providerID ?? '',
+        ))
     )
       return;
     return {
       model: descent.model,
       ...(descent.variant ? { variant: descent.variant } : {}),
     };
+  }
+
+  private nextReprobeHold(): FallbackReprobe {
+    return this.reprobeIntervalMs === undefined
+      ? { state: 'blocked' }
+      : { state: 'waiting', deadline: this.now() + this.reprobeIntervalMs };
+  }
+
+  private clearReprobeForManualSelection(
+    sessionID: string,
+    model: string,
+  ): void {
+    this.descent.delete(sessionID);
+    this.clearRestoreTimer(sessionID);
+    this.activeFallback.delete(sessionID);
+    this.downProviders.delete(sessionID);
+    this.sessionModel.set(sessionID, model);
+  }
+
+  private currentReprobeAttempt(
+    sessionID: string,
+    attempt: number,
+  ):
+    | {
+        descent: FallbackDescent;
+        reprobe: Extract<FallbackReprobe, { attempt: number }>;
+      }
+    | undefined {
+    const descent = this.descent.get(sessionID);
+    const reprobe = descent?.reprobe;
+    if (
+      !descent ||
+      !reprobe ||
+      (reprobe.state !== 'switching' &&
+        reprobe.state !== 'awaiting-execution') ||
+      reprobe.attempt !== attempt
+    )
+      return;
+    return { descent, reprobe };
+  }
+
+  private resetReprobeAttempt(sessionID: string, attempt: number): void {
+    const current = this.currentReprobeAttempt(sessionID, attempt);
+    if (!current) return;
+    this.descent.set(sessionID, {
+      ...current.descent,
+      reprobe: this.nextReprobeHold(),
+    });
+  }
+
+  private isActiveReprobeFailure(sessionID: string, model: string): boolean {
+    const descent = this.descent.get(sessionID);
+    const reprobe = descent?.reprobe;
+    return Boolean(
+      this.reprobeIntervalMs !== undefined &&
+        descent?.model === model &&
+        this.sessionModel.get(sessionID) === model &&
+        reprobe &&
+        (reprobe.state === 'switching' ||
+          reprobe.state === 'awaiting-execution') &&
+        reprobe.epoch === (this.turnEpoch.get(sessionID) ?? 0),
+    );
   }
 
   private clearRestoreTimer(sessionID: string): void {
@@ -1800,6 +1930,8 @@ export class ForegroundFallbackManager {
     const target = this.restoreTarget(sessionID, midTurn);
     if (!target) {
       if (midTurn) return;
+      // Configured re-probes run only at an internal continuation boundary.
+      if (this.reprobeIntervalMs !== undefined) return;
       const provider = parseModelReference(descent.model)?.providerID;
       const markedAt = provider
         ? this.downProviders.get(sessionID)?.get(provider)
@@ -1827,8 +1959,23 @@ export class ForegroundFallbackManager {
     ).experimental_v2?.switchModel;
     const session = getClient(this.input).session;
     if (!switchModel || typeof session.get !== 'function') return;
+    const reprobe =
+      this.reprobeIntervalMs === undefined ? undefined : descent.reprobe;
+    const probeAttempt =
+      reprobe?.state === 'waiting'
+        ? {
+            state: 'switching' as const,
+            deadline: reprobe.deadline,
+            attempt: ++this.reprobeSequence,
+            epoch: this.turnEpoch.get(sessionID) ?? 0,
+            afterStepID: this.v2Steps.get(sessionID)?.assistantMessageID,
+          }
+        : undefined;
+    if (probeAttempt)
+      this.descent.set(sessionID, { ...descent, reprobe: probeAttempt });
     this.restoring.add(sessionID);
     let keepMarker = false;
+    let probeSwitchRequest: Promise<unknown> | undefined;
     try {
       const result = await withTimeout(
         session.get({ path: { id: sessionID } }),
@@ -1841,20 +1988,38 @@ export class ForegroundFallbackManager {
         result.error ||
         !isRecord(data) ||
         !isRecord(data.model) ||
-        this.descent.get(sessionID) !== descent ||
-        !this.restoreTarget(sessionID, midTurn)
-      )
+        (probeAttempt
+          ? !this.currentReprobeAttempt(sessionID, probeAttempt.attempt) ||
+            probeAttempt.epoch !== (this.turnEpoch.get(sessionID) ?? 0) ||
+            this.disposed
+          : this.descent.get(sessionID) !== descent ||
+            !this.restoreTarget(sessionID, midTurn))
+      ) {
+        if (probeAttempt)
+          this.resetReprobeAttempt(sessionID, probeAttempt.attempt);
         return;
+      }
       const current = data.model;
       const hostModel =
         typeof current.providerID === 'string' && typeof current.id === 'string'
           ? `${current.providerID}/${current.id}`
           : undefined;
-      if (!hostModel) return;
+      if (!hostModel) {
+        if (probeAttempt)
+          this.resetReprobeAttempt(sessionID, probeAttempt.attempt);
+        return;
+      }
       if (
         hostModel === descent.model &&
         (current.variant ?? 'default') === (descent.variant ?? 'default')
       ) {
+        if (probeAttempt) {
+          this.descent.delete(sessionID);
+          this.activeFallback.delete(sessionID);
+          this.sessionModel.set(sessionID, hostModel);
+          this.clearRestoreTimer(sessionID);
+          return;
+        }
         this.commitRestore(sessionID, descent);
         return;
       }
@@ -1870,19 +2035,46 @@ export class ForegroundFallbackManager {
         return;
       }
       const ref = parseModelReference(target.model);
-      if (!ref) return;
-      if (midTurn) this.restoredFrom.set(sessionID, descent);
+      if (!ref) {
+        if (probeAttempt)
+          this.resetReprobeAttempt(sessionID, probeAttempt.attempt);
+        return;
+      }
+      if (midTurn && !probeAttempt) this.restoredFrom.set(sessionID, descent);
+      probeSwitchRequest = switchModel(sessionID, {
+        providerID: ref.providerID,
+        id: ref.modelID,
+        ...(target.variant ? { variant: target.variant } : {}),
+      });
       await withTimeout(
-        switchModel(sessionID, {
-          providerID: ref.providerID,
-          id: ref.modelID,
-          ...(target.variant ? { variant: target.variant } : {}),
-        }),
+        probeSwitchRequest,
         HOST_CALL_TIMEOUT_MS,
         'foreground restore model switch timed out',
         this.timerSeam,
       );
-      if (!this.disposed && this.descent.get(sessionID) === descent) {
+      if (probeAttempt) {
+        const current = this.currentReprobeAttempt(
+          sessionID,
+          probeAttempt.attempt,
+        );
+        if (
+          !this.disposed &&
+          current &&
+          probeAttempt.epoch === (this.turnEpoch.get(sessionID) ?? 0)
+        ) {
+          if (current.reprobe.state === 'switching') {
+            this.descent.set(sessionID, {
+              ...current.descent,
+              reprobe: { ...current.reprobe, state: 'awaiting-execution' },
+            });
+          }
+          this.sessionModel.set(sessionID, descent.model);
+          this.onSessionModelChanged?.(sessionID, descent.model, {
+            agentName: this.sessionAgent.get(sessionID),
+            variant: descent.variant,
+          });
+        }
+      } else if (!this.disposed && this.descent.get(sessionID) === descent) {
         // The triggering step reset old quota; retain evidence from the ACK wait.
         this.commitRestore(sessionID, descent, midTurn);
         keepMarker = true;
@@ -1890,6 +2082,41 @@ export class ForegroundFallbackManager {
     } catch (error) {
       // A timed-out switch may still have landed on the host.
       keepMarker = error instanceof OperationTimeoutError;
+      if (
+        probeAttempt &&
+        this.currentReprobeAttempt(sessionID, probeAttempt.attempt) &&
+        probeAttempt.epoch === (this.turnEpoch.get(sessionID) ?? 0)
+      ) {
+        const current = this.currentReprobeAttempt(
+          sessionID,
+          probeAttempt.attempt,
+        );
+        if (current?.reprobe.state === 'switching') {
+          this.descent.set(sessionID, {
+            ...current.descent,
+            reprobe: keepMarker
+              ? { ...current.reprobe, state: 'awaiting-execution' }
+              : this.nextReprobeHold(),
+          });
+        }
+      }
+      if (
+        probeAttempt &&
+        error instanceof OperationTimeoutError &&
+        probeSwitchRequest
+      ) {
+        void probeSwitchRequest.then(
+          () => {},
+          () => {
+            const current = this.currentReprobeAttempt(
+              sessionID,
+              probeAttempt.attempt,
+            );
+            if (current?.reprobe.stepID === undefined)
+              this.resetReprobeAttempt(sessionID, probeAttempt.attempt);
+          },
+        );
+      }
       log('[foreground-fallback] v2 restore failed', {
         sessionID,
         error: stringifyError(error),
@@ -1922,6 +2149,9 @@ export class ForegroundFallbackManager {
       : undefined;
     if (from) {
       const previous = this.descent.get(sessionID);
+      const reprobeFailure =
+        previous?.model === from &&
+        this.isActiveReprobeFailure(sessionID, from);
       // v2 records the fallback variant; a different one there is a manual pick.
       const sameFallback =
         previous?.fallback === from &&
@@ -1929,7 +2159,16 @@ export class ForegroundFallbackManager {
           'v2' ||
           (previous.fallbackVariant ?? 'default') ===
             (fromVariant ?? 'default'));
-      const extend = sameFallback ? previous : undefined;
+      const extend = sameFallback || reprobeFailure ? previous : undefined;
+      const reprobe =
+        this.reprobeIntervalMs === undefined
+          ? undefined
+          : extend?.reprobe?.state === 'blocked' ||
+              failoverScope(error) !== 'provider' ||
+              (isPermanentQuotaBillingError(error) &&
+                (extend === undefined || from === extend.model))
+            ? { state: 'blocked' as const }
+            : this.nextReprobeHold();
       const originExhausted =
         (isSpentQuotaError(error) || isPermanentQuotaBillingError(error)) &&
         (!extend ||
@@ -1948,6 +2187,7 @@ export class ForegroundFallbackManager {
                   .hostFlavor === 'v2' && failoverScope(error) === 'provider'
               ? this.now() + PROVIDER_MARK_TTL_MS
               : undefined,
+        ...(reprobe ? { reprobe } : {}),
       });
       this.clearRestoreTimer(sessionID);
     }
@@ -2147,7 +2387,7 @@ export class ForegroundFallbackManager {
       (props.model.variant === undefined ||
         typeof props.model.variant === 'string')
     ) {
-      this.v2Steps.set(props.sessionID, {
+      const step: V2RefusalStep = {
         assistantMessageID: props.assistantMessageID,
         agent: props.agent,
         epoch: this.turnEpoch.get(props.sessionID) ?? 0,
@@ -2158,7 +2398,64 @@ export class ForegroundFallbackManager {
             ? { variant: props.model.variant }
             : {}),
         },
-      });
+      };
+      this.v2Steps.set(props.sessionID, step);
+      const descent = this.descent.get(props.sessionID);
+      const reprobe = descent?.reprobe;
+      if (
+        descent &&
+        reprobe &&
+        step.model &&
+        (reprobe.state === 'switching' ||
+          reprobe.state === 'awaiting-execution') &&
+        reprobe.epoch === step.epoch &&
+        reprobe.afterStepID !== step.assistantMessageID
+      ) {
+        const model = `${step.model.providerID}/${step.model.id}`;
+        const expectedAgent = this.sessionAgent.get(props.sessionID);
+        const agentMatches =
+          expectedAgent === undefined || expectedAgent === step.agent;
+        if (
+          agentMatches &&
+          model === descent.model &&
+          (step.model.variant ?? 'default') === (descent.variant ?? 'default')
+        ) {
+          this.descent.set(props.sessionID, {
+            ...descent,
+            reprobe: {
+              ...reprobe,
+              state: 'awaiting-execution',
+              stepID: step.assistantMessageID,
+            },
+          });
+          this.sessionModel.set(props.sessionID, descent.model);
+          this.onSessionModelChanged?.(props.sessionID, descent.model, {
+            agentName: expectedAgent,
+            variant: descent.variant,
+          });
+        } else if (
+          reprobe.state === 'awaiting-execution' &&
+          model === descent.fallback &&
+          (step.model.variant ?? 'default') ===
+            (descent.fallbackVariant ?? 'default')
+        ) {
+          this.descent.set(props.sessionID, {
+            ...descent,
+            reprobe: this.nextReprobeHold(),
+          });
+          this.sessionModel.set(props.sessionID, descent.fallback);
+        } else if (
+          reprobe.state === 'awaiting-execution' &&
+          agentMatches &&
+          (model !== descent.fallback ||
+            (step.model.variant ?? 'default') !==
+              (descent.fallbackVariant ?? 'default'))
+        ) {
+          this.descent.delete(props.sessionID);
+          this.activeFallback.delete(props.sessionID);
+          this.sessionModel.set(props.sessionID, model);
+        }
+      }
     }
   }
 
@@ -2211,7 +2508,49 @@ export class ForegroundFallbackManager {
         (step.model.variant ?? 'default') === (restored.variant ?? 'default')
       )
         this.restoredFrom.delete(props.sessionID);
-      this.resetRecoveryState(props.sessionID);
+      const currentDescent = this.descent.get(props.sessionID);
+      const reprobe = currentDescent?.reprobe;
+      const activeProbe = reprobe && 'attempt' in reprobe ? reprobe : undefined;
+      if (
+        event.type === 'session.step.ended' &&
+        currentDescent &&
+        activeProbe &&
+        activeProbe.stepID === undefined &&
+        step &&
+        step.assistantMessageID === props.assistantMessageID &&
+        step.assistantMessageID !== activeProbe.afterStepID &&
+        step.model &&
+        `${step.model.providerID}/${step.model.id}` ===
+          currentDescent.fallback &&
+        (step.model.variant ?? 'default') ===
+          (currentDescent.fallbackVariant ?? 'default')
+      ) {
+        this.descent.set(props.sessionID, {
+          ...currentDescent,
+          reprobe: this.nextReprobeHold(),
+        });
+        this.sessionModel.set(props.sessionID, currentDescent.fallback);
+      }
+      const probeStepCompleted =
+        activeProbe !== undefined &&
+        event.type === 'session.step.ended' &&
+        props.assistantMessageID === activeProbe.stepID &&
+        step?.assistantMessageID === activeProbe.stepID;
+      if (
+        currentDescent &&
+        activeProbe?.state === 'awaiting-execution' &&
+        probeStepCompleted &&
+        activeProbe.epoch === (this.turnEpoch.get(props.sessionID) ?? 0) &&
+        step?.model &&
+        `${step.model.providerID}/${step.model.id}` === currentDescent.model &&
+        (step.model.variant ?? 'default') ===
+          (currentDescent.variant ?? 'default')
+      )
+        this.commitRestore(props.sessionID, currentDescent);
+      this.resetRecoveryState(
+        props.sessionID,
+        this.descent.get(props.sessionID)?.reprobe !== undefined,
+      );
       if (event.type === 'session.step.ended' && props.finish === 'tool-calls')
         await this.restoreV2(props.sessionID, true);
     }
@@ -2701,6 +3040,7 @@ export class ForegroundFallbackManager {
     this.restoredFrom.delete(sessionID);
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
+    const reprobeFailure = this.isActiveReprobeFailure(sessionID, from);
     let failover = false;
     try {
       const scope = failoverScope(event.error);
@@ -2757,7 +3097,11 @@ export class ForegroundFallbackManager {
       // The host names the model whose attempt failed, so attribution is
       // direct: no echo heuristic on this path (an old model's late retry
       // was already dropped by the tried-model check above).
-      if (this.surfacesSpentQuota(sessionID, event.error, from)) return;
+      if (
+        !reprobeFailure &&
+        this.surfacesSpentQuota(sessionID, event.error, from)
+      )
+        return;
       const auth401 =
         isRecord(event.error) &&
         event.error.type === 'provider.auth' &&
@@ -2773,6 +3117,7 @@ export class ForegroundFallbackManager {
         // this model, so steer without charging the host-retry budget.
         if (
           !auth401 &&
+          !reprobeFailure &&
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&
           scope !== 'request' &&
@@ -2843,7 +3188,29 @@ export class ForegroundFallbackManager {
     let detail: V2SwitchDetail | undefined;
     let confirmed = false;
     try {
-      const selected = this.selectFallbackModel(sessionID, error);
+      const currentDescent = this.descent.get(sessionID);
+      const reprobeFailure =
+        from !== undefined && this.isActiveReprobeFailure(sessionID, from);
+      const fallbackRef = reprobeFailure
+        ? parseModelReference(currentDescent?.fallback ?? '')
+        : undefined;
+      const resolvedAgent = reprobeFailure
+        ? this.resolveChain(this.sessionAgent.get(sessionID), from, sessionID)
+            .source
+        : undefined;
+      const selected =
+        reprobeFailure && currentDescent && fallbackRef
+          ? {
+              agentName:
+                this.sessionAgent.get(sessionID) ??
+                resolvedAgent ??
+                'orchestrator',
+              currentModel: from,
+              nextModel: currentDescent.fallback,
+              ref: fallbackRef,
+              variant: currentDescent.fallbackVariant,
+            }
+          : this.selectFallbackModel(sessionID, error);
       if (!selected || selected === 'exhausted') return;
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
@@ -3088,6 +3455,15 @@ export class ForegroundFallbackManager {
     const from = step.model
       ? `${step.model.providerID}/${step.model.id}`
       : undefined;
+    const currentDescent = this.descent.get(sessionID);
+    const currentReprobe = currentDescent?.reprobe;
+    const reprobeFailure = Boolean(
+      from !== undefined &&
+        this.isActiveReprobeFailure(sessionID, from) &&
+        currentReprobe &&
+        'attempt' in currentReprobe &&
+        currentReprobe.stepID === step.assistantMessageID,
+    );
     if (
       from &&
       this.sessionTried.get(sessionID)?.has(from) &&
@@ -3144,7 +3520,11 @@ export class ForegroundFallbackManager {
       }
       if (agent) this.sessionAgent.set(sessionID, agent);
       if (from && !restoredStep) this.sessionModel.set(sessionID, from);
-      if (restoredStep && from && failoverScope(error) === 'request') {
+      if (
+        (restoredStep || reprobeFailure) &&
+        from &&
+        failoverScope(error) === 'request'
+      ) {
         const rejected = this.requestRejected.get(sessionID) ?? new Set();
         rejected.add(from);
         this.requestRejected.set(sessionID, rejected);
@@ -3156,7 +3536,7 @@ export class ForegroundFallbackManager {
             from,
             error,
             switchModel,
-            undefined,
+            reprobeFailure ? epoch : undefined,
             step.model?.variant,
           );
       if (

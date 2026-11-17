@@ -287,6 +287,7 @@ function makeOptions(
     readBackgroundGeneration: undefined,
     hasRunningChildren: undefined,
     v2RetryEnabled: undefined,
+    reprobeAfterHours: undefined,
     timers: undefined,
     ...overrides,
   };
@@ -297,6 +298,7 @@ function makeManager({
   maxRetries = 3,
   initialRetryDelayMs = 0,
   retryDelayMs = 0,
+  reprobeAfterHours,
   hostFlavor,
   onChanged,
   timers = clock,
@@ -305,6 +307,7 @@ function makeManager({
   maxRetries?: number;
   initialRetryDelayMs?: number;
   retryDelayMs?: number;
+  reprobeAfterHours?: number;
   hostFlavor?: 'v2';
   onChanged?: (sessionID: string, model: string) => void;
   timers?: ForegroundFallbackTimers;
@@ -327,6 +330,7 @@ function makeManager({
         onSessionModelChanged: onChanged,
         initialRetryDelayMs: initialRetryDelayMs,
         retryDelayMs: retryDelayMs,
+        reprobeAfterHours,
         timers: timers,
       }),
     ),
@@ -12242,6 +12246,7 @@ describe('fallback restoration', () => {
     chain?: string[];
     unarmedHandoff?: boolean;
     retryDelayMs?: number;
+    reprobeAfterHours?: number;
     v1?: boolean;
   }) {
     const info: {
@@ -12271,6 +12276,7 @@ describe('fallback restoration', () => {
       },
       enabled: false,
       v2RetryEnabled: true,
+      reprobeAfterHours: options?.reprobeAfterHours,
       maxRetries: 0,
       retryDelayMs: options?.retryDelayMs ?? 0,
       input: {
@@ -13005,6 +13011,273 @@ describe('fallback restoration', () => {
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
     expect(f.switchModel).toHaveBeenCalledTimes(2);
+  });
+
+  test('v2 reprobe holds through idle and tries the primary once after five hours', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, outage);
+
+    await f.manager.handleEvent(idle());
+    await clock.advance(5 * 60 * 60 * 1000 - 1);
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    expect(f.info.model).toEqual(backup);
+
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await clock.advance(1);
+    await f.manager.prepareV2InternalContinuation(sid);
+    await f.manager.prepareV2InternalContinuation(sid);
+
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+  });
+
+  test('v2 reprobe clears the hold only after the matching primary step succeeds', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, outage);
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+    await startStep(f.manager, 'primary-reprobe', origin);
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+    await f.manager.handleEvent({
+      type: 'session.execution.succeeded',
+      data: { sessionID: sid },
+    });
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'primary-reprobe',
+        finish: 'stop',
+      },
+    });
+
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect((f.manager as any).descent.has(sid)).toBe(false);
+  });
+
+  test('v2 failed reprobe returns to the same fallback and restarts the hold', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, outage);
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    await startStep(f.manager, 'primary-failed-reprobe', origin);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: origin,
+      error: outage,
+      decision: { retry: true, delay: 10 },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, backup);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    await clock.advance(5 * 60 * 60 * 1000 - 1);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    await clock.advance(1);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(4);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('v2 content-filter reprobe returns to fallback and stays blocked', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, outage);
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    await startStep(f.manager, 'primary-policy-reprobe', origin);
+    await f.manager.handleEvent({
+      type: 'session.step.failed',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'primary-policy-reprobe',
+        finish: 'content-filter',
+        error: rejection,
+      },
+    });
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, backup);
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+  });
+
+  test('permanent billing and prior policy failures do not enable reprobes', async () => {
+    const billing = fixture({ reprobeAfterHours: 5 });
+    await billing.retry(origin, { status: 402, message: 'payment required' });
+    await clock.advance(5 * 60 * 60 * 1000);
+    await billing.manager.prepareV2InternalContinuation(sid);
+    expect(billing.switchModel).toHaveBeenCalledTimes(1);
+    billing.manager.dispose();
+
+    const policy = fixture({ reprobeAfterHours: 5 });
+    await policy.retry(origin, rejection);
+    await policy.retry(backup, outage);
+    await clock.advance(5 * 60 * 60 * 1000);
+    await policy.manager.prepareV2InternalContinuation(sid);
+    expect(policy.switchModel).toHaveBeenCalledTimes(2);
+    expect(policy.manager.getActiveFallback(sid)?.model).toBe('third/c');
+  });
+
+  test('v2 quota hold survives fallback success and a recovered primary clears it', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, { message: 'Monthly usage limit reached' });
+    await startStep(f.manager, 'fallback-success', backup);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'fallback-success',
+        finish: 'stop',
+      },
+    });
+    expect((f.manager as any).quotaExhaustedProviders.get(sid)).toContain(
+      'primary',
+    );
+
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    await startStep(f.manager, 'quota-recovered', origin);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'quota-recovered',
+        finish: 'stop',
+      },
+    });
+    expect((f.manager as any).quotaExhaustedProviders.has(sid)).toBe(false);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+  });
+
+  test('v2 reprobe deadlines are independent for each session', async () => {
+    const models = new Map<string, typeof origin>([
+      ['session-a', { ...origin }],
+      ['session-b', { ...origin }],
+    ]);
+    const { client } = createMockClient();
+    const session = (client as { session: Record<string, unknown> }).session;
+    session.get = mock(async (args: { path: { id: string } }) => ({
+      data: {
+        id: args.path.id,
+        agent: 'orchestrator',
+        model: models.get(args.path.id),
+      },
+    }));
+    const switchModel = mock(
+      async (sessionID: string, model: typeof origin) => {
+        models.set(sessionID, model);
+      },
+    );
+    const manager = timedManager({
+      chains: { orchestrator: ['primary/a', 'backup/b'] },
+      enabled: false,
+      v2RetryEnabled: true,
+      reprobeAfterHours: 5,
+      input: {
+        directory: '/test',
+        hostFlavor: 'v2',
+        client,
+        experimental_v2: { switchModel },
+      } as never,
+    });
+    const fail = (sessionID: string) =>
+      manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: origin,
+          error: outage,
+        },
+        switchModel,
+      );
+
+    await fail('session-a');
+    await clock.advance(60 * 60 * 1000);
+    await fail('session-b');
+    await clock.advance(4 * 60 * 60 * 1000);
+    await manager.prepareV2InternalContinuation('session-a');
+    await manager.prepareV2InternalContinuation('session-b');
+    expect(
+      switchModel.mock.calls.filter((call) => call[1].id === 'a'),
+    ).toHaveLength(1);
+
+    await clock.advance(60 * 60 * 1000);
+    await manager.prepareV2InternalContinuation('session-b');
+    expect(
+      switchModel.mock.calls.filter((call) => call[1].id === 'a'),
+    ).toHaveLength(2);
+  });
+
+  test('external turns and manual model or variant selections do not start a reprobe', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, outage);
+    await clock.advance(5 * 60 * 60 * 1000);
+    f.manager.noteExternalTurn(sid, 'external-turn', 'backup/b');
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    f.manager.noteExternalTurn(sid, 'manual-turn', 'backup/b', 'manual');
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+  });
+
+  test('stale primary completion and policy rejection do not trigger another probe', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await startStep(f.manager, 'stale-primary', origin);
+    await f.retry(origin, outage);
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'stale-primary',
+        finish: 'stop',
+      },
+    });
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+
+    await startStep(f.manager, 'policy-reprobe', origin);
+    await f.retry(origin, rejection);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, backup);
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+  });
+
+  test('session deletion clears a pending reprobe hold', async () => {
+    const f = fixture({ reprobeAfterHours: 5 });
+    await f.retry(origin, outage);
+    expect((f.manager as any).descent.has(sid)).toBe(true);
+
+    await f.manager.handleEvent({
+      type: 'session.deleted',
+      properties: { sessionID: sid },
+    });
+
+    expect((f.manager as any).descent.has(sid)).toBe(false);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    await clock.advance(5 * 60 * 60 * 1000);
+    await f.manager.prepareV2InternalContinuation(sid);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
   });
 
   test('a different continuation discards its old descent', async () => {

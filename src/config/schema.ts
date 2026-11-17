@@ -720,6 +720,19 @@ export const FailoverConfigSchema = z
           'configured primary again; "stick-to-fallback" keeps the ' +
           'confirmed fallback until a new external user turn.',
       ),
+    reprobe: z
+      .object({
+        afterHours: z
+          .number()
+          .finite()
+          .positive()
+          .describe(
+            'Hours to keep a confirmed v2 fallback before the next eligible ' +
+              'internal continuation may try the original model again.',
+          ),
+      })
+      .strict()
+      .optional(),
     timeoutMs: z.never({ error: 'fallback.timeoutMs was removed' }).optional(),
     retry_on_empty: z
       .never({ error: 'fallback.retry_on_empty was removed' })

@@ -1552,6 +1552,20 @@
             "stick-to-fallback"
           ]
         },
+        "reprobe": {
+          "type": "object",
+          "properties": {
+            "afterHours": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Hours to keep a confirmed v2 fallback before the next eligible internal continuation may try the original model again."
+            }
+          },
+          "required": [
+            "afterHours"
+          ],
+          "additionalProperties": false
+        },
         "timeoutMs": {
           "not": {}
         },
