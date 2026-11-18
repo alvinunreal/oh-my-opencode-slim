@@ -79,7 +79,7 @@ Maintain repository-level build, packaging, and release validation automation. G
   - Separates Node coverage runs (evaluated module/byte totals) from timing samples; timing reports CPU/heap/code stats.
   - Fails verify mode when the fully disabled baseline no longer loads strictly fewer package bytes than the cold-gated controls.
 - `verify-v2-native-lifecycle.ts`
-  - Packed-artifact, headless OpenCode 2.3.0 lifecycle verification over a deterministic local model stub; the harness asserts that exact host version (`V2_LIFECYCLE_HOST` selects the binary).
+  - Packed-artifact, headless OpenCode 2.3.2 lifecycle verification over a deterministic local model stub; the harness asserts that exact host version (`V2_LIFECYCLE_HOST` selects the binary).
   - Covers default/native/off background child lifecycles, permission status/reply, restart recovery, explicit-managed startup rejection,
     and content-filter refusal continuation with host-owned per-period reports and no duplicate Slim completion.
   - Invoked directly (`bun scripts/verify-v2-native-lifecycle.ts [--modes=...] [--restart=running] [--self-check]`); no package-script wrapper.

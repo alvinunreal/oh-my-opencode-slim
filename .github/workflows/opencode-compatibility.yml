@@ -32,5 +32,5 @@ jobs:
 
       - name: Verify OpenCode host compatibility
         run: |
-          npm install --prefix "$RUNNER_TEMP/opencode" @opencode/cli@2.3.0
+          npm install --prefix "$RUNNER_TEMP/opencode" @opencode/cli@2.3.2
           V2_LIFECYCLE_HOST="$RUNNER_TEMP/opencode/node_modules/.bin/opencode" bun run verify:host-smoke

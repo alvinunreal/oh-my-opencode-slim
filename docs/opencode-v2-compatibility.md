@@ -7,7 +7,7 @@ Bundled skills and MCPs register through OpenCode’s plugin APIs.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
-2.3.0. Typecheck covers the consumed listing filters, nullable continuation
+2.3.2. Typecheck covers the consumed listing filters, nullable continuation
 cursors, native execution event envelope, compaction result names and
 hook/permission contracts. The official hook set also includes `fork`,
 `experimental.model.resolve`, and `experimental.idle`; Slim does not register
