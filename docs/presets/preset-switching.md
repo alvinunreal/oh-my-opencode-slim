@@ -23,8 +23,9 @@ the built-in `/models`, so it triggers no LLM turn.
 >
 > Non-TUI clients (OpenChamber, SDK consumers, ACP hosts) get a server-side
 > `/preset <name>` command with the same meaning. No argument lists the
-> available presets; a name binds the invoking session; an unknown name reports
-> the valid options. It is apply-only — create, edit and delete stay in the TUI
+> available presets, the current session binding, and the global and effective
+> defaults. A name binds the invoking session; an unknown name reports the
+> valid options. It is apply-only — create, edit and delete stay in the TUI
 > manager — and the client reports the result without a model turn, so no turn
 > or context is spent and the binding applies to that session's next
 > delegation. Listing `preset` in `disabled_commands` removes both the TUI

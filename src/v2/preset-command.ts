@@ -11,10 +11,9 @@
  * on the next turn — so the result travels through the command error channel
  * the client already renders. Nothing runs and nothing enters the context.
  */
-import {
-  bindSessionPreset,
-  readAvailablePresets,
-} from './session-preset-apply';
+import { readPluginConfigSnapshot } from '../config/snapshot';
+import { getPresetSelectionState } from '../tools/preset-switch';
+import { bindSessionPreset } from './session-preset-apply';
 import type { SessionPresetState } from './session-presets';
 import type { V2CommandDefinition } from './types';
 
@@ -47,23 +46,57 @@ export async function presetListFeedback(
     readSessionPreset,
     hostFlavor = 'v2',
   } = options;
-  const { names, active } = readAvailablePresets(directory, hostFlavor);
-  if (names.length === 0) {
-    return 'No presets configured. Define presets in oh-my-opencode-slim.jsonc.';
-  }
-
-  const parts = [`Available presets: ${names.join(', ')}.`];
+  const parts: string[] = [];
   try {
-    const { presetName } = await readSessionPreset(sessionID);
+    const { status, presetName, selection } =
+      await readSessionPreset(sessionID);
+    const binding = selection === 'default' ? 'default-derived' : 'explicit';
     parts.push(
-      presetName
-        ? `Session team: ${presetName}.`
+      status === 'bound'
+        ? `Session team: ${presetName ?? '(unnamed)'} (${binding}).`
         : 'Session team: not bound yet.',
     );
   } catch {
-    // Unreadable binding: report the default only, never guess the team.
+    parts.push('Session team: unknown.');
   }
-  if (active) parts.push(`Global default: ${active}.`);
+
+  try {
+    const snapshot = readPluginConfigSnapshot(directory, { hostFlavor });
+    const unreadable = snapshot.warnings.some(
+      ({ kind, presetName }) =>
+        kind === 'read-error' ||
+        kind === 'invalid-json' ||
+        (kind === 'invalid-schema' && presetName === undefined),
+    );
+    if (unreadable) throw new Error('Could not read preset configuration');
+
+    const { global, project } = getPresetSelectionState(directory, hostFlavor);
+    const effective = snapshot.config.preset?.trim();
+    const source = process.env.OH_MY_OPENCODE_SLIM_PRESET
+      ? 'environment'
+      : project
+        ? 'project config'
+        : 'user config';
+    parts.push(
+      `Global default: ${global ?? '(none)'}.`,
+      effective
+        ? `Effective default: ${effective} (${source}).`
+        : 'Effective default: (none).',
+    );
+    const names = Object.keys(snapshot.config.presets ?? {}).sort((a, b) =>
+      a.localeCompare(b),
+    );
+    parts.push(
+      names.length > 0
+        ? `Available presets: ${names.join(', ')}.`
+        : 'No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
+    );
+    if (names.length === 0) return parts.join(' ');
+  } catch {
+    parts.push('Preset defaults and available presets: unknown.');
+    return parts.join(' ');
+  }
+
   parts.push('Run /preset <name> to apply one to this session.');
   return parts.join(' ');
 }

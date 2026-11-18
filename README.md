@@ -232,7 +232,8 @@ history. This is best-effort: a failed continuation can leave the native
 model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
 The sidebar shows the current session's saved team models and variants;
-`/preset` marks its bound preset separately from the global default.
+`/preset` marks its bound preset separately from the global default. In Web
+and Desktop, bare `/preset` displays the session binding and configured defaults.
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
 lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
 child progress reporting. V2 applies the old `"managed"` mode as `"native"`
