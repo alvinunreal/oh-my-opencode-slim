@@ -3104,25 +3104,23 @@ describe('observer dispatch instruction injection', () => {
   });
 
   test('advisory prompts gain the dispatch line with observer enabled', () => {
+    const guidance =
+      "Read visual files directly when you can. If you can't view one or need help, send @observer the path and goal.";
     const enabled = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
       hostFlavor: 'v2',
     });
     const oracleOn = enabled.find((a) => a.name === 'oracle');
-    expect(oracleOn?.config.prompt).toContain(
-      'dispatch @observer with the file path',
-    );
+    expect(oracleOn?.config.prompt).toContain(guidance);
 
     const disabledSet = createAgents(
       runtimeFor({ disabled_agents: ['observer'] }, 'v2'),
       { hostFlavor: 'v2' },
     );
     const oracleOff = disabledSet.find((a) => a.name === 'oracle');
-    expect(oracleOff?.config.prompt).not.toContain(
-      'dispatch @observer with the file path',
-    );
+    expect(oracleOff?.config.prompt).not.toContain(guidance);
     // Non-advisory roles never gain the line.
-    const fixer = disabledSet.find((a) => a.name === 'fixer');
-    expect(fixer?.config.prompt).not.toContain('dispatch @observer');
+    const fixer = enabled.find((a) => a.name === 'fixer');
+    expect(fixer?.config.prompt).not.toContain(guidance);
   });
 });
 
