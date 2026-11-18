@@ -2422,6 +2422,36 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test('returns true for the claude-agent weekly subscription limit (issue #1918)', () => {
+    // Deterministic provider.unknown signature from the claude-agent
+    // adapter: no HTTP status, so only the message can classify it.
+    // The weekly limit resets at a fixed time, so it is also permanent
+    // billing (immediate failover, no initial delay).
+    const error = {
+      type: 'provider.unknown',
+      message:
+        "You've hit your weekly limit · resets 1pm (Europe/Berlin) Resets at 2026-11-15T12:00:00.000Z.",
+    };
+    expect(isFailoverError(error)).toBe(true);
+    expect(isPermanentQuotaBillingError(error)).toBe(true);
+    // The 5-hour variant carries the same signature.
+    expect(
+      isFailoverError({
+        type: 'provider.unknown',
+        message:
+          "You've hit your 5-hour limit · Resets at 2026-11-15T14:00:00.000Z.",
+      }),
+    ).toBe(true);
+    // Narrow by design: a bare "weekly limit" without the deterministic
+    // "You've hit your" prefix stays a hard error.
+    expect(
+      isFailoverError({
+        type: 'provider.unknown',
+        message: 'weekly limit reached for this workspace',
+      }),
+    ).toBe(false);
+  });
+
   test('returns true for content-policy moderation rejections (cyber_policy)', () => {
     // OpenAI moderation surfaces as HTTP 400 invalid_request with the
     // provider-specific policy code; deterministic per provider, so the next
