@@ -14,7 +14,6 @@ import {
   userTurn,
 } from '../hooks/cache-safety-harness.test';
 import { createDeepworkCommandHook } from '../hooks/deepwork';
-import { createJsonErrorRecoveryHook } from '../hooks/json-error-recovery/hook';
 import {
   createPhaseReminderHook,
   PHASE_REMINDER_METADATA_KEY,
@@ -581,6 +580,161 @@ describe('applyCommandMarkerToContext', () => {
 });
 
 describe('createSessionContextHandler (merged context hook seam)', () => {
+  const refusalNotice = (
+    state = 'error',
+    text = 'Provider blocked the response',
+  ) => ({
+    id: `notice-${state}`,
+    role: 'user',
+    agent: 'orchestrator',
+    sessionID: 'ses_cmd',
+    metadata: {
+      source: 'subagent',
+      childID: 'child-x',
+      agent: 'explorer',
+      state,
+    },
+    content: [{ type: 'text', text }],
+  });
+  const correctionText = [
+    '<system-reminder>',
+    '### Child task — Continuing after fallback',
+    '- child-x: the previous error is superseded; the child continues on test/backup.',
+    'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
+    '</system-reminder>',
+  ].join('\n');
+  const refusalHandler = (refusalRecovery: (id: string) => unknown) =>
+    createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      refusalRecovery,
+    } as never);
+
+  test('refusal correction waits for the pending decision at the trailing edge', async () => {
+    const decision = Promise.withResolvers<string | undefined>();
+    const event = makeEvent([
+      {
+        id: 'earlier',
+        role: 'user',
+        sessionID: 'ses_cmd',
+        agent: 'orchestrator',
+        content: [{ type: 'text', text: 'earlier context' }],
+      },
+      refusalNotice(),
+    ]);
+    const before = structuredClone(event.messages);
+    let finished = false;
+    const run = refusalHandler(() => ({
+      message: 'Provider blocked the response',
+      model: decision.promise,
+    }))(event).then(() => {
+      finished = true;
+    });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(finished).toBe(false);
+    decision.resolve('test/backup');
+    await run;
+    const notice = event.messages[1];
+    expect(notice?.content[0]?.cache).toEqual({ type: 'ephemeral' });
+    expect(event.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+    expect(event.messages.at(-1)?.content[0]?.cache).toBeUndefined();
+    const prefix = structuredClone(event.messages.slice(0, -1));
+    delete prefix[1]?.content[0]?.cache;
+    expect(JSON.stringify(prefix)).toBe(JSON.stringify(before));
+  });
+
+  test('refusal correction awaits child decisions concurrently in notice order', async () => {
+    const first = Promise.withResolvers<string | undefined>();
+    const second = Promise.withResolvers<string | undefined>();
+    const requested: string[] = [];
+    const notice = refusalNotice();
+    const event = makeEvent([
+      notice,
+      {
+        ...refusalNotice(),
+        id: 'notice-y',
+        metadata: { ...notice.metadata, childID: 'child-y' },
+      },
+    ]);
+    const handler = refusalHandler((id) => {
+      requested.push(id);
+      return {
+        message: 'Provider blocked the response',
+        model: id === 'child-x' ? first.promise : second.promise,
+      };
+    });
+    const run = handler(event);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    const requestedBeforeResolution = [...requested];
+    second.resolve('test/second');
+    first.resolve('test/first');
+    await run;
+    expect(requestedBeforeResolution).toEqual(['child-x', 'child-y']);
+    expect(event.messages.at(-1)?.content[0]?.text).toBe(
+      [
+        '<system-reminder>',
+        '### Child task — Continuing after fallback',
+        '- child-x: the previous error is superseded; the child continues on test/first.',
+        '- child-y: the previous error is superseded; the child continues on test/second.',
+        'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
+        '</system-reminder>',
+      ].join('\n'),
+    );
+  });
+
+  test('refusal correction uses only the last notice for a child', async () => {
+    const handler = refusalHandler(() => ({
+      message: 'Provider blocked the response',
+      model: Promise.resolve('test/backup'),
+    }));
+    const active = makeEvent([refusalNotice()]);
+    await handler(active);
+    expect(active.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+    const completed = makeEvent([
+      refusalNotice(),
+      refusalNotice('completed', 'done'),
+    ]);
+    await handler(completed);
+    expect(completed.messages).toHaveLength(2);
+  });
+
+  test('refusal correction does not wait for a different error body', async () => {
+    let waits = 0;
+    const handler = refusalHandler(() => ({
+      message: 'Provider blocked the response',
+      get model() {
+        waits++;
+        return Promise.resolve('test/backup');
+      },
+    }));
+    const active = makeEvent([refusalNotice()]);
+    await handler(active);
+    expect(active.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+    const other = makeEvent([refusalNotice('error', 'different failure')]);
+    await handler(other);
+    expect(other.messages).toHaveLength(1);
+    expect(waits).toBe(1);
+  });
+
+  test('refusal correction does not memoize a missing recovery', async () => {
+    let registered = false;
+    const handler = refusalHandler(() =>
+      registered
+        ? {
+            message: 'Provider blocked the response',
+            model: Promise.resolve('test/backup'),
+          }
+        : undefined,
+    );
+    const first = makeEvent([refusalNotice()]);
+    await handler(first);
+    expect(first.messages).toHaveLength(1);
+    registered = true;
+    const later = makeEvent([refusalNotice()]);
+    await handler(later);
+    expect(later.messages.at(-1)?.content[0]?.text).toBe(correctionText);
+  });
+
   function recordCommandCalls(): {
     calls: Array<{
       command: string;
@@ -1961,37 +2115,6 @@ describe('tool execute bridge normalization', () => {
 });
 
 describe('tool execute bridge status discrimination', () => {
-  test('only diagnoses v1 invalid-tool results', async () => {
-    const recovery = createJsonErrorRecoveryHook({} as never);
-    const text = 'Diagnosis: invalid JSON in a configuration file';
-    const successful = { title: '', output: text, metadata: {} };
-    await recovery['tool.execute.after'](
-      { tool: 'task', sessionID: 's', callID: 'c' },
-      successful,
-    );
-    expect(successful.output).toBe(text);
-    const invalid = { title: '', output: text, metadata: {} };
-    await recovery['tool.execute.after'](
-      { tool: 'invalid', sessionID: 's', callID: 'c' },
-      invalid,
-    );
-    expect(invalid.output).toContain('invalid JSON arguments');
-    const bridge = createToolExecuteBridges(
-      undefined,
-      recovery['tool.execute.after'],
-    );
-    const event = {
-      tool: 'subagent',
-      sessionID: 's',
-      id: 'c',
-      input: {},
-      status: 'completed',
-      result: { content: text },
-    };
-    await bridge.afterBridge(event);
-    expect(event.result.content).toBe(text);
-  });
-
   test('error status synthesizes the v1 output from the error text', async () => {
     const seen: Array<{ tool: string; output: unknown }> = [];
     const after = async (_i: unknown, o: { output: unknown }) => {
@@ -2075,29 +2198,6 @@ describe('tool execute bridge status discrimination', () => {
       error: noCause,
     });
     expect(noCause.message).toContain(LOOP_GUARD_WARNING);
-  });
-
-  test('v2 tool failures do not trigger the v1 JSON reminder', async () => {
-    const recovery = createJsonErrorRecoveryHook({} as never);
-    const event = {
-      tool: 'task',
-      sessionID: 's',
-      agent: 'a',
-      messageID: 'm',
-      id: 'c',
-      input: {},
-      status: 'error' as const,
-      error: 'SyntaxError: Unexpected token in JSON',
-      result: { content: 'stale result' },
-    };
-    const { afterBridge } = createToolExecuteBridges(
-      undefined,
-      recovery['tool.execute.after'],
-    );
-    await afterBridge(event);
-    expect(event.status).toBe('error');
-    expect(event.error).toBe('SyntaxError: Unexpected token in JSON');
-    expect(event.result.content).toBe('stale result');
   });
 
   test('error status with no error field never presents result content as success', async () => {

@@ -8,8 +8,7 @@
  * state-neutral pointer from disk truth and delivers it once per compaction
  * epoch, so it survives every compaction the host performs:
  *
- * - Placement: one trailing volatile message (strip + append), the same
- *   ownership model as the job board's volatile tail. It is never persisted,
+ * - Placement: one trailing volatile message (strip + append). It is never persisted,
  *   so the stable prefix — every real message — is byte-identical across
  *   requests: a mid-session activation, a head rewrite, or a head deletion
  *   only ever changes the volatile tail zone, which re-caches every turn
@@ -36,17 +35,9 @@
  *   injection. Wake continuations carry a user message, so unattended
  *   post-compaction runs are covered.
  *
- * Placement contract: the pointer message is tagged with BOTH its own key
- * and the job board's key, because the board's strip/anchor/trigger
- * machinery classifies its volatile tail zone by the board key. Carrying
- * the board key makes the pointer a first-class resident of that zone —
- * the board strips and re-anchors around it, the v2 breakpoint skips it,
- * and the cache-safety fingerprints exclude it — with zero board-module
- * changes. The pointer transform runs LAST (after the board) so a
- * re-entered transform chain stays ordered: the board's trailing-zone
- * strip removes the dual-tagged pointer mid-chain, and a matching claim
- * restores it by array identity (a fresh array is a new request the epoch
- * already served and stays suppressed).
+ * Placement contract: the pointer carries its own key and the shared
+ * volatile-tail key, so the v2 breakpoint skips it. The pointer transform
+ * runs last; a matching claim restores a stripped pointer by array identity.
  *
  * Switch: list "deepwork-goal" in disabled_hooks (disabled = never
  * injected).

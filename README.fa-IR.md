@@ -10,13 +10,8 @@
   <p><sub>ساخته‌شده توسط <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· یادداشت‌هایتان را به نمودارهای SVG تمیز و قابل‌ویرایش تبدیل کنید</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim رایگان است.** اگر برایتان مفید است، حمایت از رفاه حیوانات را در نظر بگیرید.<br>
+> [کمک به خیریه‌ای در منطقهٔ شما](https://ohmyopencodeslim.com/donate) · [همهٔ خیریه‌ها](https://ohmyopencodeslim.com/animals)
 
 ## این Plugin چیست؟
 
@@ -149,7 +148,7 @@ bun run build
 2. **فهرست مدل‌هایی را که OpenCode می‌بیند refresh و نمایش دهید**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **فایل تنظیمات Plugin را باز کنید**: `~/.config/opencode/oh-my-opencode-slim.json`
 
@@ -925,6 +924,16 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## حمایت از رفاه حیوانات
+
+Slim رایگان و با مجوز MIT است و همین‌طور خواهد ماند. به جای پرداخت هزینه، از کاربرانی که آن را مفید می‌دانند می‌خواهیم از رفاه حیوانات حمایت کنند. خیریه‌های پیشنهادی برای پایان دادن به دردناک‌ترین رفتارها با حیوانات در مزرعه و کشتارگاه فعالیت می‌کنند: کشتن بدون بیهوشی درست، جراحی بدون مسکن و نگهداری در فضای تنگ. کمک‌ها مستقیم به آن‌ها می‌رسد.
+
+- **[کمک مالی](https://ohmyopencodeslim.com/donate)**: صفحهٔ کمک مالی یک خیریهٔ فعال در منطقهٔ شما را باز می‌کند.
+- **[همهٔ خیریه‌ها](https://ohmyopencodeslim.com/animals)**: گزینه‌ها را مقایسه کنید و دلیل انتخابشان را ببینید.
+- **استفادهٔ تجاری**: مجوز هیچ تعهدی ایجاد نمی‌کند. از شرکت‌هایی که به Slim متکی هستند می‌خواهیم سالانه کمک مالی کنند.
 
 ---
 

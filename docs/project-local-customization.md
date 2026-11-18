@@ -9,19 +9,14 @@ This document describes how to configure and customize oh-my-opencode-slim on a 
 > **Only work in and run OpenCode within repositories you explicitly trust.**
 
 Configuration discovery also includes `.opencode/oh-my-opencode-slim.json[c]`
-in eligible ancestor directories. This matches the host's discovery: v2 walks
-through the filesystem root, even above repository and worktree boundaries;
-v1 stops at the Git worktree boundary, inclusive, or the filesystem root when
-there is no Git boundary. Prompt files and optional local skill grants use the
+in eligible ancestor directories. OpenCode 2 walks through the filesystem root,
+even above repository and worktree boundaries. Prompt files and optional local skill grants use the
 same walk. `OPENCODE_DISABLE_PROJECT_CONFIG=true` or `1` disables that project
 walk, leaving user configuration available. Review and trust ancestor
-directories too. On v2, `~/.opencode` is a project layer for projects under
-`$HOME` and overrides matching `~/.config/opencode` settings; on v1 it must be
-within the worktree walk to be inherited.
+directories too. `~/.opencode` is a project layer for projects under
+`$HOME` and overrides matching `~/.config/opencode` settings.
 
-The implementation references are OpenCode v1's
-[ConfigPaths.directories](https://github.com/anomalyco/opencode/blob/v1.18.13/packages/opencode/src/config/paths.ts)
-and OpenCode 2.0.22's
+The implementation references are OpenCode 2.0.22's
 [ConfigDiscovery](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/config/discovery.ts)
 and its [filesystem walk](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/util/src/fs-util.ts).
 
@@ -240,19 +235,13 @@ is **inline > file > agent default**:
 ### Host Vocabulary in Custom Prompts
 
 Prompt text you supply is used **verbatim** for delegation vocabulary — the
-plugin never rewrites delegation calls in it (`task(...)` on v1,
-`subagent(...)` on v2). Separately, display-name substitution rewrites
+plugin never rewrites delegation calls in it. Use `subagent(...)` on OpenCode 2.
+Separately, display-name substitution rewrites
 `@<internalName>` mentions to the agent's `displayName` throughout the final
 orchestrator prompt (inline, file, and append orchestrator prompts) and in
 `orchestratorPrompt`/ACP routing snippets (see
 [Display name rewriting](#custom-routing-guidance-orchestratorprompt) below).
-The host you run on therefore determines the delegation vocabulary embedded in
-that text:
-
-| Host (plugin entry) | Delegation call | Agent param | Resume param |
-|---|---|---|---|
-| v1 (`opencode`) | `task(...)` | `subagent_type` | `task_id` |
-| OpenCode 2 | `subagent(...)` | `agent` | `sessionID` |
+Delegation uses the `agent` parameter and `sessionID` to resume a child.
 
 This applies to **every** prompt you supply:
 
@@ -262,13 +251,9 @@ This applies to **every** prompt you supply:
 - custom and ACP agent prompts,
 - council `presets.<name>.<councillor>.prompt` guidance.
 
-A prompt that hard-codes delegation calls is therefore **not portable** between
-v1 and v2 — keep a host-specific version for each.
-
 The control-tool names (`task_status`,
-`task_reply`, `task_cancel`) are identical on both hosts. On v2
-they take `sessionID` and also accept `task_id` as a deprecated alias (never
-emitted). `task_revive` and `task_message` are v1-only.
+`task_reply`, `task_cancel`) take `sessionID` and also accept `task_id`
+as a deprecated alias (never emitted).
 
 ---
 

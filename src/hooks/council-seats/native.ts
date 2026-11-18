@@ -1,8 +1,7 @@
 /**
  * Native seat resolver: resolves `Seats:` refs straight from the host's
- * session domain — no board, no ledger, no lifecycle. This is what makes
- * council work with native OpenCode v2 delegation and the managed
- * lifecycle OFF.
+ * session domain without plugin-side lifecycle tracking. This supports
+ * council with native OpenCode v2 delegation.
  *
  * Only exact `ses_` child IDs resolve; any other ref is missing. One
  * bounded deadline covers the whole call; there is no retry, no polling,
@@ -29,7 +28,6 @@ import type { PluginInput } from '@opencode-ai/plugin';
 
 import {
   attributeHostRoundToTranscript,
-  classifyTerminalEvidence,
   fetchChildTranscript,
   latestInputAtOf,
   terminalTextOf,
@@ -45,7 +43,7 @@ import { SEAT_REASONS } from './assemble';
 import type { SeatResult, SeatResultResolver } from './types';
 
 /** Whole-call budget (parent read + every per-seat read). */
-export const DEFAULT_NATIVE_SEAT_TIMEOUT_MS = 5_000;
+const DEFAULT_NATIVE_SEAT_TIMEOUT_MS = 5_000;
 
 /** Scheduler seam, matching `raceEvidenceDeadline`'s timer contract. */
 export type NativeSeatTimers = TimerSeam;
@@ -117,8 +115,6 @@ export function createNativeSeatResolver(
 ): SeatResultResolver {
   const budget = options.timeoutMs ?? DEFAULT_NATIVE_SEAT_TIMEOUT_MS;
   const clock = options.now ?? Date.now;
-  const v2 =
-    (input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
   const directory = input.directory;
 
   return async (parentSessionID, seats) => {
@@ -179,78 +175,36 @@ export function createNativeSeatResolver(
           );
         }
 
-        if (v2) {
-          const state = attributeHostRoundToTranscript(
-            hostRoundStateOf(info),
-            transcript,
-          );
-          const round = composeHostRound(state, childInputAt);
-          if (round.verdict === 'unreadable') {
-            return ambiguous(round.reason ?? 'host state unreadable', label);
-          }
-          if (round.verdict === 'incomplete') {
-            return {
-              kind: 'running',
-              reason: SEAT_REASONS.running,
-              ...(label ? { label } : {}),
-            };
-          }
-          if (round.verdict === 'error' || round.verdict === 'interrupted') {
-            return {
-              kind: 'error',
-              reason: SEAT_REASONS.error,
-              ...(label ? { label } : {}),
-            };
-          }
-          const text = terminalTextOf(transcript);
-          return text && text.trim() !== ''
-            ? { kind: 'completed', text, ...(label ? { label } : {}) }
-            : {
-                kind: 'empty',
-                reason: SEAT_REASONS.empty,
-                ...(label ? { label } : {}),
-              };
+        const state = attributeHostRoundToTranscript(
+          hostRoundStateOf(info),
+          transcript,
+        );
+        const round = composeHostRound(state, childInputAt);
+        if (round.verdict === 'unreadable') {
+          return ambiguous(round.reason ?? 'host state unreadable', label);
         }
-
-        const verdict = classifyTerminalEvidence(transcript);
-        switch (verdict.verdict) {
-          case 'completed': {
-            const text = verdict.text?.trim() ?? '';
-            return text !== ''
-              ? { kind: 'completed', text, ...(label ? { label } : {}) }
-              : {
-                  kind: 'empty',
-                  reason: SEAT_REASONS.empty,
-                  ...(label ? { label } : {}),
-                };
-          }
-          case 'error':
-            return {
-              kind: 'error',
-              reason: SEAT_REASONS.error,
-              ...(label ? { label } : {}),
-            };
-          case 'retry':
-            // `textless` is a finished turn without an answer; every other
-            // retry reason is a still-open round.
-            return verdict.reason === 'textless'
-              ? {
-                  kind: 'empty',
-                  reason: SEAT_REASONS.empty,
-                  ...(label ? { label } : {}),
-                }
-              : {
-                  kind: 'running',
-                  reason: SEAT_REASONS.running,
-                  ...(label ? { label } : {}),
-                };
-          case 'absent':
-            return {
-              kind: 'running',
-              reason: SEAT_REASONS.running,
-              ...(label ? { label } : {}),
-            };
+        if (round.verdict === 'incomplete') {
+          return {
+            kind: 'running',
+            reason: SEAT_REASONS.running,
+            ...(label ? { label } : {}),
+          };
         }
+        if (round.verdict === 'error' || round.verdict === 'interrupted') {
+          return {
+            kind: 'error',
+            reason: SEAT_REASONS.error,
+            ...(label ? { label } : {}),
+          };
+        }
+        const text = terminalTextOf(transcript);
+        return text && text.trim() !== ''
+          ? { kind: 'completed', text, ...(label ? { label } : {}) }
+          : {
+              kind: 'empty',
+              reason: SEAT_REASONS.empty,
+              ...(label ? { label } : {}),
+            };
       }),
     );
   };

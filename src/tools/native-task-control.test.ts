@@ -10,19 +10,48 @@ type HostFixture = {
   agent?: string;
   outcome?: 'succeeded' | 'failed' | 'interrupted';
   idleAt?: number;
+  busyAt?: number;
+  compacted?: boolean;
+  failure?: string;
   inputAt?: number;
   assistantText?: string;
 };
 
 function transcript(fixture: HostFixture) {
   const inputAt = fixture.inputAt ?? 1_000;
-  const entries: unknown[] = [
-    { info: { id: 'msg_u', role: 'user', time: { created: inputAt } } },
-  ];
+  const entries: unknown[] = fixture.compacted
+    ? [
+        {
+          info: {
+            id: 'msg_c',
+            role: 'compaction',
+            sourceType: 'compaction',
+            time: { created: 1_500 },
+          },
+          parts: [{ type: 'text', text: 'summary' }],
+        },
+      ]
+    : [{ info: { id: 'msg_u', role: 'user', time: { created: inputAt } } }];
   if (fixture.assistantText !== undefined) {
     entries.push({
-      info: { id: 'msg_a', role: 'assistant', time: { completed: 2_000 } },
+      info: {
+        id: 'msg_a',
+        role: 'assistant',
+        time: { created: 1_600, completed: 2_000 },
+      },
       parts: [{ type: 'text', text: fixture.assistantText }],
+    });
+  }
+  if (fixture.failure) {
+    entries.push({
+      info: {
+        id: 'msg_i',
+        role: 'system',
+        sourceType: 'idle',
+        outcome: 'failed',
+        error: { type: 'aborted', message: fixture.failure },
+        time: { created: 2_500 },
+      },
     });
   }
   return { data: entries };
@@ -46,8 +75,6 @@ function createTools(
   options?: {
     noGet?: boolean;
     noAbort?: boolean;
-    flavor?: 'v1' | 'v2';
-    liveStatus?: string;
     abortResponse?: unknown;
     abortImpl?: () => Promise<unknown>;
     messages?: () => Promise<unknown>;
@@ -62,17 +89,17 @@ function createTools(
       parentID,
       agent: fixture.agent ?? 'explorer',
       ...(fixture.outcome
-        ? { outcome: fixture.outcome, time: { idle: fixture.idleAt ?? 2_500 } }
+        ? {
+            outcome: fixture.outcome,
+            time: {
+              busy: fixture.busyAt ?? 1_000,
+              idle: fixture.idleAt ?? 2_500,
+            },
+          }
         : { time: { created: 500 } }),
     },
   }));
   const messages = mock(options?.messages ?? (async () => transcript(fixture)));
-  const status = mock(async () => ({
-    data:
-      options?.liveStatus !== undefined
-        ? { ses_child: { type: options.liveStatus } }
-        : {},
-  }));
   const abort = options?.abortImpl
     ? mock(function (this: unknown) {
         if (this !== session) 'use the receiver';
@@ -83,7 +110,6 @@ function createTools(
     _client: 'client',
     ...(options?.noGet ? {} : { get }),
     messages,
-    status,
     ...(options?.noAbort ? {} : { abort }),
   } as { _client: string } & Record<string, unknown>;
   const client = { session, delete: mock(async () => ({})) };
@@ -91,14 +117,14 @@ function createTools(
     input: {
       directory: '/test/project',
       client,
-      ...(options?.flavor === 'v1' ? {} : { hostFlavor: 'v2' }),
+      hostFlavor: 'v2',
     } as never,
     ...(options?.abortTimeoutMs !== undefined
       ? { abortTimeoutMs: options.abortTimeoutMs }
       : {}),
     ...(options?.permission ? { permission: options.permission } : {}),
   });
-  return { tools, get, messages, abort, status, client };
+  return { tools, get, messages, abort, client };
 }
 
 const v2Context = { sessionID: 'ses_parent', agent: 'orchestrator' } as never;
@@ -129,6 +155,74 @@ afterEach(() => {
 });
 
 describe('native task controls', () => {
+  test('task_status reports a resumed child as running from host busy/idle', async () => {
+    const { tools, messages } = createTools({
+      outcome: 'succeeded',
+      idleAt: 2_500,
+      busyAt: 3_000,
+      inputAt: 2_800,
+    });
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('state: running');
+    expect(output).toContain('Do not poll');
+    expect(messages).not.toHaveBeenCalled();
+  });
+
+  test('task_status does not claim running with a malformed host idle time', async () => {
+    const { tools } = createTools({
+      outcome: 'succeeded',
+      idleAt: -1,
+      busyAt: 3_000,
+    });
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('state: unknown');
+    expect(output).not.toContain('state: running');
+  });
+
+  test('task_status handles an unrepresentable host busy time without throwing', async () => {
+    const { tools } = createTools({
+      outcome: 'succeeded',
+      busyAt: 8_640_000_000_000_001,
+    });
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).not.toContain('state: running');
+  });
+
+  test('task_status reports a compacted finished round as completed', async () => {
+    const { tools } = createTools({
+      outcome: 'succeeded',
+      compacted: true,
+      assistantText: 'the seat answer',
+    });
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('state: completed');
+    expect(output).toContain('the seat answer');
+  });
+
+  test('task_status shows the host error of a failed round', async () => {
+    const failure =
+      'Execution was interrupted repeatedly and will not be resumed automatically.';
+    const { tools } = createTools({ outcome: 'failed', failure });
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('state: error');
+    expect(output).toContain(`error: ${failure}`);
+  });
+
   test('task_status reports a completed child and its latest result', async () => {
     const { tools, messages } = createTools({
       outcome: 'succeeded',
@@ -203,16 +297,6 @@ describe('native task controls', () => {
     expect(output).toContain('transcript could not be read');
   });
 
-  test('v1 live busy is reported as a confirmed running state', async () => {
-    const { tools } = createTools({}, { flavor: 'v1', liveStatus: 'busy' });
-    const output = await tools.task_status.execute(
-      { task_id: 'ses_child' },
-      v2Context,
-    );
-    expect(output).toContain('state: busy (live)');
-    expect(output).toContain('Do not poll');
-  });
-
   test('task_cancel interrupts through the host method with its receiver', async () => {
     const { tools, abort, client } = createTools();
     const output = await tools.task_cancel.execute(
@@ -244,24 +328,6 @@ describe('native task controls', () => {
     );
     expect(output).toContain('No active execution interrupted');
     expect(output).not.toContain('Interrupt accepted');
-  });
-
-  test('v1 {data:false} is reported as nothing interrupted', async () => {
-    const { tools } = createTools({}, { abortResponse: { data: false } });
-    const output = await tools.task_cancel.execute(
-      { sessionID: 'ses_child' },
-      v2Context,
-    );
-    expect(output).toContain('No active execution interrupted');
-  });
-
-  test('v1 {data:true} is reported as accepted', async () => {
-    const { tools } = createTools({}, { abortResponse: { data: true } });
-    const output = await tools.task_cancel.execute(
-      { sessionID: 'ses_child' },
-      v2Context,
-    );
-    expect(output).toContain('Interrupt accepted');
   });
 
   test('an absent outcome is never reported as a stop or a failure', async () => {
@@ -344,20 +410,6 @@ describe('native task controls', () => {
     await expect(
       tools.task_status.execute({ task_id: 'ses_child' } as never, v2Context),
     ).rejects.toThrow('task_status requires sessionID');
-  });
-
-  test('the v1 native surface stays status and cancel only', async () => {
-    const { tools } = createTools({}, { flavor: 'v1' });
-    expect(Object.keys(tools.task_status.args)).toEqual(['task_id']);
-    expect(Object.keys(tools.task_cancel.args)).toEqual(['task_id']);
-    expect(tools.task_reply).toBeUndefined();
-  });
-
-  test('v1 native retains the sessionID runtime alias for task_id', async () => {
-    const { tools } = createTools({}, { flavor: 'v1' });
-    await expect(
-      tools.task_status.execute({ sessionID: 'ses_child' }, v2Context),
-    ).resolves.toContain('Session ses_child');
   });
 
   test('task_status lists the owned child pending permissions', async () => {

@@ -4656,23 +4656,6 @@ describe('createV2Setup e2e', () => {
     expect(calls.disposed).toContain('mcp.transform');
   }, 20_000);
 
-  test('missing MCP transform degrades gracefully (v1 host embedded v2 core)', async () => {
-    const { ctx } = makeMockV2Context(projectDir);
-    const mcp = ctx.mcp as unknown as { transform?: unknown };
-    mcp.transform = undefined;
-
-    // Should succeed with degraded MCP snapshot instead of failing
-    const cleanup = await createV2Setup()(ctx);
-    await flushLoggerForTesting();
-    const logText = readPluginLog();
-    expect(logText).toContain(
-      '[v2] ctx.mcp.transform unavailable; skipping MCP snapshot (v1 host embedded v2 core)',
-    );
-    expect(logText).toContain('[v2] agents registered');
-
-    await cleanup();
-  }, 20_000);
-
   test('backgroundJobs.mode off still applies configured agent options to requests', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
@@ -5377,5 +5360,178 @@ describe('createV2Setup e2e', () => {
       } catch {}
       await cleanup();
     }
+  });
+
+  describe('inherited subagent parent model (ARGUS-1902-01)', () => {
+    const PARENT = 'ses_inherit_parent';
+    const CHILD = 'ses_inherit_child';
+    const TURN = { providerID: 'turn', id: 'parent-turn', variant: 'high' };
+
+    const setupInherit = async (pinned?: Record<string, unknown>) => {
+      await Bun.write(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          companion: { enabled: false },
+          agents: { explorer: { inheritModelFrom: 'session' } },
+        }),
+      );
+      const { ctx, calls } = makeMockV2Context(projectDir);
+      // Native Session.Info has no model unless the creator selected one.
+      (ctx.session as unknown as Record<string, unknown>).get = async ({
+        sessionID,
+      }: {
+        sessionID: string;
+      }) =>
+        sessionID === CHILD
+          ? {
+              id: CHILD,
+              parentID: PARENT,
+              directory: projectDir,
+              agent: 'explorer',
+            }
+          : {
+              id: sessionID,
+              directory: projectDir,
+              agent: 'orchestrator',
+              ...(sessionID === PARENT && pinned ? { model: pinned } : {}),
+            };
+      const childRecord = async () =>
+        (await ctx.storage.get(`session-preset/v1/${CHILD}`)) as
+          | Record<string, unknown>
+          | undefined;
+      const nativeInputs: Array<Record<string, unknown>> = [];
+      const native = {
+        description: 'native subagent',
+        execute: async (input: unknown, context: unknown): Promise<unknown> => {
+          nativeInputs.push({ ...(input as Record<string, unknown>) });
+          await (
+            context as {
+              progress: (update: Record<string, unknown>) => Promise<void>;
+            }
+          ).progress({ sessionID: CHILD, status: 'running' });
+          return { sessionID: CHILD, status: 'running', output: 'running' };
+        },
+      };
+      (ctx.tool as unknown as Record<string, unknown>).transform = async (
+        cb: (draft: unknown) => void,
+      ) => {
+        cb({
+          add: () => {},
+          update: (id: string, update: (candidate: unknown) => void) => {
+            if (id === 'subagent') update(native);
+          },
+          get: (id: string) => (id === 'subagent' ? native : undefined),
+        });
+        return { dispose() {} };
+      };
+      const cleanup = await createV2Setup()(ctx);
+      const observe = async (
+        sessionID: string,
+        model: Record<string, unknown> = TURN,
+      ) =>
+        calls.contextHookCb?.({
+          sessionID,
+          agent: 'orchestrator',
+          model,
+          options: {},
+          system: [],
+          tools: {},
+          messages: [],
+        });
+      const launch = async (input: Record<string, unknown> = {}) => {
+        const event = {
+          tool: 'subagent',
+          sessionID: PARENT,
+          agent: 'orchestrator',
+          messageID: 'msg_inherit_assistant',
+          id: 'call_inherit',
+          input: {
+            agent: 'explorer',
+            description: 'inherit probe',
+            prompt: 'Work',
+            ...input,
+          } as Record<string, unknown>,
+        };
+        const before = calls.toolBeforeCb;
+        if (!before) throw new Error('tool:execute.before not captured');
+        await before(event);
+        return event;
+      };
+      const execute = (event: { id: string; input: unknown }) =>
+        native.execute(event.input, {
+          sessionID: PARENT,
+          id: event.id,
+          signal: new AbortController().signal,
+          progress: async () => {},
+        });
+      return {
+        cleanup,
+        observe,
+        launch,
+        execute,
+        childRecord,
+        nativeInputs,
+      };
+    };
+
+    test('an unpinned parent delegates on the model its current turn runs', async () => {
+      const t = await setupInherit();
+      try {
+        await t.observe(PARENT);
+        await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
+        const event = await t.launch();
+        expect(event.input.model).toBe('turn/parent-turn#high');
+        await t.execute(event);
+        expect(t.nativeInputs.at(-1)?.model).toBe('turn/parent-turn#high');
+        expect((await t.childRecord())?.inheritedProviderID).toBe('turn');
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
+
+    test('a persisted parent model keeps precedence over the observed turn', async () => {
+      const t = await setupInherit({
+        providerID: 'pinned',
+        id: 'parent-pin',
+        variant: 'default',
+      });
+      try {
+        await t.observe(PARENT);
+        const event = await t.launch();
+        expect(event.input.model).toBe('pinned/parent-pin');
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
+
+    test('an explicit per-call model wins and keeps the inherited origin', async () => {
+      const t = await setupInherit();
+      try {
+        await t.observe(PARENT);
+        const event = await t.launch({ model: 'explicit/choice' });
+        expect(event.input.model).toBe('explicit/choice');
+        await t.execute(event);
+        expect(await t.childRecord()).toMatchObject({
+          explicitModel: true,
+          preserveModel: true,
+          inheritedProviderID: 'turn',
+        });
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
+
+    test('an unresolvable parent model still refuses before the executor', async () => {
+      const t = await setupInherit();
+      try {
+        // Another session's observed model must not stand in for the parent's.
+        await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
+        await expect(t.launch()).rejects.toThrow(
+          'Inherited subagent parent model unavailable',
+        );
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
   });
 });

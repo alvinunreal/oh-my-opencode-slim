@@ -3,36 +3,74 @@ import {
   type FeatureGateConfig,
   resolveFeatureGates,
   UnsupportedHostConfigError,
+  validateExplicitHostConfig,
 } from './feature-gates';
 import type { PluginConfig } from './schema';
 
+test('explicit positive managed limits are refused with their full paths', () => {
+  const cases = [
+    [
+      { concurrency: { providerConcurrency: { openai: 2 } } },
+      'concurrency.providerConcurrency.openai',
+      2,
+    ],
+    [
+      { concurrency: { modelConcurrency: { 'openai/model': 3 } } },
+      'concurrency.modelConcurrency.openai/model',
+      3,
+    ],
+    [
+      { concurrency: { defaultConcurrency: 4 } },
+      'concurrency.defaultConcurrency',
+      4,
+    ],
+    [{ wallClockTimeoutMs: 900000 }, 'wallClockTimeoutMs', 900000],
+  ] as const;
+  for (const [backgroundJobs, key, value] of cases) {
+    const validate = () =>
+      validateExplicitHostConfig({ backgroundJobs }, 'v2', '/config/slim.json');
+    expect(validate).toThrow(UnsupportedHostConfigError);
+    expect(validate).toThrow('/config/slim.json');
+    expect(validate).toThrow(`backgroundJobs.${key}`);
+    expect(validate).toThrow(String(value));
+    expect(validate).toThrow('then run /reload');
+  }
+});
+
+test('reports every positive managed limit in one error', () => {
+  const validate = () =>
+    validateExplicitHostConfig(
+      {
+        backgroundJobs: {
+          wallClockTimeoutMs: 900000,
+          concurrency: {
+            defaultConcurrency: 4,
+            providerConcurrency: { openai: 2 },
+            modelConcurrency: { 'openai/model': 3 },
+          },
+        },
+      },
+      'v2',
+      '/config/slim.json',
+    );
+
+  expect(validate).toThrow('/config/slim.json');
+  expect(validate).toThrow('backgroundJobs.wallClockTimeoutMs = 900000');
+  expect(validate).toThrow('backgroundJobs.concurrency.defaultConcurrency = 4');
+  expect(validate).toThrow(
+    'backgroundJobs.concurrency.providerConcurrency.openai = 2',
+  );
+  expect(validate).toThrow(
+    'backgroundJobs.concurrency.modelConcurrency.openai/model = 3',
+  );
+});
+
 describe('resolveFeatureGates', () => {
-  test('defaults every optional subsystem on with managed background jobs on v1 / undefined host', () => {
-    for (const host of [undefined, 'v1']) {
-      const gates = resolveFeatureGates({}, host);
-
-      expect(gates).toEqual({
-        backgroundJobsMode: 'managed',
-        managedJobs: true,
-        presetRouting: true,
-        tui: true,
-        sidebar: true,
-        interview: true,
-        marketplace: true,
-        webfetch: true,
-        liveConfigRefresh: true,
-        updateChecker: true,
-      });
-      expect(Object.isFrozen(gates)).toBe(true);
-    }
-  });
-
-  test('defaults background jobs to native on v2 with managedJobs false', () => {
-    const gates = resolveFeatureGates({}, 'v2');
+  test('defaults background jobs to native on v2', () => {
+    const gates = resolveFeatureGates({});
 
     expect(gates).toEqual({
       backgroundJobsMode: 'native',
-      managedJobs: false,
       presetRouting: true,
       tui: true,
       sidebar: true,
@@ -47,40 +85,21 @@ describe('resolveFeatureGates', () => {
 
   test('throws UnsupportedHostConfigError when mode is explicitly managed on v2', () => {
     expect(() =>
-      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }, 'v2'),
+      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }),
     ).toThrow(UnsupportedHostConfigError);
     expect(() =>
-      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }, 'v2'),
+      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }),
     ).toThrow(/Unsupported backgroundJobs\.mode "managed" on OpenCode v2/);
-
-    // v1 and undefined host still accept managed normally
-    expect(
-      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }, 'v1')
-        .managedJobs,
-    ).toBe(true);
-    expect(
-      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }).managedJobs,
-    ).toBe(true);
   });
 
-  test('accepts explicit native and off modes across v1 and v2', () => {
-    for (const host of [undefined, 'v1', 'v2']) {
-      const native = resolveFeatureGates(
-        { backgroundJobs: { mode: 'native' } },
-        host,
-      );
-      expect(native.backgroundJobsMode).toBe('native');
-      expect(native.managedJobs).toBe(false);
-      expect(native.presetRouting).toBe(true);
+  test('accepts explicit native and off modes on v2', () => {
+    const native = resolveFeatureGates({ backgroundJobs: { mode: 'native' } });
+    expect(native.backgroundJobsMode).toBe('native');
+    expect(native.presetRouting).toBe(true);
 
-      const off = resolveFeatureGates(
-        { backgroundJobs: { mode: 'off' } },
-        host,
-      );
-      expect(off.backgroundJobsMode).toBe('off');
-      expect(off.managedJobs).toBe(false);
-      expect(off.presetRouting).toBe(false);
-    }
+    const off = resolveFeatureGates({ backgroundJobs: { mode: 'off' } });
+    expect(off.backgroundJobsMode).toBe('off');
+    expect(off.presetRouting).toBe(false);
   });
 
   test('keeps the sidebar off whenever the TUI master switch is off', () => {
@@ -195,7 +214,6 @@ describe('resolveFeatureGates', () => {
     const gates = resolveFeatureGates(config);
     expect(gates).toEqual({
       backgroundJobsMode: 'native',
-      managedJobs: false,
       presetRouting: true,
       tui: false,
       sidebar: false,

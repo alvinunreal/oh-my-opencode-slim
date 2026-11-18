@@ -40,7 +40,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 ## Background Jobs
 
 - **Background job** — A delegated specialist task that runs asynchronously. V1 managed tracks it on the plugin board until its result is reconciled; on V2 the host Job owns execution, notification, and recovery.
-- **Native lifecycle (V2)** — OpenCode owns the child Job, same-session continuation, completion delivery, and restart recovery. The plugin keeps only exact-ID controls (`task_status`, `task_cancel`, permission-only `task_reply`, queue-only `task_report`) and reads host sessions on demand.
+- **Native lifecycle (V2)** — OpenCode owns the child Job, same-session continuation, completion delivery, and restart recovery. The plugin keeps only exact-ID controls (`task_status`, `task_cancel`, permission-only `task_reply`, child `task_report`) and reads host sessions on demand.
 - **Background Job Board (V1 managed)** — The store of background job state and metadata. It is machine-side only: it is never rendered into a prompt.
 - **Background Job Coordinator (V1 managed)** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
 - **Job state (V1 managed)** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the delegating primary's response; it is not a terminal outcome itself.
@@ -96,7 +96,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Variant** — An optional model qualifier (e.g., a preview build) used in fallback resolution.
 - **Fallback / failover** — The mechanism that switches models when a call is rate-limited or returns empty.
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.
-- **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
+- **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
 
 ## Mutation testing
 

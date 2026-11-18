@@ -10,13 +10,8 @@
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· Turn your notes into clean, editable SVG diagrams</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim is free.** If it's useful to you, consider supporting animal welfare.<br>
+> [Donate to a charity in your region](https://ohmyopencodeslim.com/donate) · [See all charities](https://ohmyopencodeslim.com/animals)
 
 ## What's This Plugin
 
@@ -187,7 +186,7 @@ Then:
 2. **Refresh and list the models OpenCode can see**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
    On OpenCode v2, use `opencode models` instead.
 3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
@@ -236,7 +235,8 @@ The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
 lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
-queue-only progress reporting. V2 rejects the V1-only `"managed"` mode.
+child progress reporting. V2 applies the old `"managed"` mode as `"native"`
+with a warning.
 With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
 bindings and all OMOS task tools are disabled, while the configured global
 preset still selects the agent settings registered at startup.
@@ -1029,6 +1029,16 @@ Use this section as a map: start with installation, then jump to features, confi
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## Supporting Animal Welfare
+
+Slim is free and MIT licensed, and will remain so. In place of payment, we ask users who find it useful to support animal welfare. The recommended charities work to end the most painful practices animals face on farms and at slaughter: killing without proper stunning, surgery without pain relief, and close confinement. Donations go directly to them.
+
+- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of a charity active in your region.
+- **[All charities](https://ohmyopencodeslim.com/animals)**: compare the options and see why they were selected.
+- **Commercial use**: the license carries no obligation. Companies that rely on Slim are asked to make an annual donation.
 
 ---
 

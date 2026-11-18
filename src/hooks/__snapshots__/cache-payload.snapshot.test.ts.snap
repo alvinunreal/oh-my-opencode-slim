@@ -6,6 +6,14 @@ exports[`cache-impact snapshots (update deliberately — see file header) phase 
 </system-reminder>"
 `;
 
+exports[`cache-impact snapshots (update deliberately — see file header) fallback continuation is a trailing volatile notice 1`] = `
+"<system-reminder>
+### Child task — Continuing after fallback
+- ses_refused_child: the previous error is superseded; the child continues on test/fallback.
+Do not relaunch, cancel, or replace these tasks; their results will arrive.
+</system-reminder>"
+`;
+
 exports[`cache-impact snapshots (update deliberately — see file header) orchestrator system prompt 1`] = `
 "<Role>
 You are Orchestrator, a workflow manager who plans, delegates, monitors,

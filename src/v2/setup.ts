@@ -26,7 +26,7 @@ import {
 } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
 import {
-  isSupportedOpenCodeVersion,
+  classifyOpenCodeVersion,
   MINIMUM_OPENCODE_VERSION,
   parseOpenCodeVersion,
 } from '../config/opencode-version';
@@ -50,6 +50,7 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
+import { appendRefusalCorrections } from '../hooks/refusal-corrections';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/volatile-message';
 import { OhMyOpenCodeLite } from '../index';
 import { MarketplaceBusyError } from '../marketplace/errors';
@@ -286,6 +287,7 @@ export interface V2SessionContextHandlerDeps {
     },
     hints?: { model?: { providerID: string; id: string } },
   ) => Promise<void>;
+  refusalRecovery?: ForegroundFallbackManager['refusalRecovery'];
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
    * session. Never touches system/messages/tools. */
@@ -423,8 +425,8 @@ export function createSessionContextHandler(
         await deps.systemTransform(
           // Forward the request-scoped agent so the transform can tell a
           // real orchestrator request from an auxiliary (title/compaction)
-          // request running in the same session — v1 hosts lack this and
-          // fall back to a structural heuristic.
+          // request running in the same session. When absent, the transform
+          // falls back to a structural heuristic.
           { sessionID: event.sessionID, agent: event.agent },
           { system: sysStrings },
         );
@@ -573,6 +575,48 @@ export function createSessionContextHandler(
               }
             : undefined,
         );
+        const refusalRecovery = deps.refusalRecovery;
+        if (refusalRecovery) {
+          const notices = new Map<string, (typeof v1messages)[number]>();
+          for (const message of v1messages) {
+            const metadata = message.info.metadata;
+            if (
+              isRecord(metadata) &&
+              metadata.source === 'subagent' &&
+              typeof metadata.childID === 'string'
+            ) {
+              notices.delete(metadata.childID);
+              notices.set(metadata.childID, message);
+            }
+          }
+          const corrections = (
+            await Promise.all(
+              Array.from(notices, async ([taskID, notice]) => {
+                if (notice.info.metadata?.state !== 'error') return;
+                const recovery = refusalRecovery(taskID);
+                if (
+                  !recovery ||
+                  !notice.parts.some(
+                    (part) =>
+                      part.type === 'text' &&
+                      typeof part.text === 'string' &&
+                      part.text.includes(recovery.message),
+                  )
+                )
+                  return;
+                const model = await recovery.model;
+                if (model) return { taskID, model };
+              }),
+            )
+          ).filter((correction) => correction !== undefined);
+          if (corrections.length)
+            appendRefusalCorrections(
+              v1messages,
+              event.sessionID,
+              event.agent,
+              corrections,
+            );
+        }
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
           if (projectedTimes.has(info)) delete info.time;
@@ -675,6 +719,10 @@ export interface V2SessionPromptBridge {
   /** Latest agent known for a session from the learned state above (the
    * identity source for transcript user-message enrichment). */
   agentForSession(sessionID: string): string | undefined;
+  /** Model resolved for the session's latest observed primary request. */
+  modelForSession(
+    sessionID: string,
+  ): { providerID: string; id: string; variant?: string } | undefined;
 }
 
 /** Trailing (last) message with `role === 'user'`, or undefined. Hot
@@ -1957,6 +2005,17 @@ export function createSessionPromptBridge(
     agentForSession(sessionID) {
       return sessionState.get(sessionID)?.agent;
     },
+
+    modelForSession(sessionID) {
+      const model = sessionState.get(sessionID)?.model;
+      return model
+        ? {
+            providerID: model.providerID,
+            id: model.modelID,
+            ...(model.variant ? { variant: model.variant } : {}),
+          }
+        : undefined;
+    },
   };
 }
 
@@ -2239,13 +2298,16 @@ function assertSupportedV2Host(ctx: V2Context): void {
   const rawVersion = ctx?.app?.version;
   const version =
     typeof rawVersion === 'string' ? parseOpenCodeVersion(rawVersion) : null;
-  if (!version) {
-    log('[v2] host version is not semver; skipping minimum check', {
+  const classification = classifyOpenCodeVersion(
+    typeof rawVersion === 'string' ? rawVersion : '',
+  );
+  if (classification === 'unknown') {
+    log('[v2] host version is preview or not semver; skipping minimum check', {
       version: rawVersion,
     });
     return;
   }
-  if (!isSupportedOpenCodeVersion(version)) {
+  if (classification === 'unsupported') {
     throw new Error(
       `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_OPENCODE_VERSION} or newer. Update with npm install -g @opencode/cli@latest.`,
     );
@@ -2285,12 +2347,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     // setup still needs the directory for config loading and tool adapters.
     const directory = resolveV2Directory(ctx);
     // Validate the host-specific config before claiming a location or wiring
-    // any registration. Unsupported managed mode must fail setup, not degrade.
+    // any registration. Unsupported positive limits must fail setup, not degrade.
     const startupConfigSnapshot = readPluginConfigSnapshot(directory, {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    const featureGates = resolveFeatureGates(preFlightConfig, 'v2');
+    const featureGates = resolveFeatureGates(preFlightConfig);
     const presetRoutingEnabled = featureGates.presetRouting;
 
     log('[v2] setup invoked', {
@@ -2413,12 +2475,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         });
       }
       if (interviewBridge) disposers.push(() => interviewBridge.dispose());
-      // The submit tool and text-complete fallback are built inside the v1
-      // factory against the v1 interview manager. On v2 the bridge owns the
-      // live transcript and active interviews, so point them at its service.
-      // With the interview subsystem disabled there is no bridge service to
-      // hand over: the v1 manager is either absent (v2 host) or left on its
-      // own default service, and no interview machinery ever runs.
+      // Point the submit tool at the bridge service, which owns the live
+      // transcript and active interviews. With interviews disabled there is
+      // no bridge service to hand over.
       if (interviewBridge) {
         (
           v1Hooks as {
@@ -2603,9 +2662,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             /* default() optional */
           }
         }
-        // v1 publishes this projection from its config hook; v2 never calls
-        // that hook, so finalization owns the startup sidebar identity
-        // snapshot. Refresh reads the same frozen registry identity table.
+        // Finalization publishes the startup sidebar identity snapshot.
+        // Refresh reads the same frozen registry identity table.
         if (sidebarEnabled) {
           recordTuiAgentDisplayNames(
             collectAgentDisplayNames(registry.identities),
@@ -2698,33 +2756,27 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       };
       try {
         if (typeof ctx.mcp?.transform !== 'function') {
-          log(
-            '[v2] ctx.mcp.transform unavailable; skipping MCP snapshot (v1 host embedded v2 core)',
-          );
-          // Degrade gracefully: v1 hosts with embedded v2 core don't provide
-          // full v2 context. This is expected and non-fatal.
-          hostMcpSnapshot = {};
-        } else {
-          const reg = await ctx.mcp.transform((draft) => {
-            const configured = draft.list();
-            if (!Array.isArray(configured)) {
-              throw new Error('MCP configuration draft returned no inventory');
-            }
-            hostMcpSnapshot = Object.fromEntries(configured);
-            for (const [name, config] of Object.entries(mcps)) {
-              // User/host-configured namespaces own their key (issue #1290):
-              // never inject a built-in over an existing entry.
-              if (Object.hasOwn(hostMcpSnapshot, name)) continue;
-              draft.set(name, adaptMcpServer(config));
-            }
-            if (pendingAgentDraft) finalizeAgentDraft(pendingAgentDraft);
-            if (agentPassDeferred && permissionSnapshotReady) {
-              agentPassDeferred = false;
-              requestAgentRebuild();
-            }
-          });
-          disposers.push(() => reg.dispose());
+          throw new Error('ctx.mcp.transform is unavailable');
         }
+        const reg = await ctx.mcp.transform((draft) => {
+          const configured = draft.list();
+          if (!Array.isArray(configured)) {
+            throw new Error('MCP configuration draft returned no inventory');
+          }
+          hostMcpSnapshot = Object.fromEntries(configured);
+          for (const [name, config] of Object.entries(mcps)) {
+            // User/host-configured namespaces own their key (issue #1290):
+            // never inject a built-in over an existing entry.
+            if (Object.hasOwn(hostMcpSnapshot, name)) continue;
+            draft.set(name, adaptMcpServer(config));
+          }
+          if (pendingAgentDraft) finalizeAgentDraft(pendingAgentDraft);
+          if (agentPassDeferred && permissionSnapshotReady) {
+            agentPassDeferred = false;
+            requestAgentRebuild();
+          }
+        });
+        disposers.push(() => reg.dispose());
       } catch (err) {
         throw new Error(
           'Unable to snapshot configured MCP namespaces: this host cannot ' +
@@ -3268,14 +3320,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         });
       }
 
-      // Skip session hook registration if ctx.session is unavailable (v1 host
-      // embedded v2 core with limited context). On full v2 contexts, session
-      // hooks are required and registration failures fail setup.
-      if (!ctx.session) {
-        log(
-          '[v2] ctx.session unavailable; skipping session hooks (v1 host embedded v2 core)',
-        );
-      } else {
+      if (ctx.session) {
         // Native per-admission prompt hook (v2): `session.prompt` fires once
         // per admitted input with the eventual inbox User messageID — the
         // identity v1 chat.message consumers key on. With it registered the
@@ -3444,6 +3489,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           sessionContext: sessionContextRead,
           systemTransform,
           messagesTransform,
+          refusalRecovery: v1Hooks[
+            'v2.refusalRecovery'
+          ] as ForegroundFallbackManager['refusalRecovery'],
           // Primaries use the startup registry; child profiles stay
           // session-frozen. `off` has no profile bridge: every agent applies
           // its own startup registry settings instead.
@@ -3656,7 +3704,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       isRecord(response) && isRecord(response.data)
                         ? response.data
                         : response;
-                    const model = isRecord(info) ? info.model : undefined;
+                    const stored = isRecord(info) ? info.model : undefined;
+                    // Session.Info.model is a pin, not the host's resolved default.
+                    const model = isRecord(stored)
+                      ? stored
+                      : promptBridge?.modelForSession(parentSessionID);
                     if (
                       !isRecord(model) ||
                       typeof model.providerID !== 'string' ||
@@ -3983,8 +4035,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         } catch (err) {
           log('[v2] event.subscribe failed', String(err));
         }
-      } // end if (ctx.session) check
-
+      } else {
+        throw new Error('ctx.session is unavailable');
+      }
       // ── Health check: surface silent zero-registration failures ──
       // Every bridge is fail-soft; without this, a fully broken registration
       // would look like a successful load with an empty session.

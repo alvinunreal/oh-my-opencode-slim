@@ -50,12 +50,7 @@ export function getConfigSearchDirs(): string[] {
   });
 }
 
-function getCustomTuiConfigPath(): string | undefined {
-  const configPath = process.env.OPENCODE_TUI_CONFIG?.trim();
-  return configPath || undefined;
-}
-
-export function getOpenCodeConfigPaths(): string[] {
+function getOpenCodeConfigPaths(): string[] {
   const configDir = getConfigDir();
   return [join(configDir, 'opencode.json'), join(configDir, 'opencode.jsonc')];
 }
@@ -76,16 +71,6 @@ function getLiteConfigJsonc(): string {
   return join(getConfigDir(), 'oh-my-opencode-slim.jsonc');
 }
 
-export function getTuiConfig(): string {
-  const customConfigPath = getCustomTuiConfigPath();
-  if (customConfigPath) return customConfigPath;
-  return join(getConfigDir(), 'tui.json');
-}
-
-export function getTuiConfigJsonc(): string {
-  return join(getConfigDir(), 'tui.jsonc');
-}
-
 function existsOrSymlink(filePath: string): boolean {
   if (existsSync(filePath)) return true;
   try {
@@ -99,15 +84,6 @@ function existsOrSymlink(filePath: string): boolean {
 export function getExistingLiteConfigPath(): string {
   const jsonPath = getLiteConfig();
   const jsoncPath = getLiteConfigJsonc();
-  if (existsOrSymlink(jsoncPath)) return jsoncPath;
-  return jsonPath;
-}
-
-export function getExistingTuiConfigPath(): string {
-  const customConfigPath = getCustomTuiConfigPath();
-  if (customConfigPath) return customConfigPath;
-  const jsonPath = join(getConfigDir(), 'tui.json');
-  const jsoncPath = getTuiConfigJsonc();
   if (existsOrSymlink(jsoncPath)) return jsoncPath;
   return jsonPath;
 }
@@ -132,11 +108,6 @@ export function getExistingConfigPath(): string {
 
 export function ensureConfigDir(): void {
   const configDir = getConfigDir();
-  if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-}
-
-export function ensureTuiConfigDir(): void {
-  const configDir = dirname(getTuiConfig());
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
 }
 

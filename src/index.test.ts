@@ -30,11 +30,9 @@ import { RuntimeConfig } from './config/runtime';
 import { isTaggedPart } from './hooks/cache-safe-injection';
 import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
 import { ForegroundFallbackManager } from './hooks/foreground-fallback';
-import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
 import { LOOP_GUARD_WARNING } from './hooks/tool-loop-guard/hook';
 import type { MessageWithParts } from './hooks/types';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/volatile-message';
 import { OhMyOpenCodeLite as plugin } from './index';
 import { MarketplaceStore } from './marketplace/store';
 import { createBuiltinMcps } from './mcp';
@@ -76,33 +74,6 @@ function createPluginClient(
       },
     },
   );
-}
-
-function _createHostTimerHarness() {
-  let now = 0;
-  let nextID = 0;
-  const timers = new Map<number, { at: number; callback: () => void }>();
-
-  const setTimeout = (callback: () => void, delay = 0) => {
-    const id = ++nextID;
-    timers.set(id, { at: now + delay, callback });
-    return id;
-  };
-  const clearTimeout = (id: number) => timers.delete(id);
-  const advanceTo = async (target: number) => {
-    now = target;
-    while (true) {
-      const due = [...timers.entries()]
-        .filter(([, timer]) => timer.at <= now)
-        .sort(([, left], [, right]) => left.at - right.at)[0];
-      if (!due) break;
-      timers.delete(due[0]);
-      due[1].callback();
-      await Promise.resolve();
-    }
-  };
-
-  return { now: () => now, setTimeout, clearTimeout, advanceTo };
 }
 
 describe('plugin env disable', () => {
@@ -1244,9 +1215,6 @@ describe('plugin reload generation cleanup', () => {
     );
   const reminderParts = (messages: MessageWithParts[]) =>
     taggedParts(messages, PHASE_REMINDER_METADATA_KEY);
-  const _boardParts = (messages: MessageWithParts[]) =>
-    taggedParts(messages, BACKGROUND_JOB_BOARD_METADATA_KEY);
-
   beforeEach(async () => {
     originalEnv = { ...process.env };
     projectDir = await mkdtemp('/tmp/oh-my-opencode-slim-gens-');
@@ -1447,7 +1415,6 @@ describe('plugin reload generation cleanup', () => {
       JSON.stringify({
         companion: { enabled: false },
         disabled_hooks: [
-          'json-error-recovery',
           'tool-loop-guard',
           'search-path-guard',
           'absolute-path-rescue',
@@ -1507,20 +1474,6 @@ describe('plugin reload generation cleanup', () => {
         );
         expect(output.output).toBe('...file contents...');
       }
-
-      // json-error-recovery: the malformed output surfaces raw.
-      const jsonOutput = {
-        title: 'Tool Error',
-        output: "JSON parse error: expected '}' in JSON body",
-        metadata: {},
-      };
-      await hooks['tool.execute.after']?.(
-        { tool: 'Edit', sessionID: 'guards-off', callID: 'g-7' } as never,
-        jsonOutput as never,
-      );
-      expect(jsonOutput.output).toBe(
-        "JSON parse error: expected '}' in JSON body",
-      );
     } finally {
       await hooks.dispose?.();
     }
@@ -1581,34 +1534,16 @@ describe('plugin reload generation cleanup', () => {
         );
       }
       expect(String(thirdOutput?.output)).toContain(LOOP_GUARD_WARNING);
-
-      // json-error-recovery appends the reminder.
-      const jsonOutput = {
-        title: 'Tool Error',
-        output: "JSON parse error: expected '}' in JSON body",
-        metadata: {},
-      };
-      await hooks['tool.execute.after']?.(
-        { tool: 'invalid', sessionID: 'guards-on', callID: 'c-7' } as never,
-        jsonOutput as never,
-      );
-      expect(String(jsonOutput.output)).toContain(JSON_ERROR_REMINDER);
     } finally {
       await hooks.dispose?.();
     }
   });
 
-  test('a stale compaction mark cleared by the next user message leaves reminders intact', async () => {
+  test('an ordinary user message leaves reminders intact', async () => {
     const hooks = await createHooks();
     const sessionID = 'stale-mark-session';
     try {
       await registerOrchestrator(hooks, sessionID);
-      await hooks['experimental.session.compacting']?.(
-        { sessionID },
-        { context: [] },
-      );
-      // The compaction dies before its transform; the next ordinary user
-      // turn arrives and must not lose its reminders.
       await hooks['chat.message']?.(
         { sessionID, agent: 'orchestrator' } as never,
         {} as never,
@@ -2407,18 +2342,6 @@ describe('plugin TUI agent activity', () => {
     await chat('gpt-6');
     await busy('ora-m');
     await chat('gpt-6-luna');
-    await hooks?.event?.({
-      event: {
-        type: 'message.updated',
-        properties: {
-          info: {
-            sessionID: 'ora-m',
-            providerID: 'openai',
-            modelID: 'gpt-6-sol',
-          },
-        },
-      },
-    } as never);
 
     const raw = JSON.parse(readFileSync(getTuiStatePath(projectDir), 'utf8'));
     expect(raw.sessionDetails['ora-m']).toEqual({ status: 'busy' });
@@ -2453,36 +2376,6 @@ describe('plugin TUI agent activity', () => {
     expect(readTuiSnapshot(projectDir).activeSessions).toEqual({});
     expect(readTuiSnapshot(projectDir).sessionDetails).toEqual({});
   });
-
-  const _launchChild = async (
-    parentID: string,
-    childID: string,
-    callID: string,
-  ) => {
-    await hooks?.['tool.execute.before']?.(
-      { tool: 'task', sessionID: parentID, callID } as never,
-      {
-        args: {
-          background: true,
-          subagent_type: 'oracle',
-          description: 'sidebar child',
-        },
-      } as never,
-    );
-    await hooks?.['tool.execute.after']?.(
-      { tool: 'task', sessionID: parentID, callID } as never,
-      {
-        output: [
-          `task_id: ${childID}`,
-          'state: running',
-          '',
-          '<task_result>',
-          'Background task started.',
-          '</task_result>',
-        ].join('\n'),
-      } as never,
-    );
-  };
 
   test('unattributed terminal output defers until idle evidence clears it', async () => {
     await hooks?.['chat.message']?.(
@@ -2612,27 +2505,9 @@ describe('plugin config model inheritance', () => {
   // Directory of the most recent loadConfiguredPlugin() call, for tests
   // that need the RuntimeConfig singleton the plugin initialized.
   let lastConfigDir: string | undefined;
-  let client: ReturnType<typeof createPluginClient>;
-  const hostChildren = new Map<
-    string,
-    { parentID: string; prompted: boolean }
-  >();
-  const transcripts = new Map<string, unknown[]>();
-  const primary = { providerID: 'openrouter', modelID: 'openrouter/auto' };
-  const fallback = { providerID: 'openai', modelID: 'gpt-6-luna' };
-  const delegatedChain = ['openrouter/openrouter/auto', 'openai/gpt-6-luna'];
-  const _delegatedFallbackConfig = {
-    agents: {
-      orchestrator: { model: delegatedChain },
-      operator: { model: delegatedChain },
-    },
-  };
-
   beforeEach(() => {
     originalEnv = { ...process.env };
     delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
-    hostChildren.clear();
-    transcripts.clear();
   });
 
   afterEach(async () => {
@@ -2667,26 +2542,19 @@ describe('plugin config model inheritance', () => {
       OPENCODE_LOG_DIR: `${configDir}/logs`,
     };
 
-    client = createPluginClient(async () => ({}));
+    const client = createPluginClient(async () => ({}));
     client.session.status = async () => ({ data: {} });
-    client.session.get = async ({ path }: { path: { id: string } }) => {
-      const child = hostChildren.get(path.id);
-      return child ? { data: { parentID: child.parentID } } : {};
-    };
-    client.session.messages = async ({ path }: { path: { id: string } }) => ({
-      data:
-        hostChildren.get(path.id)?.prompted === false
-          ? []
-          : (transcripts.get(path.id) ?? [
-              {
-                info: {
-                  role: 'assistant',
-                  time: { completed: Date.now() },
-                  finish: 'stop',
-                },
-                parts: [{ type: 'text', text: 'done' }],
-              },
-            ]),
+    client.session.messages = async () => ({
+      data: [
+        {
+          info: {
+            role: 'assistant',
+            time: { completed: Date.now() },
+            finish: 'stop',
+          },
+          parts: [{ type: 'text', text: 'done' }],
+        },
+      ],
     });
     return plugin({
       client,
@@ -2758,186 +2626,6 @@ describe('plugin config model inheritance', () => {
       { sessionID, agent: 'orchestrator', model } as never,
       {} as never,
     );
-  }
-
-  async function fallbackParent(
-    hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
-    sessionID: string,
-    failure: 'provider' | 'content-filter' = 'provider',
-  ) {
-    transcripts.set(sessionID, [
-      {
-        info: { id: `msg-original-${sessionID}`, role: 'user', sessionID },
-        parts: [{ type: 'text', text: 'delegate this work' }],
-      },
-    ]);
-    await selectParent(hooks, primary, sessionID);
-    const promptAsync = client.session.promptAsync as (
-      input: unknown,
-    ) => Promise<unknown>;
-    const replay = mock(promptAsync);
-    client.session.promptAsync = replay;
-    try {
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: {
-            info: {
-              id: `msg-primary-error-${sessionID}`,
-              sessionID,
-              role: 'assistant',
-              agent: 'orchestrator',
-              ...primary,
-              ...(failure === 'content-filter'
-                ? { finish: 'content-filter', time: { completed: Date.now() } }
-                : {}),
-            },
-          },
-        },
-      } as never);
-      if (failure === 'provider') {
-        await hooks.event?.({
-          event: {
-            type: 'session.error',
-            properties: {
-              sessionID,
-              error: { statusCode: 403, message: 'Key limit exceeded' },
-            },
-          },
-        } as never);
-      }
-      expect(replay.mock.calls.at(-1)?.[0]).toMatchObject({
-        path: { id: sessionID },
-        body: { model: fallback },
-      });
-    } finally {
-      client.session.promptAsync = promptAsync;
-    }
-  }
-
-  async function _assertAdmissionUsesFinalModel(
-    subagentType: string,
-    config: Record<string, unknown>,
-    hostAgent: Record<string, unknown>,
-  ): Promise<void> {
-    const hooks = await loadConfiguredPlugin(config);
-    try {
-      await hooks.config?.({ agent: hostAgent });
-      await hooks['chat.message']?.(
-        {
-          sessionID: 'orchestrator-1',
-          agent: 'orchestrator',
-          model: { providerID: 'openai', modelID: 'parent' },
-        } as never,
-        {} as never,
-      );
-      const first = hooks['tool.execute.before']?.(
-        {
-          tool: 'task',
-          sessionID: 'orchestrator-1',
-          callID: 'call-1',
-        } as never,
-        {
-          args: {
-            background: true,
-            subagent_type: subagentType,
-            description: 'first admission',
-          },
-        } as never,
-      );
-      const second = hooks['tool.execute.before']?.(
-        {
-          tool: 'task',
-          sessionID: 'orchestrator-1',
-          callID: 'call-2',
-        } as never,
-        {
-          args: {
-            background: true,
-            subagent_type: subagentType,
-            description: 'second admission',
-          },
-        } as never,
-      );
-
-      await first;
-      const queued = await Promise.race([
-        second?.then(
-          () => 'admitted',
-          () => 'rejected',
-        ),
-        new Promise<string>((resolve) =>
-          setTimeout(() => resolve('still-queued'), 30),
-        ),
-      ]);
-      expect(queued).toBe('still-queued');
-
-      await hooks['tool.execute.after']?.(
-        {
-          tool: 'task',
-          sessionID: 'orchestrator-1',
-          callID: 'call-1',
-        } as never,
-        {
-          output: 'task_id: child-1\nstate: completed\nresult: done',
-        } as never,
-      );
-      await second;
-    } finally {
-      await hooks.dispose?.();
-    }
-  }
-
-  /** Prompt before session.created reaches the plugin; persist after the hook. */
-  async function delegateV1Child(
-    hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
-    parentSessionID: string,
-    callID: string,
-    primary: { providerID: string; modelID: string },
-    options: { background?: boolean; task_id?: string; agent?: string } = {},
-  ) {
-    const { agent = 'operator', ...taskOptions } = options;
-    const output = {
-      args: {
-        subagent_type: agent,
-        description: 'verify fallback routing',
-        prompt: 'return ok',
-        ...taskOptions,
-      },
-    };
-    const task = { tool: 'task', sessionID: parentSessionID, callID };
-    await hooks['tool.execute.before']?.(task as never, output as never);
-    if (options.background) {
-      // A background task returns before its child's first prompt.
-      await hooks['tool.execute.after']?.(
-        { ...task, args: output.args } as never,
-        { title: '', output: 'started', metadata: {} } as never,
-      );
-    }
-    const childID = options.task_id ?? `ses_child_${callID}`;
-    if (!hostChildren.has(childID)) {
-      hostChildren.set(childID, { parentID: parentSessionID, prompted: false });
-    }
-    const childOutput = {
-      message: {
-        id: `msg-${childID}`,
-        role: 'user',
-        sessionID: childID,
-        agent,
-        model: { ...primary },
-      },
-      parts: [{ type: 'text', text: 'return ok' }],
-    };
-    await hooks['chat.message']?.(
-      { sessionID: childID, agent, model: primary } as never,
-      childOutput as never,
-    );
-    hostChildren.set(childID, { parentID: parentSessionID, prompted: true });
-    return {
-      subagentType: output.args.subagent_type,
-      childModel: childOutput.message.model,
-      childOutput,
-    };
   }
 
   test('v2 provider fallback routes to the first healthy child entry with its variant', async () => {
@@ -3070,47 +2758,6 @@ describe('plugin config model inheritance', () => {
       await hooks.dispose?.();
     }
   });
-
-  async function _assertInheritedRevive(
-    operator: Record<string, unknown>,
-    parentFallsBack = true,
-  ) {
-    const hooks = await loadConfiguredPlugin({
-      agents: { orchestrator: { model: delegatedChain }, operator },
-    });
-    try {
-      await selectParent(hooks, primary);
-      const { childOutput } = await delegateV1Child(
-        hooks,
-        'parent',
-        'inherited',
-        primary,
-      );
-      const sessionID = childOutput.message.sessionID;
-      await hooks['tool.execute.after']?.(
-        { tool: 'task', sessionID: 'parent', callID: 'inherited' } as never,
-        {
-          output: `task_id: ${sessionID}\nstate: completed\nresult: done`,
-        } as never,
-      );
-      if (parentFallsBack) await fallbackParent(hooks, 'parent');
-      else await selectParent(hooks, fallback);
-      client.session.promptAsync = async () => {
-        await hooks['chat.message']?.(
-          { sessionID, agent: 'operator' } as never,
-          childOutput as never,
-        );
-        return {};
-      };
-      await hooks.tool?.task_revive.execute(
-        { task_id: sessionID, prompt: 'continue' },
-        { sessionID: 'parent', agent: 'orchestrator' } as never,
-      );
-      expect(childOutput.message.model).toEqual(fallback);
-    } finally {
-      await hooks.dispose?.();
-    }
-  }
 
   test('preset inheritance clears a stale host model in the final config', async () => {
     const hooks = await loadConfiguredPlugin({
@@ -3769,42 +3416,6 @@ describe('plugin foreground fallback host gating', () => {
       ...(hostFlavor ? { hostFlavor } : {}),
     } as never);
 
-  const _publishCompactionRequest = async (
-    hooks: Awaited<ReturnType<typeof plugin>>,
-    sessionID: string,
-    model: { providerID: string; modelID: string },
-  ) => {
-    await hooks.event?.({
-      event: {
-        type: 'message.updated',
-        properties: {
-          info: {
-            id: 'msg_compaction',
-            sessionID,
-            role: 'user',
-            agent: 'orchestrator',
-            model,
-            time: { created: 2 },
-          },
-        },
-      },
-    } as never);
-    await hooks.event?.({
-      event: {
-        type: 'message.part.updated',
-        properties: {
-          part: {
-            id: 'prt_compaction',
-            messageID: 'msg_compaction',
-            sessionID,
-            type: 'compaction',
-            auto: true,
-          },
-        },
-      },
-    } as never);
-  };
-
   beforeEach(async () => {
     originalEnv = { ...process.env };
     projectDir = await mkdtemp(
@@ -3880,7 +3491,7 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
-  test('v2 host: the replay path stays disabled', async () => {
+  test('v2 host logs the steering notice once', async () => {
     const captured: string[] = [];
     const capture = spyOn(loggerModule, 'log').mockImplementation(
       (message: string) => {
@@ -3888,7 +3499,7 @@ describe('plugin foreground fallback host gating', () => {
       },
     );
     try {
-      const { client, abort, promptAsync } = createFallbackClient();
+      const { client } = createFallbackClient();
       const hooks = await plugin({
         client,
         directory: projectDir,
@@ -3901,52 +3512,6 @@ describe('plugin foreground fallback host gating', () => {
       expect(captured.filter((message) => message === V2_NOTICE)).toHaveLength(
         1,
       );
-
-      const switchModel = mock(async () => ({}));
-      await hooks.event?.({
-        event: {
-          type: 'session.error',
-          properties: {
-            sessionID: 'sess-v2-gate',
-            error: { message: 'Rate limit exceeded' },
-          },
-        },
-      } as never);
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: {
-            info: {
-              sessionID: 'sess-v2-gate',
-              id: 'm-v2-gate',
-              agent: 'orchestrator',
-              role: 'assistant',
-              providerID: 'openai',
-              modelID: 'gpt-b',
-              error: { message: 'Rate limit exceeded' },
-            },
-          },
-        },
-      } as never);
-      await hooks.event?.({
-        event: {
-          type: 'session.status',
-          properties: {
-            sessionID: 'sess-v2-gate',
-            status: {
-              type: 'retry',
-              attempt: 1,
-              message: 'rate limit, retrying...',
-            },
-          },
-        },
-      } as never);
-
-      // No replay intervention on v2: the host has no atomic per-turn
-      // conditional switch, so abort + re-prompt stays off there.
-      expect(switchModel).not.toHaveBeenCalled();
-      expect(abort).not.toHaveBeenCalled();
-      expect(promptAsync).not.toHaveBeenCalled();
 
       await hooks.dispose?.();
     } finally {
@@ -4007,7 +3572,7 @@ describe('plugin foreground fallback host gating', () => {
         },
       }),
     );
-    const { client, abort, promptAsync } = createFallbackClient();
+    const { client } = createFallbackClient();
     const hooks = await plugin({
       client,
       directory: projectDir,
@@ -4016,32 +3581,6 @@ describe('plugin foreground fallback host gating', () => {
     } as never);
 
     try {
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: {
-            info: {
-              id: 'assistant-disabled-hook',
-              sessionID: 'session-disabled-hook',
-              role: 'assistant',
-              agent: 'orchestrator',
-              providerID: 'openai',
-              modelID: 'gpt-b',
-            },
-          },
-        },
-      } as never);
-      await hooks.event?.({
-        event: {
-          type: 'session.error',
-          properties: {
-            sessionID: 'session-disabled-hook',
-            info: { id: 'assistant-disabled-hook' },
-            error: { message: 'rate limit' },
-          },
-        },
-      } as never);
-
       // The v2 retry-hook steering follows the same switch: disabled_hooks
       // must leave the host decision untouched even with a configured
       // chain and maxRetries: 0.
@@ -4059,8 +3598,6 @@ describe('plugin foreground fallback host gating', () => {
       );
       expect(switchModel).not.toHaveBeenCalled();
       expect(retryEvent.decision).toEqual({ retry: true, delay: 2_000 });
-      expect(abort).not.toHaveBeenCalled();
-      expect(promptAsync).not.toHaveBeenCalled();
     } finally {
       await hooks.dispose?.();
     }
@@ -4344,59 +3881,6 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
-  test('message updates preserve the selected variant until the model or variant changes', async () => {
-    const configPath = `${projectDir}/oh-my-opencode-slim.json`;
-    const config = await Bun.file(configPath).json();
-    config.agents.orchestrator.variant = 'medium';
-    config.agents.orchestrator.model = [
-      'openai/gpt-b',
-      { id: 'openai/gpt-c', variant: 'low' },
-    ];
-    await Bun.write(configPath, JSON.stringify(config));
-    const hooks = await createHooks('v1');
-    const sessionID = 'selected-variant';
-    const info = {
-      sessionID,
-      role: 'assistant',
-      agent: 'orchestrator',
-      providerID: 'openai',
-      modelID: 'gpt-b',
-    };
-    const observation = () =>
-      readTuiSnapshot(projectDir).sessionModels?.[sessionID]?.orchestrator;
-    try {
-      await hooks['chat.message']?.(
-        {
-          sessionID,
-          agent: 'orchestrator',
-          model: { providerID: 'openai', modelID: 'gpt-b' },
-          variant: 'high',
-        } as never,
-        {} as never,
-      );
-      await hooks.event?.({
-        event: { type: 'message.updated', properties: { info } },
-      } as never);
-      expect(observation()).toEqual({ model: 'openai/gpt-b', variant: 'high' });
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: { info: { ...info, variant: 'low' } },
-        },
-      } as never);
-      expect(observation()?.variant).toBe('low');
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: { info: { ...info, modelID: 'gpt-c' } },
-        },
-      } as never);
-      expect(observation()).toEqual({ model: 'openai/gpt-c', variant: 'low' });
-    } finally {
-      await hooks.dispose?.();
-    }
-  });
-
   test('v2 host with fallback explicitly disabled: no notice, no steering', async () => {
     await Bun.write(
       `${projectDir}/oh-my-opencode-slim.json`,
@@ -4522,19 +4006,6 @@ describe('plugin command registration gating', () => {
       worktree: projectDir,
       serverUrl: new URL('http://127.0.0.1:4096'),
     } as never);
-
-  const _prepareCommands = async (): Promise<Record<string, unknown>> => {
-    const hooks = await createHooks();
-    try {
-      const draft: Record<string, unknown> = { agent: {}, mcp: {} };
-      (
-        hooks as unknown as { registryBridge: RegistryFactoryBridge }
-      ).registryBridge.prepareCommands(draft);
-      return (draft.command as Record<string, unknown> | undefined) ?? {};
-    } finally {
-      await hooks.dispose?.();
-    }
-  };
 
   beforeEach(async () => {
     originalEnv = { ...process.env };

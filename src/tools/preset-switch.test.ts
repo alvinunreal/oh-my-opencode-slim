@@ -16,8 +16,6 @@ import {
   getPresetSelectionState,
   getPresetSource,
   readProjectConfig,
-  removeAgentFromPreset,
-  setAgentOverride,
   switchPresetOnDisk,
   wouldCreatePresetCycle,
   writePreset,
@@ -2147,47 +2145,6 @@ describe('getEditablePreset', () => {
 
     expect(editable.extends).toBeUndefined();
     expect(editable.agents).toEqual({});
-  });
-});
-
-describe('setAgentOverride / removeAgentFromPreset', () => {
-  test('setAgentOverride adds a new agent immutably', () => {
-    const preset = { orchestrator: { model: 'a' } };
-    const next = setAgentOverride(preset, 'oracle', { model: 'b' });
-    expect(next).toEqual({
-      orchestrator: { model: 'a' },
-      oracle: { model: 'b' },
-    });
-    expect(preset).toEqual({ orchestrator: { model: 'a' } });
-  });
-
-  test('setAgentOverride replaces an existing agent', () => {
-    const preset = { orchestrator: { model: 'a' } };
-    const next = setAgentOverride(preset, 'orchestrator', {
-      model: 'b',
-      variant: 'thinking',
-    });
-    expect(next).toEqual({
-      orchestrator: { model: 'b', variant: 'thinking' },
-    });
-  });
-
-  test('removeAgentFromPreset removes an agent immutably', () => {
-    const preset = {
-      orchestrator: { model: 'a' },
-      oracle: { model: 'b' },
-    };
-    const next = removeAgentFromPreset(preset, 'oracle');
-    expect(next).toEqual({ orchestrator: { model: 'a' } });
-    expect(preset).toEqual({
-      orchestrator: { model: 'a' },
-      oracle: { model: 'b' },
-    });
-  });
-
-  test('removeAgentFromPreset is a no-op for absent agents', () => {
-    const preset = { orchestrator: { model: 'a' } };
-    expect(removeAgentFromPreset(preset, 'oracle')).toBe(preset);
   });
 });
 

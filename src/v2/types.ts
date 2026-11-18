@@ -196,7 +196,7 @@ export interface V2PermissionRule {
   readonly effect: 'allow' | 'deny' | 'ask';
 }
 /** Pending native permission request fields consumed by the thin controls. */
-export interface V2PermissionRequest {
+interface V2PermissionRequest {
   readonly id: string;
   readonly sessionID: string;
   readonly action: string;

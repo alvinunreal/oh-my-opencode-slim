@@ -18,23 +18,12 @@ import type { BackgroundJobsMode } from './config/schema';
 /**
  * Minimum expected registrations for a healthy plugin load.
  *
- * On v2 hosts `wait_for_user`, `task_revive` and `task_message` are
- * unregistered (the native `question` tool covers the blocking boundary,
- * retained sessions resume through native `subagent(sessionID, prompt)`, and
- * a running child is steered the same way), so the v2 floor drops by three
- * relative to the v1 baseline. When the OMOS managed background-task
- * lifecycle is disabled (`backgroundJobs.mode = "off"`), the three
- * background-task tools (`task_cancel`, `task_status`, `task_reply`) plus
- * the v1-only `task_revive`, `task_message` and `wait_for_user` are not
- * registered either, so the floor drops by six on v1 (three on v2, where
- * all three v1-only tools were already gone).
+ * In native mode the baseline includes task_cancel, task_status, task_reply,
+ * webfetch and the two AST tools. Off mode omits the three task controls.
  */
 export const HEALTH_CHECK = {
   minAgents: 5,
-  // Default v1 tool set when council and ACP agents are not configured:
-  // task_cancel, task_revive, task_status, task_message,
-  // task_reply, wait_for_user, webfetch, ast_grep_search, ast_grep_replace.
-  minTools: 9,
+  minTools: 6,
   minMcps: 1,
 } as const;
 
@@ -67,41 +56,18 @@ export function minimumExpectedAgentCount(
 
 const BASELINE_TOOL_NAMES = new Set([
   'task_cancel',
-  'task_revive',
   'task_status',
-  'task_message',
   'task_reply',
-  'wait_for_user',
   'webfetch',
   'ast_grep_search',
   'ast_grep_replace',
 ]);
 
-/** Task tools in the baseline, split by the lifecycle mode that registers them. */
-const TASK_TOOL_NAMES = new Set([
-  'task_cancel',
-  'task_revive',
-  'task_status',
-  'task_message',
-  'task_reply',
-  'wait_for_user',
-]);
-
-/** Tools that disappear together when the managed lifecycle is off. */
+/** Tools that disappear together when the native lifecycle is off. */
 const BACKGROUND_TASK_TOOL_NAMES = new Set([
   'task_cancel',
   'task_status',
   'task_reply',
-]);
-
-/** Both hosts register these native controls; V2 also keeps task_reply. */
-const NATIVE_MODE_TASK_TOOL_NAMES = new Set(['task_cancel', 'task_status']);
-
-/** V1-only baseline tools: never registered on v2, nor without the lifecycle. */
-const V1_ONLY_BASELINE_TOOL_NAMES = new Set([
-  'task_revive',
-  'task_message',
-  'wait_for_user',
 ]);
 
 /**
@@ -111,42 +77,18 @@ const V1_ONLY_BASELINE_TOOL_NAMES = new Set([
  *
  * @param disabledTools - User-edited config; a non-array is treated as
  *   "nothing disabled" instead of crashing plugin init.
- * @param backgroundJobsMode - Resolved lifecycle mode. Booleans are accepted
- *   for callers that predate the mode switch (`false` → `off`).
+ * @param backgroundJobsMode - Resolved lifecycle mode.
  */
 export function minimumExpectedToolCount(
   disabledTools: readonly string[] = [],
   webfetchEnabled = true,
-  hostFlavor?: string,
-  backgroundJobsMode: BackgroundJobsMode | boolean = 'managed',
+  backgroundJobsMode: BackgroundJobsMode = 'native',
 ): number {
-  const mode: BackgroundJobsMode =
-    typeof backgroundJobsMode === 'boolean'
-      ? backgroundJobsMode
-        ? 'managed'
-        : 'off'
-      : backgroundJobsMode;
-  const v2 = hostFlavor === 'v2';
   // Baseline tools this configuration never registers. One set, so the floor
   // is a single subtraction and cannot drift from the registration sites.
   const unregistered = new Set<string>();
-  if (v2)
-    for (const name of V1_ONLY_BASELINE_TOOL_NAMES) unregistered.add(name);
-  if (mode === 'off') {
-    for (const name of [
-      ...BACKGROUND_TASK_TOOL_NAMES,
-      ...V1_ONLY_BASELINE_TOOL_NAMES,
-    ])
-      unregistered.add(name);
-  } else if (mode === 'native') {
-    for (const name of TASK_TOOL_NAMES) {
-      if (
-        !NATIVE_MODE_TASK_TOOL_NAMES.has(name) &&
-        !(v2 && name === 'task_reply')
-      )
-        unregistered.add(name);
-    }
-  }
+  if (backgroundJobsMode === 'off')
+    for (const name of BACKGROUND_TASK_TOOL_NAMES) unregistered.add(name);
   // Config values come from user-edited JSON/JSONC (and can be re-derived
   // via runtime preset switches); never trust the declared type at
   // runtime. Fall back to "no disabled tools" instead of crashing plugin

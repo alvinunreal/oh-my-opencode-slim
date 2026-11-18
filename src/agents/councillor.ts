@@ -8,10 +8,9 @@ import {
 /**
  * Councillor agent - a read-only advisor in the multi-LLM council.
  *
- * Councillors are dispatched by the orchestrator (via `task()` on v1,
- * `subagent()` on v2) as agent sessions
- * (visible in tmux/UI). They have read-only access to the codebase via tools
- * but CANNOT modify files, run shell commands, or spawn subagents.
+ * Councillors are dispatched by the orchestrator via `subagent()` as agent
+ * sessions (visible in tmux/UI). They have read-only access to the codebase
+ * via tools but CANNOT modify files, run shell commands, or spawn subagents.
  *
  * Permission model mirrors OpenCode's built-in `explore` agent:
  * deny all, then selectively allow read-only tools.

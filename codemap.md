@@ -37,7 +37,6 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/hooks/absolute-path-rescue/` | Rewrites misguessed absolute tool paths (read/list/glob/grep) by re-anchoring the longest workspace-suffix match; ENOENT-only, unambiguous existing candidates, never invents paths. | [View Map](src/hooks/absolute-path-rescue/codemap.md) |
 | `src/hooks/apply-patch/` | Structured `apply_patch` parsing, matching, recovery, and rewrite pipeline. | [View Map](src/hooks/apply-patch/codemap.md) |
 | `src/hooks/foreground-fallback/` | Interactive-session fallback control path for rate-limit or degraded foreground execution with event-driven agent mapping. | [View Map](src/hooks/foreground-fallback/codemap.md) |
-| `src/hooks/json-error-recovery/` | JSON/tool-output recovery helpers for malformed model responses. | [View Map](src/hooks/json-error-recovery/codemap.md) |
 | `src/hooks/phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases. | [View Map](src/hooks/phase-reminder/codemap.md) |
 | `src/hooks/search-path-guard/` | Pre-checks `grep`/`glob` `args.path` validity in `tool.execute.before` and fails fast with an actionable error instead of upstream ripgrep noise. | [View Map](src/hooks/search-path-guard/codemap.md) |
 | `src/hooks/tool-loop-guard/` | Detects byte-identical repeated tool calls per session; corrective warning at 3, hard block at 5, with task-lifecycle exemptions and per-turn wait-tool counting. | [View Map](src/hooks/tool-loop-guard/codemap.md) |

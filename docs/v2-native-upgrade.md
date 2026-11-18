@@ -4,6 +4,7 @@ Slim requires **OpenCode 2.3.0 or newer**. Upgrade OpenCode before switching
 to this Slim release. For npm installations, use
 `npm install -g @opencode/cli@latest`. Then rerun the Slim installer to
 register it under OpenCode's `plugins` configuration.
+On OpenCode 1.x, pin `oh-my-opencode-slim@3.0.7` in the `plugin` list instead.
 
 OpenCode runs subagents in the background and reports each settled child
 period to its parent. [OpenCode 2.3 release notes](https://opencode.ai/changelog/v2.3.0)
@@ -23,26 +24,30 @@ the directories where you run V2. This includes `OPENCODE_CONFIG_DIR` when set,
 directories, including `~/.opencode` for projects under your home directory.
 The [configuration discovery rules](configuration.md#config-files) apply.
 
-Each explicit configuration layer is validated before merging. A nearer
-`mode: "native"` does not hide `mode: "managed"` or a retired limit in an older
-user or ancestor layer. The startup error names the source file and key; the
-plugin refuses initialization rather than silently dropping the setting:
+Each explicit configuration layer is validated before merging. Slim converts
+`mode: "managed"` to `"native"` in its own layer and removes inert settings.
+Warnings appear in the log and in `doctor`. Positive concurrency and wall-clock
+limits are rejected because Slim no longer enforces them, even if a nearer layer
+sets `mode: "off"`. The error names the source file, key and value:
 
 ```text
-<config path>: Unsupported backgroundJobs.mode "managed" on OpenCode v2; use "native" or "off".
+<config path>: Unsupported backgroundJobs.concurrency.providerConcurrency.openai = 2 on OpenCode v2: Slim no longer enforces this limit. Remove the key or set it to 0, then run /reload.
 ```
 
 From each project, run `oh-my-opencode-slim doctor` using the new plugin
 version. It reports incompatible settings in
 each configuration file before you start OpenCode.
+When startup is refused, OpenCode shows "Plugin failed: oh-my-opencode-slim".
+Open `/plugins` and select "view error" for the file and setting, or run
+`oh-my-opencode-slim doctor`. After correcting the file, run `/reload`.
 
-| Existing V2 setting | Required edit |
+| Existing setting | V2 behavior |
 |---|---|
-| `backgroundJobs.mode: "managed"` | Choose `"native"` for Slim's thin task controls and session presets, or `"off"` for unwrapped native delegation without Slim task tools or session bindings. An omitted mode selects `"native"`. |
-| `backgroundJobs.concurrency` | Remove the entire object, including empty objects and all-zero limits. Slim no longer enforces these admission caps on V2. |
-| `backgroundJobs.wallClockTimeoutMs` | Remove it, including an explicit `0`. Slim no longer runs its wall-clock watchdog on V2. |
-| `backgroundJobs.maxSessionsPerAgent` | Remove it, including the former default `2`. Slim no longer retains a reusable-session pool on V2. |
-| `backgroundJobs.stopConfirmationMs` | Remove it, including the former default `5000`. Slim no longer runs a terminal gate on V2. |
+| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning. Set `"off"` to disable Slim task tools and session bindings. |
+| `backgroundJobs.concurrency` | Positive default, provider or model limits are rejected; empty, zero or malformed values are removed with a warning. |
+| `backgroundJobs.wallClockTimeoutMs` | A positive deadline is rejected; zero, negative or malformed values are removed with a warning. |
+| `backgroundJobs.maxSessionsPerAgent`, `backgroundJobs.stopConfirmationMs` | Removed with a warning. |
+| `backgroundJobs.sameProviderPolicy`, `waitForUserGuard`, `childInputWake`, `childInputWakeKinds`, `pruneEvictedSessions` | Removed with a warning. |
 
 An example V2 configuration after review is:
 
@@ -56,9 +61,8 @@ These removals do not provide equivalent host limits. Review any requirement
 for concurrency, deadlines or session retention against your OpenCode host
 before upgrading.
 
-Remove `orchestratorWake`, `childInputWake`, `childInputWakeKinds`,
-`waitForUserGuard`, `pruneEvictedSessions`, and `sameProviderPolicy` from
-`backgroundJobs` after review. Slim warns for each configuration file that declares these retired settings.
+Remove `orchestratorWake` from `backgroundJobs` after review. Slim warns for
+each configuration file that declares this retired setting.
 
 Also review [removed feature-switch aliases](configuration.md#removed-config-keys):
 updates use `autoUpdate`, and enhanced webfetch uses `disabled_tools`.
@@ -76,8 +80,9 @@ continue them by exact
 Automation must use exact session IDs. In V2 native mode, `task_status` reads a
 child's trailing result and pending permissions, `task_cancel` asks the host to
 interrupt it, and `task_reply` answers permissions only. Answer questions in the
-host UI. The pre-existing child `task_report` queues an update with
-`delivery: "queue"` and `resume: false`; it does not wake the parent.
+host UI. The pre-existing child `task_report` admits an update with
+`delivery: "steer"` and requests a wake unless the parent's outcome is
+`interrupted`. Acceptance does not confirm processing.
 
 Native restart recovery is owned by OpenCode and can repeat external effects.
 It does not provide exactly-once execution. See

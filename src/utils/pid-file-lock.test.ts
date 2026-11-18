@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   acquirePidFileLock,
-  acquirePidFileLockWithRetryAsync,
   parsePidFile,
   readPidFileOwner,
 } from './pid-file-lock';
@@ -153,7 +152,7 @@ describe('pid-file-lock', () => {
     expect(fs.existsSync(lockDir)).toBe(false);
   });
 
-  test('age cap takes over a live-owned lock older than maxAgeMs', async () => {
+  test('age cap takes over a live-owned lock older than maxAgeMs', () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'omo-pidlock-'));
     roots.push(root);
     const lockFile = join(root, 'resource');
@@ -164,11 +163,7 @@ describe('pid-file-lock', () => {
     const old = new Date(Date.now() - 60_000);
     fs.utimesSync(lockDir, old, old);
 
-    const release = await acquirePidFileLockWithRetryAsync(
-      lockFile,
-      500,
-      30_000,
-    );
+    const release = acquirePidFileLock(lockFile, 30_000);
     expect(release).not.toBeNull();
     expect(parsePidFile(fs.readFileSync(join(lockDir, 'owner'), 'utf8'))).toBe(
       process.pid,
@@ -176,7 +171,7 @@ describe('pid-file-lock', () => {
     release?.();
   });
 
-  test('owner-less young lock counts as live', async () => {
+  test('owner-less young lock counts as live', () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'omo-pidlock-'));
     roots.push(root);
     const lockFile = join(root, 'resource');
@@ -186,7 +181,7 @@ describe('pid-file-lock', () => {
     // waiter does not steal a lock the crashed process briefly held.
     fs.mkdirSync(`${lockFile}.lock`, { recursive: true });
 
-    const release = await acquirePidFileLockWithRetryAsync(lockFile, 50);
+    const release = acquirePidFileLock(lockFile);
     expect(release).toBeNull();
   });
 

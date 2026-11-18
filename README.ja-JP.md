@@ -10,13 +10,8 @@
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· メモを、きれいで編集できる SVG 図に</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim は無料です。** 役に立ったら、動物福祉への支援をご検討ください。<br>
+> [お住まいの地域の団体に寄付する](https://ohmyopencodeslim.com/donate) · [すべての団体を見る](https://ohmyopencodeslim.com/animals)
 
 ## このプラグインについて
 
@@ -138,7 +137,7 @@ bun run build
 2. **OpenCode が認識しているモデルを更新して一覧表示します**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **プラグイン設定**を開きます: `~/.config/opencode/oh-my-opencode-slim.json`
 
@@ -728,6 +727,16 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 動物福祉への支援
+
+Slim は無料の MIT ライセンスで、今後もそれは変わりません。代金の代わりに、役立つと感じた方には動物福祉への支援をお願いしています。推薦団体は、農場と屠畜の現場で動物が受ける最も苦痛の大きい慣行、すなわち適切な気絶処理のない屠殺、鎮痛なしの処置、狭い場所への拘束をなくすために活動しています。寄付は団体に直接届きます。
+
+- **[寄付する](https://ohmyopencodeslim.com/donate)**：お住まいの地域で活動する団体の寄付ページが開きます。
+- **[すべての団体](https://ohmyopencodeslim.com/animals)**：各団体を比較し、選定理由を確認できます。
+- **商用利用**：ライセンス上の義務はありません。Slim を利用する企業には、年に一度の寄付をお願いしています。
 
 ---
 

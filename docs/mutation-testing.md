@@ -42,9 +42,7 @@ bun run mutation
 ```
 
 CI runs the same sweep via `bun run mutation:foreground-fallback`. It targets
-`dedup.ts` and locates the seven `DEDUP_WINDOW_MS` comparisons in
-`index.ts` from the source. The report check requires mutants for every
-comparison. The score must reach 80%.
+`dedup.ts` and requires mutants in that file. The score must reach 80%.
 
 The JSON report lands at `reports/mutation/mutation.json` (`reports/` is
 gitignored). Keep sweep output out of commits.
@@ -81,18 +79,12 @@ disposition.
 
 ## Survivor ledger: foreground-fallback (#1850)
 
-Master sweep baseline: 76 mutants, 72 killed, 4 survived. Outcomes:
+Outcomes for the retained target:
 
 | File:range | Mutant | Outcome | Killed by / proof |
 | --- | --- | --- | --- |
-| `dedup.ts:4:7-4:32` | `typeof value === 'number'` → `true` | Equivalent (not killed) | Under the mutant the branch has the same result for every input: `Number.isInteger` already rejects every non-number, so the disjunct can never decide it. The guard is still not deletable — `value` is `unknown` and it narrows the type — which is why no test can observe the difference. |
-| `dedup.ts:7:7-7:32` | string-type guard → `true` | Killed | `contract: non-string values that stringify to a status are rejected` (`index.property.test.ts`). |
-| `index.ts:1554:11-1554:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
-| `index.ts:3937:13-3937:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
+| `dedup.ts:2:7-2:32` | `typeof value === 'number'` → `true` | Equivalent (not killed) | Under the mutant the branch has the same result for every input: `Number.isInteger` already rejects every non-number, so the disjunct can never decide it. The guard is still not deletable — `value` is `unknown` and it narrows the type — which is why no test can observe the difference. |
+| `dedup.ts:5:7-5:32` | string-type guard → `true` | Killed | `contract: non-string values that stringify to a status are rejected` (`index.property.test.ts`). |
 
-Ranges are sweep-time snapshots; the gate config locates its targets in
-source, so a refactor that shifts these lines invalidates them. The mutation
-gate's target check verifies every row against that run's report.
-
-Fresh scoped sweep (`bun run mutation:foreground-fallback`): 98.68%, 75 killed,
-1 survived (`dedup.ts:4:7`, the equivalent mutant above), 0 no-coverage.
+Ranges are sweep-time snapshots. The mutation gate's target check verifies
+every row against that run's report.

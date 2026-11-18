@@ -1,14 +1,7 @@
 /**
  * Shape-based secret redaction, applied at the logger compose point
  * (src/utils/logger.ts) so every sink — file, stderr, and the append-
- * failure fallback — emits redacted entries, plus (for ordering
- * semantics only) at the parse-miss preview call site in
- * task-session-manager/tool-execute-hooks.ts.
- *
- * A second, stricter mode — maskTaskOutputStructure, below — provides
- * structure-only disclosure for untrusted-format previews (the
- * parse-miss site): field/tag names survive, values are NEVER disclosed
- * there, not even partially.
+ * failure fallback — emits redacted entries.
  *
  * Threat model — honest limits: this is a best-effort barrier against
  * ACCIDENTAL leaks in short log previews (a credential that rides along
@@ -98,69 +91,4 @@ export function redactSecretsForLog(input: string): string {
     );
   }
   return output;
-}
-
-// ── Structure-preserving value masking (parse-miss previews) ──────────
-//
-// Structure-only disclosure for untrusted-format content: tag and field
-// NAMES survive (enough to diagnose host output drift), but every VALUE
-// is fully hidden behind the literal [masked] placeholder — including
-// benign-looking ones, because values (description fields in particular)
-// carry orchestrator/user-authored text. The placeholder is deliberately
-// distinct from the partial-keep `…` convention above: this site never
-// discloses value bytes at all.
-
-const MASKED_PLACEHOLDER = '[masked]';
-
-/** A well-formed XML-ish tag: `<name attr=value ...>` or `<name/>`.
- * Attribute values may be double-quoted, single-quoted, or unquoted
- * (unquoted values stop at `/` so a self-closing `/>` marker is not
- * swallowed). Anything that does not parse as name + attribute pairs
- * (no closing `>`, stray `=`/quotes) does not match and is left to the
- * prose pass. */
-const XML_TAG_PATTERN =
-  /<[A-Za-z][\w.-]*(?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>/=]+))*\s*\/?>/g;
-
-/** One `name="value"` / `name='value'` / `name=value` pair inside a
- * matched tag (unquoted values stop at `/` for the same reason). */
-const XML_ATTR_PATTERN = /([\w:.-]+)(\s*=\s*)("[^"]*"|'[^']*'|[^\s"'<>/=]+)/g;
-
-/** Prose key-value token: `key: value` / `key=value`. The key is a
- * word/hyphen run; URL schemes are excluded both ways — a key followed
- * by `://` is a scheme (`postgres://…`), and a key preceded by `/` is a
- * URL authority component (`…//deploy:password@…`) — so URL credentials
- * stay intact for the precise redactSecretsForLog URL rule instead of
- * being blunt-masked here. The value run stops at common punctuation
- * delimiters so surrounding prose (parens, sentence ends) survives. */
-const KEY_VALUE_PATTERN =
-  /(?<!\/)\b([\w-]+)(\s*[:=]\s*)(?!\/\/)([A-Za-z0-9_\-/.+=:@~]+)/g;
-
-function maskXmlAttribute(
-  _match: string,
-  name: string,
-  eq: string,
-  value: string,
-): string {
-  if (value.startsWith('"')) return `${name}${eq}"${MASKED_PLACEHOLDER}"`;
-  if (value.startsWith("'")) return `${name}${eq}'${MASKED_PLACEHOLDER}'`;
-  return `${name}${eq}${MASKED_PLACEHOLDER}`;
-}
-
-/**
- * Structure-preserving value masking for untrusted-format task output
- * previews: XML-ish tags keep tag + attribute names with every attribute
- * value replaced by `[masked]`; prose `key:`/`key=` tokens keep the key
- * and mask the value run; everything else passes through
- * redactSecretsForLog (vendor/generic/URL-credential rules still apply
- * to free text). Deterministic — no wall-clock or randomness.
- */
-export function maskTaskOutputStructure(input: string): string {
-  const xmlMasked = input.replace(XML_TAG_PATTERN, (tag) =>
-    tag.replace(XML_ATTR_PATTERN, maskXmlAttribute),
-  );
-  const kvMasked = xmlMasked.replace(
-    KEY_VALUE_PATTERN,
-    (_match, key: string, eq: string) => `${key}${eq}${MASKED_PLACEHOLDER}`,
-  );
-  return redactSecretsForLog(kvMasked);
 }

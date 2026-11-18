@@ -1,210 +1,76 @@
 # src/hooks/foreground-fallback/
 
 ## Responsibility
-Runtime model fallback system for foreground (interactive) agent sessions. When OpenCode emits rate-limit signals via `message.updated`, `session.error`, or `session.status` events, this manager:
-- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
-- On v1, withholds `session.abort(X)` while the background job board reports running children of X: held retry events do not seal dedup, and exhausted chains still stop intervening. v2 and v1 sessions without running children retain their abort behavior. `session.error` and `message.updated` can re-prompt directly without abort. A replay transport failure leaves any armed handoff unresolved without aborting or resending.
-- Retrieves the last user message from the bounded transcript tail or its latest parent; an empty or failed tail never triggers a full-history read
-- Re-prompts with the first eligible entry from the chain head, skipping tried models and providers abandoned by this session or its parent
-- Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
-- Defers terminal job-board bookkeeping for recoverable child failover errors (cooperates with task-session-manager's `willAttemptFallback`). The deferral fences every terminal gate path before replay preparation starts; idle always uses the bounded backstop.
 
-## Design
+`ForegroundFallbackManager` steers foreground sessions when OpenCode 2.3
+reports a retryable provider failure, a content-filter refusal, or a no-route
+failure. The retry hook changes the model in place through `session.switchModel`.
+The refusal and no-route paths use the same selection logic and send an internal
+continuation when the switch succeeds.
 
-### Core Abstraction
-- **ForegroundFallbackManager**: Class instantiated at plugin initialization; process-local fallback progress is shared across replacement instances
-- Maintains per-session state tracking:
-  - `sessionModel`: Maps sessionID → current model string ("providerID/modelID")
-  - `activeFallback`: Maps sessionID → model from a confirmed switch.
-    `downProviders` separately maps each session's providers to recording times,
-    surviving internal continuations that return to the primary. `commitSwitch`
-    copies the previous map, records or refreshes the failed
-    source provider only for provider-scoped failures and removes the target
-    provider, including same-provider and sticky switches. Synthetic admissions
-    cannot overwrite it implicitly. An external turn selecting a different model
-    clears both; v2's persistent switch keeps the record live across turns.
-    Only provider marks younger than 30 minutes are used
-    (`PROVIDER_MARK_TTL_MS`), without expiring the model. A successful v1
-    assistant clears its provider's marks for its session and direct parent
-    only if it was created at or after each mark; other marks are preserved.
-    OpenCode v1 internal continuation and lifecycle selection consults
-    `fallback.continuationPolicy`: retry the primary by default or retain this
-    confirmed fallback for an internal continuation.
-   - `sessionAgent`: Maps sessionID → agent name, accepting user and session-created hints but not assistant identities. A v1 external admission can change a confirmed root's agent; children and internal admissions keep the first identity. Cold v1 sessions resolve identity through `utils/prompt-agent.ts`; unresolved sessions are not replayed.
-  - `separateCompaction`: Retains the latest explicitly pinned or separately modeled v1 summary's ID and active provenance. Its retry, error and summary events do not consume the owner's chain or advertise a pending fallback; a new user or assistant turn clears the active provenance.
-  - `sessionTried`: Maps sessionID → Set of models already attempted in the descent; earlier chain entries are not marked tried implicitly, and the sticky retry retains this set
-  - `requestRejected`: Observed models rejected for the current request remain excluded from the normal chain walk across successful steps and fresh-descent rearming; an external prompt or session deletion clears them. Slim's foreground re-attach is not an external prompt for this exclusion. The existing sticky exhaustion retry is unchanged.
-  - `sessionRetries`: Maps sessionID → absorbed host retry count for the entire descent (not per model)
-  - `authGrace`: Records the turn in which a v2 session used its one 401 authentication retry; recovery and deletion clear it.
-  - `chainExhaustion`: Maps sessionID → exhaustion stage; stage 2 prevents further aborts without a fresh descent
-  - `inProgress`: Process-global Set of sessions with active fallback in flight, shared via `globalThis` + `Symbol.for`
-  - `lastTrigger` + turn/model/incident identity: coalesces repeated
-    observations of the same failure while allowing distinct failures on the
-    same turn and model to advance the chain; a bounded one-shot exact
-    error-payload, model, and turn match correlates an id-less `session.error`
-    with its adjacent errored `message.updated` in either event order
-  - `turnEpoch`: fences fallback work suspended across promotion, abort,
-    backoff, and transcript reads from acting on a newer
-    external user turn; each replay reserves and registers a v1
-    host-shaped, time-ordered `msg_...` ID in the v1 prompt body before
-    submission, so info-only notifications remain identifiable when parts
-    arrive later
-  - `observedUserMessageIds`: retain exact IDs of admitted external turns and
-    internal replays, so stale user-message updates cannot rewind the model;
-    synthetic marker checks cover delayed part notifications
+## Retry and selection
 
-### Fallback Chain Resolution
-- **Agent-specific chains**: Each agent defines an ordered list of fallback models via `modelArrays`, preserving per-entry variants
-- **Chain generations**: The published table (`foregroundFallbackChains`) is swapped atomically by registry finalize and every successful v2 profile refresh (`buildChainGeneration`/`publishChainGeneration` in `src/index.ts`); each session pins the generation in effect at registration (`pinSessionChains`, fired by the v2 profile bridge at profile freeze) and finishes its descent against it — a swap mid-descent never changes what counts as untried
-- Selection scans from index 0, skipping tried entries and the union of this
-  session's and its parent's live `downProviders` marks. Other models on
-  the failing provider remain eligible until a confirmed switch leaves it.
-- **Chain lookup**: Resolves the correct chain using:
-  1. Agent name (primary) → exact match
-  2. Current model (fallback) → search all chains for containing model
-  3. Merged list (last resort) → preserve insertion order across all agents
-- **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
-- The v2 retry and refusal paths use the current host agent when its pinned
-  generation has a chain; otherwise they retain the registered agent. A
-  refusal updates that agent only after the durable selection and epoch checks.
+- `handleV2Retry` classifies the error with `failoverScope` and is controlled by
+  `v2RetryEnabled` or the session's pinned setting. Provider failures, transport,
+  authentication, and quota errors have provider scope. Content-filter and
+  model-availability failures have request scope.
+- `maxRetries` counts eligible host retries across the current descent. Request
+  rejections and permanent or spent quota skip that budget. A structured
+  `provider.auth` 401 receives one immediate retry per turn.
+- Host backoffs longer than 30 minutes bypass the retry budget when a chain is
+  available. `initialRetryDelayMs` has no steering equivalent; the host's own
+  retry backoff provides the recovery window.
+- `switchV2InPlace` calls `selectFallbackModel`, waits for the host switch, and
+  commits the result. A timed-out switch that later settles is reconciled only
+  if the turn and observed model still match. An in-flight switch prevents a
+  concurrent attempt for the same session.
+- Chains are pinned per session from the generation published by `src/index.ts`.
+  A known agent uses its own chain. When the agent is unknown, resolution may
+  infer a chain from the current model or merge the available chains.
+- Selection skips tried models and provider marks for the session and its
+  parent. Request-scoped rejections remain excluded for the request. The last
+  eligible entry gets one sticky retry; the next exhaustion leaves the host
+  decision unchanged.
+- Spent allowance marks the failing provider in `quotaExhaustedProviders`.
+  Once no chain provider remains available, the failure surfaces without a
+  switch. Provider failure marks used for child routing expire after 30 minutes.
 
-### Retryable Error Detection
-- **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, v2's `provider.transport` type, transport codes (`ECONNRESET`, …) and transport messages, model/variant unavailable errors
-- **Scope** (`failoverScope`): provider availability, transport, auth and quota failures have provider scope; policy/content-filter rejections and missing/retired models have request scope. The v2 `provider.content-filter` and `provider.no-route` types have request scope regardless of message or HTTP status. Request wording takes precedence over HTTP status, including a policy rejection wrapped in 403. `isFailoverError` accepts either scope.
-- **Status-code probe** (`extractStatusCode`): priority order `statusCode` → `data.statusCode` → `cause.statusCode` → `status` → `response.status` → `response.statusCode` → `data.status` → `data.response.status` → `cause.status` → `cause.response.status`. `asHttpStatus` accepts only finite `100–599` codes (number or 3-digit numeric string), so arbitrary numeric fields are never mistaken for a status.
-- **Event coverage**: `message.updated` (message metadata error, or `finish: 'content-filter'` before its error is attached), `session.error` (session-level error), `session.status` (`retry` status). On v2, a `session.step.failed` with `finish: 'content-filter'` uses the correlated `session.step.started` identity and the same in-place selection core as the retry hook; roots and children receive one internal continuation. OpenCode 2.3+ reports each settled child period to its parent. The content-filter finish and its later error share message-ID deduplication. On v1, completed error-free `finish: 'unknown'` messages with confirmed tool-free parts preserve retries and chain state while a per-session streak counts distinct IDs, triggering request-scoped abort and replay at three; unreadable parts neither count nor break the streak. A reply read across a confirmed fallback switch belongs to the previous model and does not count against the backup.
-- A v2 `provider.no-route` execution failure uses the latest context user, synthetic, or completed compaction as the turn anchor and claims the same in-place switch/continuation. Root context failures may fall back to a bounded tail. Child no-route and content-filter failures continue in place; OpenCode 2.3+ delivers each settled child period to the parent.
-- **Retry budget**: A failover-worthy host `session.status` retry (or a v2 retry hook with `decision.retry === true`) can charge `fallback.maxRetries`. A v2 request-scoped failure switches immediately without charging this budget, even when the host proposes a retry. On v1, each genuine external user turn resets the host retry count, including before any model switch; v2 has no per-turn reset. Terminal `session.error` and errored `message.updated` advance immediately. Exhausting the retry budget keeps it charged across the model chain; recovery (v1: successful assistant completion; v2: raw `session.step.ended` with `stop`/`tool-calls`/`length`, or `session.execution.succeeded`), observed fresh descent from the configured primary, or deletion re-arms it. Stage-2 exhaustion blocks abort on subsequent retry statuses until a fresh descent.
-- A structured v2 `provider.auth` 401 gets one immediate same-model retry per turn, even if an earlier hook already requested it; the next 401 switches without charging the host retry budget. Other auth statuses and error types retain their existing policy.
-- A v1 continuation still attempts its primary once, but a retry on a provider marked down for the session or its parent skips both the host retry budget and initial fallback delay while the mark is live.
-- A retry arriving while a fallback is in progress is not admitted and does not
-  consume retry budget; delayed fallback retains the triggering error for
-  consistent inline-error toast suppression.
-- With a chain, host backoffs longer than 30 minutes bypass the retry budget
-  (`session.status.next` on v1, `decision.delay` on v2). Shorter or unspecified waits keep the count-based budget; no-chain behavior is unchanged.
-- Confirmed permanent quota/billing failures bypass the initial fallback delay.
-  The delay is consumed once per descent; later links use only consecutive
-  fallback backoff, and a confirmed new external turn clears that backoff.
+## Refusals and no-route failures
 
-### State Management
-- **Deduplication**: the short duplicate-observation window is scoped by the
-  confirmed user-turn identity, model episode, and incident ID, so distinct
-  failures on the same model are not merged. The window also rejects stale
-  retry events from the previous model. Repeated retry attempt numbers are ignored before
-  the chain-global retry budget is charged. Retry attempts withheld by the live-
-  child guard remain eligible when the same attempt is observed after the guard
-  clears.
-- **Session cleanup**: `session.deleted` event handler removes all per-session state to prevent memory leaks
-- **In-progress tracking**: Prevents concurrent fallback attempts on the same session across plugin-manager recreation
-- Host calls within `inProgress` have bounded timeouts because the terminal gate's fallback fence depends on that window ending; a replay send timeout retains unresolved ownership without aborting or resending.
+`session.step.started` records the assistant, agent, model, and turn epoch.
+`session.step.failed` with `finish: 'content-filter'` claims one refusal outcome
+per assistant. Before switching, the manager checks the durable session selection
+and the captured turn. A newer turn during the switch prevents the continuation,
+while the confirmed model selection remains durable.
 
-### Retry Budget and Exhaustion
-- The v2 in-place retry hook (`handleV2Retry`) is gated by the separate `v2RetryEnabled` constructor flag — the replay path's `enabled` stays false on v2 hosts, so only steering runs there. It shares the chain-global budget and quota policy. Absorbed retries, recoverable failures, missing chains and unsuccessful model switches leave the host decision unchanged. Once `selectFallbackModel` returns `exhausted` the hook returns without touching the decision: the host's own retry verdict stands, so a spent chain never forces a retry. A first ordinary exhaustion still takes the sticky re-fallback (only the second lands here).
-- `handleV2Retry` captures the session's `turnEpoch` at invocation and the shared `switchV2InPlace` validates `isCurrentTurn(sessionID, epoch)` both after the asynchronous `switchModel` await and inside the late-reconciliation callback (`pendingSwitch.then`). A new external user turn on the same model advances the epoch, suppressing stale decision mutations, fallback commitments, toasts, and late reconciliations. When still on the current turn, a timed-out switch that settles late is reconciled only while `sessionModel` equals the failed `from` model or the switch target; newer selections (A -> B -> C) remain untouched. The refusal path passes no epoch to `switchV2InPlace` (its switch is a durable selection a newer prompt still runs on) and fences only its continuation.
-- The v2 refusal path requires a chain and verifies the durable selection and agent before updating the session model or switching (an absent model means the host-selected agent default; absent variant equals `default`). A step captures the external-prompt epoch when it starts; a newer prompt before the switch prevents both the switch and the named-agent internal continuation, while one during the switch prevents only the continuation. Each session retains at most its current step, which is consumed on refusal. Host calls are bounded, and confirmed switches project the selected agent/model/variant to the sidebar, including late reconciliation.
-- Refusal outcomes share a bounded promise map so `session.step.failed` and correlated events process one assistant once. V1 managed background children use the observation handoff; V2 children receive one in-place continuation, and the host owns delivery of its settled result.
-- Observability + initial delay: each v2 retry-hook event logs its structured type, status, redacted message, retry-after and decision when Slim's hook returns; a later plugin can still change that decision. V1 failover retry statuses log their message and attempt. `fallback.initialRetryDelayMs` has no steering form (no replay to delay; the host's own retry backoff is the window) — noted once per session instead of silently disabling steering.
-- v2 bookkeeping split: `handleEvent` runs agent/model tracking and confirmed-recovery resets whenever either path is enabled, while the replay interventions (`session.error`, `message.updated` error, `session.status` retry) stay gated behind `enabled`. Successful v2 steps and executions can clear descent state with replay disabled. `noteExternalTurn` records a model selected outside the confirmed fallback so returning to the configured primary can re-arm the descent.
-- `maxRetries = N` absorbs eligible host retries `1..N` on the current model; failure `N+1` (and every later failure) advances the chain. With `maxRetries = 0` those failures switch immediately; the 401 grace is independent of this budget.
-- The budget is **chain-global** and is not cleared on a model switch.
-- The budget clears on confirmed recovery, `session.deleted`, a confirmed new v1 user turn, or an observed fresh descent from the configured primary outside our committed fallback. A new v2 turn alone does not reset it. A completed assistant `message.updated` with `finish: 'content-filter'` is not a successful response: OpenCode v1 publishes it before attaching the `ContentFilterError`, so it never clears the budget.
-- **Permanent quota/billing failures** (`isPermanentQuotaBillingError`: 402, explicit spending / personal-team-blocked limits, credits exhausted, expired coding plans, weekly/monthly exhaustion, Zhipu billing codes) bypass the initial replay delay through `bypassInitialFallbackDelay` and skip the host retry budget, switching immediately regardless of `maxRetries`. The sticky re-fallback still applies.
-- **Spent allowance** (`isSpentQuotaError`, issue #966: usage limit reached, quota/usage exceeded, without short-horizon retry wording in the same carrier; free-tier exhaustion exempt) records the failing provider in `quotaExhaustedProviders`. `surfacesSpentQuota` gates every trigger path: when no chain entry remains on another provider, it cancels any queued initial delay and leaves the error to the user (no switch, no abort). Otherwise the chain walk and the sticky pick skip exhausted providers, and the host retry budget is skipped. The record re-arms with the budget (recovery, new v1 turn, fresh descent, deletion); `rearmIfFreshDescent` does not treat a head on an exhausted provider as a fresh descent. Switches still add the provider to `downProviders` for delegated-child routing. Exhaustion is attributed to the model that failed, never to a replacement in `sessionModel`: `message.updated` uses the message's own model; an observation of an incident a fallback already handled (`triggerIncidents` records the model it failed on) is recorded there and never acts; a message-tied `session.error` that no fallback handled belongs to the current model; the v2 retry hook names the failing attempt's model (`event.model`) and attributes to it directly, its old-model late retries already dropped by the tried-model guard; any other spent-quota signal (uncorrelated `session.error`, `session.status` retry) is the last replay trigger's echo (`lastSwitchTrigger`, recorded by `isDeduped`) only when it repeats that trigger's spent-quota text in the same turn and dedup window, on an exhausted provider, before the replacement emits a message. An echo records nothing against the replacement and never fails over again; `selectFallbackModel` only re-marks the model the gate already attributed. Otherwise it belongs to the current model, so a cascade of spent quotas keeps advancing. A no-chain session surfaces spent quota at the gate, and `trySameModelRetry` treats it as deterministic, so it never takes the same-model replay.
-- `chainExhaustion` stage 2 stops `tryFallbackWithAbort` and `selectFallbackModel`, so a spent chain does not keep aborting host retries.
-- Stage 1 retries `chain[last]` once, ignoring provider exclusions and retaining
-  tried models; a failure of that sticky retry reaches stage 2 without reopening
-  the chain.
-- On v1, `noteExternalTurn` runs at `chat.message` admission, cancels the initial-delay trigger, clears retry/dedup/backoff state and increments `turnEpoch`. v2 admissions reconcile model selection without resetting the retry budget; `observeExternalPromptIntent` runs on the first line of the v2 `session.prompt` hook, records the ID in the same registry and advances `turnEpoch`. `isKnownUserMessage` synchronously checks retained IDs, shared internal admissions recorded by `chat.message`, and event parts (Slim markers or strict native background-task notifications). Duplicate and stale user-message updates are inert, and `isCurrentTurn` prevents superseded replay work from claiming a switch. `rearmIfFreshDescent` clears tried/exhaustion state only after an observed return to the configured primary outside our committed fallback; a fallback onto the head keeps its descent state.
+For `provider.no-route`, the manager reads the latest context anchor. A root
+session can fall back to a bounded transcript tail when the context read fails.
+Roots and children continue in place; OpenCode delivers a child's settled result
+to its parent. Host calls are bounded by timeouts.
 
-### Deduplication (identity-based)
-- No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.
-- `message.updated` dedupes by message id; `session.status` dedupes by `retryEpisode` (model + episode id + `seen` attempts, so repeated/out-of-order attempts dedupe but an incremented attempt is processed). An id-less terminal event is otherwise unique; only an exact one-shot match to its paired error event reuses that incident.
-- Dedup and the `inProgress` guard run **before** budget consumption, so a duplicate or concurrently-dropped event cannot burn a budget slot.
+## Session state
 
-## Flow
+- `sessionModel` tracks observed models; `activeFallback` records confirmed
+  switches. An external selection of a different model clears the fallback
+  record and its provider marks.
+- `sessionAgent`, `sessionParent`, and pinned chains determine routing.
+- `sessionTried`, `sessionRetries`, `requestRejected`, `authGrace`, and
+  `chainExhaustion` track the current descent. Confirmed recovery, deletion,
+  or an observed return to an eligible primary can re-arm the descent.
+- `turnEpoch` fences retry work across a new external prompt.
+  `observedUserMessageIds` and internal admission markers prevent stale or
+  synthetic user messages from being treated as new turns.
+- `inProgress` is process-global, so a replacement manager sees a switch still
+  owned by its predecessor. `session.deleted` cleans up per-session state
+  without releasing an in-flight switch's ownership.
 
-### Event Processing Pipeline
-```
-OpenCode Event (message.updated/session.error/session.status)
-    ↓
-ForegroundFallbackManager.handleEvent()
-    ↓
-Failover error detection via isFailoverError()
-    ↓
-tryFallback(sessionID) [deduplicated, in-progress guarded]
-    ↓
-Resolve fallback chain for session
-    ↓
-Abort current rate-limited prompt (session.status retry path only, with timeout)
-    ↓
-Confirm a user turn in session history (`isUserMessageWithParts`); the replay carries only an internal reminder
-    ↓
-Re-prompt session with next model via promptAsync()
-    ↓
-Update session state with new model
-    ↓
-Log fallback event
-```
-
-### Key Operations
-1. **Abort with timeout**: `abortSessionWithTimeout()` sends Ctrl+C to pane then kills it after 250ms delay
-2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
-3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
-4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking); the body is a single trusted internal-initiator reminder, so the replay is not mistaken for new external user input and the user's request is read from history
-5. **Failover deferral**: Recoverable child errors (`isFailoverError`) leave terminal bookkeeping to the task-session-manager. Its backstop waits for replay preparation, renewing at most five times, and clears the deferral before publishing an unrecovered error. `fallbackFailureReason()` adds the disabled, missing-chain, exhausted-chain (with tried models), or failed-model explanation. Non-failover errors retain their original text.
-6. **Fallback ownership**: Admitted and unresolved-promoted replays retain a tracker flag until external registration replaces the run. Plugin wiring makes v1 `task_revive` refuse pending or running fallback work; `task_cancel` remains available. v2 steering creates no replay flag or refusal. Identity preflight runs before task-error bookkeeping, while replay runs afterwards to avoid synchronous busy-event re-entry.
-7. **Continuation notice**: A confirmed replay after a terminal failover error queues one internal `state="running"` notice with the failed model, provider error and model now running. The tracker uses the same parent transport as terminal delivery and waits for the notice attempt to settle before sending the result. Retry-path replays, superseded or unresolved admissions, promoted owners and v2 steering send no notice.
+Confirmed recovery comes from `session.execution.succeeded` or
+`session.step.ended` with `stop`, `tool-calls`, or `length`. Synthesized usage
+messages and other finishes do not establish recovery.
 
 ## Integration
 
-### Consumers
-- **Primary**: Main plugin initialization (`src/index.ts`) creates ForegroundFallbackManager instance
-- **Delegation routing**: Main plugin reads `getActiveFallback`. Independent
-  children move only if their primary provider has an unexpired mark in
-  `downProviders`, taking
-  their first chain entry outside that set. Inherited children follow the
-  record's live model even after request-scoped failures. Manual model choices
-  do not create a fallback record. A child's later fallback picks also skip
-  providers abandoned by its parent, linked through `sessionParent`.
-- **Event source**: OpenCode plugin event system provides `message.updated`, `session.error`, `session.status`, `session.deleted` events
-
-### Dependencies
-- **OpenCode SDK**: `PluginInput['client']` for session management and event handling (accessed via `getClient()` from `src/utils/opencode-client.ts`)
-- **Utilities**:
-  - `abortSessionWithTimeout()`: Graceful session termination
-  - `parseModelReference()`: Model string parsing ("providerID/modelID")
-  - `createInternalAgentTextPart()`: Internal-initiator provenance for replays
-  - `log()`: Structured logging for observability
-- **SessionLifecycle** (`src/hooks/session-lifecycle.ts`): registers `session.deleted` cleanup
-- **Background job board** (`src/index.ts`): supplies a synchronous `hasRunning(sessionID)` child check for the optional v1 abort guard; the failing background job itself is not counted as its own child
-- **Message types** (`src/hooks/types.ts`): `isUserMessageWithParts` to locate the user turn before a replay
-- **Configuration**: Fallback chains provided at construction from agent configurations
-
-### Configuration Schema
-Fallback chains are provided as `Record<string, string[]>` where:
-- Key: Agent name (e.g., "orchestrator", "explorer")
-- Value: Ordered list of model strings (e.g., `["anthropic/claude-opus-4-5", "openai/gpt-4o"]`)
-
-### Memory Management
-- **Per-session state**: All maps cleared on `session.deleted` event
-- **Deduplication**: Prevents unbounded growth in long-running instances with many subagent sessions
-
-### Observability
-- **Logging**: Structured logs at key points:
-  - Rate-limit detection
-  - Fallback initiation
-  - Model switching
-  - Chain exhaustion
-  - Abort failures
-  - PromptAsync unavailability
-
-## Error Handling
-- **Graceful degradation**: Best-effort approach; abort may be slow or incomplete
-- **Recovery**: v1 uses completed successful assistant responses; v2 uses raw
-  `session.execution.succeeded` or `session.step.ended` with `finish` `stop`,
-  `tool-calls` or `length` to reset tried/retry/exhaustion state. Other step
-  finishes and synthesized `v2-usage:` messages never prove recovery.
-- **Validation**: Checks for `promptAsync` availability before attempting re-prompt
-- **Fallback exhaustion**: Logs when entire chain has been attempted without success
-- **Invalid model format**: Skips malformed model references
-- **Missing user message**: Aborts fallback attempt if no user message found in history
+`src/index.ts` constructs the manager and supplies chains and runtime options.
+The v2 bridge forwards retry hooks and lifecycle events. `SessionLifecycle`
+coordinates deletion cleanup, while `getActiveFallback` exposes the confirmed
+model and provider marks to delegation routing.

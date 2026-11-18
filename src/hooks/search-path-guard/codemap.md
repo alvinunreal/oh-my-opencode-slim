@@ -6,7 +6,7 @@ Validates search paths before host tool execution to prevent ripgrep execution f
 
 - Resolved paths exist (ENOTDIR for invalid paths raises actionable errors)
 - Missing paths are reported with helpful guidance rather than cryptic "ripgrep execution failed" errors
-- Search path resolution respects host tool semantics (v1 grep uses `path.join`, v1 glob uses `path.resolve`, v2 expands home and uses `path.resolve` for both; v2 glob ignores `"undefined"`/`"null"`)
+- Search path resolution expands home and uses `path.resolve` for both tools; glob ignores `"undefined"` and `"null"`
 - Invalid paths are blocked before tool execution with clear error messages
 
 The hook operates exclusively on `grep` and `glob` tools to provide precise path validation for search operations while avoiding interference with other tool categories.
@@ -17,7 +17,6 @@ The hook operates exclusively on `grep` and `glob` tools to provide precise path
 - **Hook Factory**: `createSearchPathGuardHook(ctx)` returns `tool.execute.before` handler
 - **Path Resolution**: Uses `resolveSearchPath()` to mirror host tool resolution behavior exactly
 - **Validation Logic**: Distinguishes ENOENT (report missing) from ENOTDIR (block invalid) and other stat errors (pass-through)
-- **Host Flavor Awareness**: Supports `hostFlavor` parameter for v1/v2 host differences
 
 ### Key Components
 - **resolveSearchPath()**: Implements precise path resolution matching host tool behavior
@@ -31,9 +30,7 @@ The hook operates exclusively on `grep` and `glob` tools to provide precise path
 - **Other stat errors**: Pass through unchanged (permissions, I/O issues)
 
 ### Configuration
-- **hostFlavor**: Optional parameter for v1/v2 host flavor detection
 - **pathOperations**: Injected path utilities for deterministic testing
-- **No external configuration**: Behavior controlled via host flavor detection
 
 ## Flow
 
@@ -59,13 +56,11 @@ Proceed with original tool execution (success case)
 
 ### Path Resolution Flow
 ```
-Input: raw path, directory, hostFlavor
+Input: raw path, directory
     ↓
 Check if absolute path (return as-is)
     ↓
-Resolve using host-specific logic:
-- v2 or glob → path.resolve(directory, raw)
-- v1 grep → path.join(directory, raw)
+Expand home or resolve using path.resolve(directory, raw)
     ↓
 Return resolved path or null if directory unavailable
 ```
@@ -95,7 +90,6 @@ Classify error type (ENOENT/ENOTDIR/other)
 - **Plugin SDK**: `PluginInput` type for hook registration
 
 ### Configuration Integration
-- **Host Flavor Detection**: Automatically detects v1/v2 from `ctx.hostFlavor`
 - **Path Operations**: Uses Node's native path operations in production
 - **Directory Context**: Falls back gracefully when `ctx.directory` unavailable
 
@@ -113,9 +107,8 @@ Classify error type (ENOENT/ENOTDIR/other)
 ## Testing Considerations
 
 Key test scenarios:
-- **Path resolution**: Verify v1 grep uses join, v1 glob uses resolve, v2 uses resolve
+- **Path resolution**: Verify grep and glob use resolve and expand home paths
 - **Absolute path handling**: Absolute paths bypass resolution, pass through unchanged
 - **Missing path reporting**: ENOENT errors generate helpful error messages
 - **Invalid path blocking**: ENOTDIR errors raise clear actionable errors
 - **Permission errors**: Pass through without modification
-- **Host flavor variations**: Correct behavior for different host tool implementations

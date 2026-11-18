@@ -14,12 +14,7 @@ the built-in `/models`, so it triggers no LLM turn.
 | 2. Agent arrangement | Choose a Base preset, add / remove / edit local agents, then Save (or Save & Apply) |
 | 3. Edit agent | Pick model → variant (thinking strength) → temperature → options (JSON) |
 
-> `/preset` is a TUI-only slash command (like `/models`). On v1 hosts invoke
-> it via autocomplete selection or a keybind — typing `/preset` + Enter does
-> not open the manager (same design as `/models`), and it takes no name
-> argument.
->
-> On v2 hosts, typing `/preset` + Enter opens the same three-level manager,
+> Typing `/preset` + Enter opens the three-level manager,
 > and the sidebar's preset row opens it on click. Applying a preset from the
 > manager asks you to choose **Current session** or **Global default**.
 > `/preset <name>` is the fast path for the first choice: it binds the preset
@@ -175,9 +170,6 @@ watcher's completion. Invalid configuration preserves the last-known-good
 defaults. Fix the configuration before retrying the refresh or applying it
 to a session.
 
-On v1, `/preset` retains its configuration-writing behavior. **Reload
-OpenCode** after applying a preset.
-
 ## Editing inherited presets
 
 At Level 2, select **Base preset** to choose one parent preset or **(none)**.
@@ -190,7 +182,6 @@ local agent overrides; it does not flatten or copy inherited agents into the
 child. Editing the base preset updates derived definitions for future v2
 session bindings and refreshes default-bound roots on their next admission;
 named-preset bindings retain their saved snapshots until explicitly reapplied.
-On v1, reload to apply the edited definition.
 A base preset with dependents cannot be deleted until those presets choose
 another base or clear inheritance.
 

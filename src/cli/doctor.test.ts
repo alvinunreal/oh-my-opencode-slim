@@ -102,7 +102,10 @@ describe('runDoctorCheck', () => {
     );
     for (const file of [oldConfig, newConfig])
       fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(oldConfig, '{"backgroundJobs":{"concurrency":{}}}');
+    fs.writeFileSync(
+      oldConfig,
+      '{"backgroundJobs":{"concurrency":{"providerConcurrency":{"openai":2}}}}',
+    );
     fs.writeFileSync(newConfig, '{"backgroundJobs":{"mode":"native"}}');
 
     const result = runDoctorCheck(project, 'v2');
@@ -113,7 +116,9 @@ describe('runDoctorCheck', () => {
         ok: false,
         error: {
           kind: 'unsupported-host',
-          message: expect.stringContaining('backgroundJobs.concurrency'),
+          message: expect.stringContaining(
+            'backgroundJobs.concurrency.providerConcurrency.openai',
+          ),
         },
       }),
     );
