@@ -9,7 +9,7 @@ export function appendTaskRejectionInstruction(prompt: string): string {
  * when the observer agent is enabled; capability-neutral so it stays true
  * for both vision and non-vision models. */
 const OBSERVER_DISPATCH_INSTRUCTION =
-  'When you cannot view an image or visual file directly, dispatch @observer with the file path and a precise goal, then work from its reported observations.';
+  "Read visual files directly when you can. If you can't view one or need help, send @observer the path and goal.";
 
 export const OBSERVER_DISPATCH_ROLES = new Set<string>([
   'explorer',
