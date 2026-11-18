@@ -310,8 +310,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'deepwork',
         'reflect',
         'preset',
-        'preset-status',
-        'preset-default',
       ],
     });
 
@@ -327,8 +325,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'deepwork',
         'reflect',
         'preset',
-        'preset-status',
-        'preset-default',
       ]);
     }
   });
@@ -350,13 +346,11 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'deepwork-goal',
       'chat-headers',
       'cache-monitor',
-      'json-error-recovery',
       'tool-loop-guard',
       'search-path-guard',
       'absolute-path-rescue',
       'apply-patch',
       'council-inject',
-      'auto-update-checker',
     ]);
     expect(DISABLED_COMMANDS_VALUES).toEqual([
       'implement',
@@ -364,8 +358,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'deepwork',
       'reflect',
       'preset',
-      'preset-status',
-      'preset-default',
       'killall',
       'subagent',
     ]);
@@ -377,11 +369,11 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
     // editor completion.
     expect(
       PluginConfigSchema.safeParse({
-        disabled_hooks: ['auto-update-checker', 'phase-reminder'],
+        disabled_hooks: ['council-inject', 'phase-reminder'],
       }).success,
     ).toBe(true);
     expect(
-      PluginConfigSchema.safeParse({ disabled_hooks: ['update-checker'] })
+      PluginConfigSchema.safeParse({ disabled_hooks: ['auto-update-checker'] })
         .success,
     ).toBe(false);
     expect(
@@ -394,36 +386,39 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
     ).toBe(false);
   });
 
-  it('auto-update-checker gates update checking and installation together', () => {
-    const result = PluginConfigSchema.safeParse({
-      disabled_hooks: ['auto-update-checker'],
-    });
+  it('accepts autoUpdate as the only update switch', () => {
+    for (const autoUpdate of [false, true]) {
+      const result = PluginConfigSchema.safeParse({ autoUpdate });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.disabled_hooks).toEqual(['auto-update-checker']);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.autoUpdate).toBe(autoUpdate);
+      }
     }
   });
 });
 
 describe('PluginConfigSchema webfetch', () => {
-  it('defaults the enhanced webfetch tool to enabled', () => {
-    const result = PluginConfigSchema.safeParse({ webfetch: {} });
+  it('accepts the canonical disabled_tools switch on and off', () => {
+    for (const disabled_tools of [[], ['ast_grep_search'], ['webfetch']]) {
+      const result = PluginConfigSchema.safeParse({ disabled_tools });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.webfetch?.enabled).toBe(true);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.disabled_tools).toEqual(disabled_tools);
+        expect('webfetch' in result.data).toBe(false);
+      }
     }
   });
 
-  it('rejects the removed dedicated model key (strict schema)', () => {
-    const result = PluginConfigSchema.safeParse({
-      webfetch: {
-        model: 'openai/gpt-4o-mini',
-      },
-    });
-
-    expect(result.success).toBe(false);
+  it('rejects the removed webfetch config block in a direct parse', () => {
+    for (const webfetch of [
+      {},
+      { enabled: false },
+      { model: 'openai/gpt-4o-mini' },
+    ]) {
+      expect(PluginConfigSchema.safeParse({ webfetch }).success).toBe(false);
+    }
   });
 });
 

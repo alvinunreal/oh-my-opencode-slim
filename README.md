@@ -186,7 +186,7 @@ Then:
 2. **Refresh and list the models OpenCode can see**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
    On OpenCode v2, use `opencode models` instead.
 3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
@@ -218,7 +218,7 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 ```
 
 Presets can inherit from one base preset with `extends`: a `design` preset can
-extend `base` and override only its designer model. In the v2 TUI, `/preset` lets you
+extend `base` and override only its designer model. On v2, `/preset` lets you
 apply subagent inference settings to **Current session** or change the
 **Global default**.
 `/preset <name>` applies the preset to the session you are
@@ -231,12 +231,9 @@ adopts the parent's updated inference settings while retaining its ID and
 history. This is best-effort: a failed continuation can leave the native
 model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
-In the paired Web app and Desktop, use `/preset <name>` for the current
-session, `/preset-default <name>` for the global default, and
-`/preset-status` to inspect the binding and default sources. These server
-commands run without a model turn; the interactive manager remains in the TUI.
 The sidebar shows the current session's saved team models and variants;
-`/preset` marks its bound preset separately from the global default.
+`/preset` marks its bound preset separately from the global default. In Web
+and Desktop, bare `/preset` displays the session binding and configured defaults.
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
 lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
 child progress reporting. V2 applies the old `"managed"` mode as `"native"`
@@ -815,7 +812,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-150-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-151-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -1025,6 +1022,9 @@ Use this section as a map: start with installation, then jump to features, confi
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/wsmajt"><img src="https://avatars.githubusercontent.com/u/70204246?v=4?s=100" width="100px;" alt="Kacper Muszyński"/><br /><sub><b>Kacper Muszyński</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=wsmajt" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="http://www.berthojoris.com/"><img src="https://avatars.githubusercontent.com/u/1352912?v=4?s=100" width="100px;" alt="Bertho Joris"/><br /><sub><b>Bertho Joris</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=berthojoris" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/tanishqbaweja"><img src="https://avatars.githubusercontent.com/u/74068132?v=4?s=100" width="100px;" alt="Tanishq"/><br /><sub><b>Tanishq</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=tanishqbaweja" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="16.66%"><a href="https://x.com/surlymochan"><img src="https://avatars.githubusercontent.com/u/209239467?v=4?s=100" width="100px;" alt="Nick"/><br /><sub><b>Nick</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=surlymochan" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

@@ -4,36 +4,11 @@
 
 export type TaskOutputState = 'running' | 'completed' | 'error' | 'cancelled';
 
-export interface TaskLaunchOutput {
-  taskID: string;
-  state: 'running';
-  result?: string;
-}
-
 export interface TaskStatusOutput {
   taskID: string;
   state: TaskOutputState;
   timedOut: boolean;
   result?: string;
-}
-
-/**
- * Static, deterministic placeholder for a still-running background task tool
- * result. Keyed only on the task ID so re-rendering across consecutive
- * requests produces byte-identical output regardless of any live progress the
- * runtime may stream into the tool part's `state.output`. Keeping running
- * results byte-stable prevents provider prompt-cache invalidation mid-history
- * while a background lane is active.
- */
-export function renderRunningTaskPlaceholder(taskID: string): string {
-  return [
-    `<task id="${taskID}" state="running">`,
-    '<summary>Background task running</summary>',
-    '<task_result>',
-    'The task is working in the background. You will be notified automatically when it finishes.',
-    '</task_result>',
-    '</task>',
-  ].join('\n');
 }
 
 /**
@@ -49,11 +24,6 @@ interface TaskOutputHeader {
 /** The native v2 background launch sentence: host-authored, no child text. */
 const NATIVE_BACKGROUND_LAUNCH =
   /^\s*The subagent is working in the background \(sessionID:\s*([^\s)]+)\)/i;
-
-/** True when `output` opens with the native v2 background launch sentence. */
-export function isNativeBackgroundLaunchOutput(output: string): boolean {
-  return NATIVE_BACKGROUND_LAUNCH.test(output);
-}
 
 /**
  * Tokenize an opening tag into its attributes, walking complete
@@ -158,23 +128,6 @@ export function parseTaskOutputHeader(output: string): TaskOutputHeader {
   return parsed;
 }
 
-export function parseTaskIdFromTaskOutput(output: string): string | undefined {
-  return parseTaskOutputHeader(output).taskID;
-}
-
-export function parseTaskLaunchOutput(
-  output: string,
-): TaskLaunchOutput | undefined {
-  const { taskID, state } = parseTaskOutputHeader(output);
-  if (!taskID || state !== 'running') return undefined;
-
-  return {
-    taskID,
-    state,
-    result: parseTaskResultFromOutput(output),
-  };
-}
-
 export function parseTaskStatusOutput(
   output: string,
 ): TaskStatusOutput | undefined {
@@ -187,52 +140,6 @@ export function parseTaskStatusOutput(
     timedOut: state === 'running' && /Timed out after \d+ms/i.test(output),
     result: parseTaskResultFromOutput(output),
   };
-}
-
-export function parseTaskStateFromOutput(
-  output: string,
-): TaskOutputState | undefined {
-  return parseTaskOutputHeader(output).state;
-}
-
-export function findTaskErrorNotice(text: string, tag: 'task' | 'subagent') {
-  const blocks = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
-  for (const [block] of text.matchAll(blocks)) {
-    const status = parseTaskStatusOutput(block);
-    if (status?.state === 'error') return { block, taskID: status.taskID };
-  }
-  return undefined;
-}
-
-/** Diagnostic applied when a terminal `completed` report carries no text. */
-export const COMPLETED_WITHOUT_TEXT_DIAGNOSTIC =
-  'Task ended without a public text result; completion is not confirmed';
-
-export interface GuardedTaskStatus<
-  S extends TaskOutputState = TaskOutputState,
-> {
-  state: S | 'error';
-  resultSummary?: string;
-  lastStatusError?: string;
-}
-
-export function guardCompletedStatusText<S extends TaskOutputState>(
-  state: S,
-  result: string | undefined,
-  existingResultSummary: string | undefined,
-): GuardedTaskStatus<S> {
-  if (
-    state === 'completed' &&
-    !result?.trim() &&
-    !existingResultSummary?.trim()
-  ) {
-    return {
-      state: 'error',
-      resultSummary: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
-      lastStatusError: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
-    };
-  }
-  return { state, resultSummary: result };
 }
 
 export function parseTaskResultFromOutput(output: string): string | undefined {

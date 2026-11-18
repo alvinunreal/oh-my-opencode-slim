@@ -767,17 +767,6 @@ const CompanionConfigSchema = z.object({
 
 export type CompanionConfig = z.infer<typeof CompanionConfigSchema>;
 
-export const WebfetchConfigSchema = z
-  .object({
-    enabled: z
-      .boolean()
-      .default(true)
-      .describe(
-        'When false, skip loading this enhanced webfetch and its JSDOM probe so OpenCode uses its built-in version. disabled_tools: ["webfetch"] has the same cold behavior.',
-      ),
-  })
-  .strict();
-
 const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
@@ -834,13 +823,11 @@ export const DISABLED_HOOKS_VALUES = [
   'deepwork-goal',
   'chat-headers',
   'cache-monitor',
-  'json-error-recovery',
   'tool-loop-guard',
   'search-path-guard',
   'absolute-path-rescue',
   'apply-patch',
   'council-inject',
-  'auto-update-checker',
 ] as const;
 
 /** Valid `disabled_commands` entries; single source for the enum and the loader. */
@@ -850,8 +837,6 @@ export const DISABLED_COMMANDS_VALUES = [
   'deepwork',
   'reflect',
   'preset',
-  'preset-status',
-  'preset-default',
   'killall',
   'subagent',
 ] as const;
@@ -894,7 +879,7 @@ const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when oh-my-opencode-slim.json(c) changes on disk. When false, v2 does not watch config files and file edits apply only after a restart; explicit /preset-default writes still refresh the current generation. Defaults to true.',
+        'v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when oh-my-opencode-slim.json(c) changes on disk. When false, v2 does not watch config files and file edits apply only after a restart; explicit /preset writes still refresh the current generation where applicable. Defaults to true.',
       ),
     stripOrchestratorModel: z
       .boolean()
@@ -912,7 +897,7 @@ const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Listing "auto-update-checker" in disabled_hooks independently disables the same update hook — neither setting strengthens or weakens the other. Defaults to true.',
+        'Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Defaults to true.',
       ),
     presets: z.record(z.string(), PresetSchema).optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
@@ -961,7 +946,7 @@ const RawPluginConfigSchema = z
       .describe(
         'Hook names to disable completely. Valid values: ' +
           DISABLED_HOOKS_VALUES.join(', ') +
-          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops the same OMOS update hook that autoUpdate: false covers — all update checks, update notices, and automatic installation — so either switch alone turns it off. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so repeated identical calls and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     disabled_commands: z
       .array(z.enum(DISABLED_COMMANDS_VALUES))
@@ -969,7 +954,7 @@ const RawPluginConfigSchema = z
       .describe(
         'Slash-command names to disable completely. Valid values: ' +
           DISABLED_COMMANDS_VALUES.join(', ') +
-          '. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Disabling "preset" disables the whole preset command group and its UI/RPC controls; "preset-status" and "preset-default" can each be disabled independently. The /reflect command is also disabled when "reflect" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when "reflect" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     // Multiplexer config
     multiplexer: MultiplexerConfigSchema.optional(),
@@ -978,7 +963,12 @@ const RawPluginConfigSchema = z
     fallback: FailoverConfigSchema.optional(),
     council: CouncilConfigSchema.optional(),
     companion: CompanionConfigSchema.optional(),
-    webfetch: WebfetchConfigSchema.optional(),
+    webfetch: z
+      .never({
+        error:
+          'webfetch config was removed; use disabled_tools: ["webfetch"] to use the native host tool',
+      })
+      .optional(),
     acpAgents: AcpAgentsConfigSchema.optional(),
     // `marketplace: false` is the natural guess for the kill switch; read
     // it as `{ enabled: false }` instead of rejecting the whole file.

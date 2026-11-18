@@ -34,8 +34,7 @@ synthesizes their outputs into one answer.
 Each councillor in a preset is registered as a dynamic subagent named
 `councillor-<name>` (e.g. `councillor-alpha`, `councillor-beta`), each
 with its own configured model. The orchestrator dispatches all councillors
-in parallel via the host's native delegation tool (`task()` on v1,
-`subagent()` on v2) at depth 1, and each
+in parallel via the host's native `subagent()` tool at depth 1, and each
 councillor appears as its own TUI pane.
 
 A seat session receives only the prompt it is dispatched with — nothing else
@@ -54,10 +53,8 @@ itself. The
 council agent itself waits for no one: it has no tools and starts from
 whatever its context carries.
 
-> On OpenCode v2 the managed lifecycle is not available, so the seat hook
-> reads each child session and its transcript directly from the host —
-> never the parent's transcript — instead of a board. The prompt format
-> does not change, and one call-start cutoff guards attribution: a seat
+> The seat hook reads each child session and its transcript directly from the
+> host. One call-start cutoff guards attribution: a seat
 > whose newest prompt arrived at or after the synthesis call opened
 > reports `[no response — unverified result]` rather than replaying an
 > older answer (see [What you see](#what-you-see)).
@@ -70,12 +67,12 @@ synthesizer — the council agent itself dispatches nobody (it has no tools):
 ```text
 User / Orchestrator
         |
-        +--> task(): councillor-alpha (configured model)   } dispatched
-        +--> task(): councillor-beta  (configured model)   } in parallel
-        +--> task(): councillor-gamma (configured model)   } by the orchestrator
+        +--> subagent(): councillor-alpha (configured model)   } dispatched
+        +--> subagent(): councillor-beta  (configured model)   } in parallel
+        +--> subagent(): councillor-gamma (configured model)   } by the orchestrator
         |
         v
-task(subagent_type='council', prompt=<question + 'Seats: <id, id>' line>)
+subagent(agent='council', prompt=<question + 'Seats: <id, id>' line>)
         |
         v   harness resolves the returned IDs and attaches every seat response
 Council agent (no tools) synthesizes the responses
@@ -83,8 +80,6 @@ Council agent (no tools) synthesizes the responses
         v
 Structured report: Council Response / Per-Councillor Details / Council Summary
 ```
-
-> The diagram shows v1 wording; on v2 the same dispatches use `subagent()`.
 
 ### Why councillors stay independent
 
@@ -257,9 +252,8 @@ When `model` is an array, the councillor walks the chain in order:
 ```
 
 Entries are `provider/model` strings or `{ "id", "variant" }` objects. The
-councillor tries each entry in order until one responds. Empty responses are
-retried once per entry; other failures advance to the next entry. The
-councillor only fails once every entry in the chain is exhausted.
+councillor tries eligible entries in order as failures occur. The orchestrator
+retries an empty seat once.
 
 ---
 
@@ -382,11 +376,8 @@ dispatch-returned session IDs, and
 the harness attaches the collected responses to that call; the council
 agent synthesizes the report.
 
-Which resolver attaches them depends on the host, and the prompt does
-not change: on V1 managed, seat text comes from the parent's
-job board (aliases or session IDs both resolve); on V2 (native by default,
-and `off`), it comes from the host sessions directly —
-only exact `ses_` IDs resolve, each child must still report this parent, and
+The resolver reads host sessions directly in both `native` and `off` modes.
+Only exact `ses_` IDs resolve, each child must still report this parent, and
 the seat body is the child's latest answer. Text from an earlier round is
 never replayed: a seat still working on its newest prompt reports
 `[no response — still running]`, an unreadable session reports

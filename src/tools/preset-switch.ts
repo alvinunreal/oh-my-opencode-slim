@@ -24,12 +24,9 @@ import {
   mergePluginConfigs,
 } from '../config/loader';
 import { mergePresetMaps, resolvePresetDefinition } from '../config/presets';
-import type { PluginConfigSnapshot } from '../config/snapshot';
 import {
   isPrototypeSensitiveName,
   ownPresetValue,
-  withAgentOverride,
-  withoutAgentOverride,
 } from '../preset-editor-domain';
 
 type PresetMap = Record<string, PresetInput>;
@@ -93,8 +90,6 @@ export interface PresetSelectionState {
   global?: string;
   projectAvailable: string[];
   globalAvailable: string[];
-  /** Snapshot-backed only: runtime-interpolated declarations before inheritance resolution. */
-  rawDefinitions?: PresetMap;
 }
 
 type PersistPresetResult = { ok: true } | { ok: false; message: string };
@@ -273,68 +268,30 @@ export function switchPresetOnDisk(
 export function getPresetSelectionState(
   directory: string,
   hostFlavor?: string,
-  snapshot?: PluginConfigSnapshot,
 ): PresetSelectionState {
-  // Command callers already read the runtime snapshot. Reject file-level
-  // fallback instead of reporting guessed defaults.
-  const failure = snapshot?.warnings.find(
-    ({ kind, presetName }) =>
-      kind === 'invalid-json' ||
-      (kind === 'invalid-schema' && presetName === undefined) ||
-      kind === 'read-error',
-  );
-  if (failure) {
-    throw new Error(`${failure.path}: ${failure.message}`);
-  }
-  const userConfig = snapshot
-    ? snapshot.paths.userConfigPath
-      ? loadRawPluginConfigFromPath(snapshot.paths.userConfigPath, {
-          hostFlavor,
-          silent: true,
-        })
-      : null
-    : readUserConfig(directory);
-  const userPresets = userConfig?.presets;
+  const userConfig = readUserConfig(directory);
   const projectConfig = readProjectConfig(directory, hostFlavor);
   const globalPreset =
-    typeof userConfig?.preset === 'string'
-      ? (snapshot
-          ? userConfig.preset.trim()
-          : interpolateConfigEnvironment(userConfig.preset).trim()) || undefined
+    typeof userConfig?.preset === 'string' &&
+    interpolateConfigEnvironment(userConfig.preset).trim()
+      ? interpolateConfigEnvironment(userConfig.preset).trim()
       : undefined;
   const projectPreset =
-    typeof projectConfig?.preset === 'string'
-      ? projectConfig.preset.trim() || (snapshot ? '' : undefined)
+    typeof projectConfig?.preset === 'string' && projectConfig.preset.trim()
+      ? projectConfig.preset.trim()
       : undefined;
   const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET?.trim() || undefined;
 
   return {
-    effective: snapshot
-      ? snapshot.config.preset
-      : (envPreset ?? projectPreset ?? globalPreset),
+    effective: envPreset ?? projectPreset ?? globalPreset,
     project: projectPreset,
     global: globalPreset,
-    ...(snapshot
-      ? {
-          rawDefinitions:
-            mergePresetMaps(
-              userPresets as RawPluginConfig['presets'],
-              projectConfig?.presets as RawPluginConfig['presets'],
-            ) ?? {},
-        }
-      : {}),
     projectAvailable: Object.keys(
-      snapshot
-        ? (snapshot.config.presets ?? {})
-        : getAllConfiguredPresets(directory, hostFlavor),
+      getAllConfiguredPresets(directory, hostFlavor),
     ).sort((a, b) => a.localeCompare(b)),
-    globalAvailable: Object.keys(
-      userPresets &&
-        typeof userPresets === 'object' &&
-        !Array.isArray(userPresets)
-        ? userPresets
-        : {},
-    ).sort((a, b) => a.localeCompare(b)),
+    globalAvailable: Object.keys(readUserPresets(directory)).sort((a, b) =>
+      a.localeCompare(b),
+    ),
   };
 }
 
@@ -1077,27 +1034,4 @@ export function deletePreset(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Set (or replace) an agent override within an in-memory preset. Returns a
- * new preset object; does not mutate the input.
- */
-export function setAgentOverride(
-  preset: Preset,
-  agentName: string,
-  override: AgentOverrideConfig,
-): Preset {
-  return withAgentOverride(preset, agentName, override);
-}
-
-/**
- * Remove an agent from an in-memory preset. Returns a new preset object; does
- * not mutate the input. If the agent was not present, the preset is unchanged.
- */
-export function removeAgentFromPreset(
-  preset: Preset,
-  agentName: string,
-): Preset {
-  return withoutAgentOverride(preset, agentName);
 }

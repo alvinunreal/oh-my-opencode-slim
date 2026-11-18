@@ -1,69 +1,17 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
-  guardCompletedStatusText,
-  parseTaskIdFromTaskOutput,
-  parseTaskLaunchOutput,
+  parseTaskOutputHeader,
   parseTaskResultFromOutput,
-  parseTaskStateFromOutput,
   parseTaskStatusOutput,
-  renderRunningTaskPlaceholder,
   type TaskOutputState,
 } from './task';
 
-describe('guardCompletedStatusText', () => {
-  test('keeps completed only when non-empty result text exists', () => {
-    expect(
-      guardCompletedStatusText('completed', 'final text', undefined),
-    ).toEqual({ state: 'completed', resultSummary: 'final text' });
-  });
-
-  test('downgrades empty completed to error with a diagnostic', () => {
-    const guarded = guardCompletedStatusText('completed', undefined, undefined);
-    expect(guarded.state).toBe('error');
-    expect(guarded.resultSummary).toBe(COMPLETED_WITHOUT_TEXT_DIAGNOSTIC);
-  });
-
-  test('downgrades whitespace-only completed to error', () => {
-    expect(guardCompletedStatusText('completed', '  ', undefined).state).toBe(
-      'error',
-    );
-  });
-
-  test('keeps completed when the board already holds a summary', () => {
-    expect(
-      guardCompletedStatusText('completed', undefined, 'recorded result'),
-    ).toEqual({ state: 'completed', resultSummary: undefined });
-  });
-
-  test('passes non-completed states through unchanged', () => {
-    for (const state of ['running', 'error', 'cancelled'] as const) {
-      expect(guardCompletedStatusText(state, '', undefined)).toEqual({
-        state,
-        resultSummary: '',
-      });
-    }
-  });
-});
-
-describe('renderRunningTaskPlaceholder', () => {
-  test('is deterministic and keyed only on the task ID', () => {
-    const a = renderRunningTaskPlaceholder('ses_123');
-    const b = renderRunningTaskPlaceholder('ses_123');
-    expect(a).toBe(b);
-    expect(a).toContain('<task id="ses_123" state="running">');
-    // Parses back to a running status for the same task ID (round-trip safe).
-    expect(parseTaskStatusOutput(a)).toMatchObject({
-      taskID: 'ses_123',
-      state: 'running',
-    });
-  });
-
-  test('differs only by task ID', () => {
-    const a = renderRunningTaskPlaceholder('ses_a');
-    const b = renderRunningTaskPlaceholder('ses_b');
-    expect(a).not.toBe(b);
-    expect(a.replace('ses_a', 'ses_b')).toBe(b);
+test('parses a running task status for the same task ID', () => {
+  const a =
+    '<task id="ses_123" state="running"><task_result>The task is working in the background. You will be notified automatically when it finishes.</task_result></task>';
+  expect(parseTaskStatusOutput(a)).toMatchObject({
+    taskID: 'ses_123',
+    state: 'running',
   });
 });
 
@@ -181,8 +129,8 @@ describe('task output header parsing', () => {
     [undefined, undefined, '<task_result>no task id here</task_result>'],
   ];
   test.each(headerCases)('header %s / %s: %s', (id, state, input) => {
-    expect(parseTaskIdFromTaskOutput(input)).toBe(id);
-    expect(parseTaskStateFromOutput(input)).toBe(state);
+    expect(parseTaskOutputHeader(input).taskID).toBe(id);
+    expect(parseTaskOutputHeader(input).state).toBe(state);
   });
 });
 
@@ -197,9 +145,10 @@ describe('parseTaskLaunchOutput', () => {
       '</task_result>',
     ].join('\n');
 
-    expect(parseTaskLaunchOutput(output)).toEqual({
+    expect(parseTaskStatusOutput(output)).toEqual({
       taskID: 'ses_123',
       state: 'running',
+      timedOut: false,
       result: 'Background task started.',
     });
   });
@@ -213,9 +162,10 @@ describe('parseTaskLaunchOutput', () => {
       '</task>',
     ].join('\n');
 
-    expect(parseTaskLaunchOutput(output)).toEqual({
+    expect(parseTaskStatusOutput(output)).toEqual({
       taskID: 'ses_123',
       state: 'running',
+      timedOut: false,
       result: 'Background task started.',
     });
   });
@@ -229,7 +179,7 @@ describe('parseTaskLaunchOutput', () => {
       '</task_result>',
     ].join('\n');
 
-    expect(parseTaskLaunchOutput(output)).toBeUndefined();
+    expect(parseTaskStatusOutput(output)).toBeUndefined();
   });
 
   test('ignores state lines inside task result body', () => {
@@ -241,7 +191,7 @@ describe('parseTaskLaunchOutput', () => {
       '</task_result>',
     ].join('\n');
 
-    expect(parseTaskLaunchOutput(output)).toBeUndefined();
+    expect(parseTaskStatusOutput(output)).toBeUndefined();
   });
 });
 
@@ -437,8 +387,8 @@ describe('v2 subagent output formats', () => {
       'done',
       '</subagent>',
     ].join('\n');
-    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_a');
-    expect(parseTaskStateFromOutput(out)).toBe('completed');
+    expect(parseTaskOutputHeader(out).taskID).toBe('ses_a');
+    expect(parseTaskOutputHeader(out).state).toBe('completed');
     expect(parseTaskResultFromOutput(out)).toBe('done');
     const status = parseTaskStatusOutput(out);
     expect(status).toMatchObject({ taskID: 'ses_a', state: 'completed' });
@@ -457,9 +407,9 @@ describe('v2 subagent output formats', () => {
   test('parses plain-text background launch', () => {
     const out =
       'The subagent is working in the background (sessionID: ses_c). You will be notified automatically when it finishes.';
-    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_c');
-    expect(parseTaskStateFromOutput(out)).toBe('running');
-    expect(parseTaskLaunchOutput(out)).toMatchObject({
+    expect(parseTaskOutputHeader(out).taskID).toBe('ses_c');
+    expect(parseTaskOutputHeader(out).state).toBe('running');
+    expect(parseTaskStatusOutput(out)).toMatchObject({
       taskID: 'ses_c',
       state: 'running',
     });
@@ -467,15 +417,15 @@ describe('v2 subagent output formats', () => {
 
   test('parses subagent failure message', () => {
     const out = 'Subagent failed (sessionID: ses_d): rate limited';
-    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_d');
-    expect(parseTaskStateFromOutput(out)).toBe('error');
+    expect(parseTaskOutputHeader(out).taskID).toBe('ses_d');
+    expect(parseTaskOutputHeader(out).state).toBe('error');
   });
 
   test('v1 <task> formats still parse unchanged', () => {
     const out =
       '<task id="ses_e" state="running">\n<task_result>\nx\n</task_result>\n</task>';
-    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_e');
-    expect(parseTaskStateFromOutput(out)).toBe('running');
+    expect(parseTaskOutputHeader(out).taskID).toBe('ses_e');
+    expect(parseTaskOutputHeader(out).state).toBe('running');
   });
 
   test('v1 task_id line wins over a stray bracketed sessionID', () => {
@@ -484,6 +434,6 @@ describe('v2 subagent output formats', () => {
       'task_id: ses_v1',
       'Related discussion mentions (sessionID: ses_other) in passing.',
     ].join('\n');
-    expect(parseTaskIdFromTaskOutput(out)).toBe('ses_v1');
+    expect(parseTaskOutputHeader(out).taskID).toBe('ses_v1');
   });
 });

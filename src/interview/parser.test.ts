@@ -3,14 +3,20 @@ import {
   buildFallbackState,
   findLatestAssistantState,
   flattenMessage,
-  parseAssistantState,
 } from './parser';
+
+function parseStateFromAssistantText(text: string, maxQuestions?: number) {
+  return findLatestAssistantState(
+    [{ info: { role: 'assistant' }, parts: [{ type: 'text', text }] }],
+    maxQuestions,
+  );
+}
 
 describe('parseAssistantState', () => {
   test('parses valid interview state with questions', () => {
     const text =
       'Here are questions.\n<interview_state>\n{"summary":"Test app","questions":[{"id":"q-1","question":"Platform?","options":["Web","Mobile"],"suggested":"Web"}]}\n</interview_state>';
-    const result = parseAssistantState(text, 2);
+    const result = parseStateFromAssistantText(text, 2);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.summary).toBe('Test app');
@@ -24,7 +30,7 @@ describe('parseAssistantState', () => {
   test('parses state with title field', () => {
     const text =
       '<interview_state>\n{"summary":"Building X","title":"my-project","questions":[]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.title).toBe('my-project');
@@ -37,9 +43,9 @@ describe('parseAssistantState', () => {
       '{"summary":"Spec mentions <interview_state> inside the summary.","questions":[{"id":"q-1","question":"Which?","options":["A","B"]}]}',
       '</interview_state>',
     ].join('\n');
-    const result = parseAssistantState(text, 2);
+    const result = parseStateFromAssistantText(text, 2);
 
-    expect(result.error).toBeUndefined();
+    expect(result.latestAssistantError).toBeUndefined();
     expect(result.state?.summary).toContain('inside the summary');
     expect(result.state?.questions).toHaveLength(1);
     expect(result.state?.questions[0].id).toBe('q-1');
@@ -52,30 +58,30 @@ describe('parseAssistantState', () => {
       '{"summary":"the `<interview_state>{json}</interview_state>` block","questions":[{"id":"q-1","question":"Which?","options":["A","B"]}]}',
       '</interview_state>',
     ].join('\n');
-    const result = parseAssistantState(text, 2);
+    const result = parseStateFromAssistantText(text, 2);
 
-    expect(result.error).toBeUndefined();
+    expect(result.latestAssistantError).toBeUndefined();
     expect(result.state?.questions[0].id).toBe('q-1');
   });
 
   test('returns null when no interview_state block', () => {
-    const result = parseAssistantState('No state block here.');
+    const result = parseStateFromAssistantText('No state block here.');
     expect(result.state).toBeNull();
-    expect(result.error).toBeUndefined();
+    expect(result.latestAssistantError).toBe('Missing <interview_state> block');
   });
 
   test('returns error for invalid JSON inside block', () => {
     const text = '<interview_state>\n{not valid json}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).toBeNull();
-    expect(result.error).toBeDefined();
+    expect(result.latestAssistantError).toBe('Failed to parse interview state');
   });
 
   test('handles malformed question objects gracefully', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[null,123,"string",{"question":"Valid?"}]}\n</interview_state>';
-    const result = parseAssistantState(text, 5);
+    const result = parseStateFromAssistantText(text, 5);
 
     expect(result.state).not.toBeNull();
     // Only the valid question should survive Zod validation
@@ -86,7 +92,7 @@ describe('parseAssistantState', () => {
   test('respects maxQuestions limit', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"id":"q-1","question":"Q1?"},{"id":"q-2","question":"Q2?"},{"id":"q-3","question":"Q3?"},{"id":"q-4","question":"Q4?"}]}\n</interview_state>';
-    const result = parseAssistantState(text, 2);
+    const result = parseStateFromAssistantText(text, 2);
 
     expect(result.state?.questions).toHaveLength(2);
   });
@@ -94,7 +100,7 @@ describe('parseAssistantState', () => {
   test('handles empty questions array', () => {
     const text =
       '<interview_state>\n{"summary":"Waiting","questions":[]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.questions).toHaveLength(0);
@@ -104,7 +110,7 @@ describe('parseAssistantState', () => {
   test('strips whitespace from question text', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"question":"  Spaced question  ","options":["  A  ","  B  "]}]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state?.questions[0].question).toBe('Spaced question');
     expect(result.state?.questions[0].options).toEqual(['A', 'B']);
@@ -113,7 +119,7 @@ describe('parseAssistantState', () => {
   test('generates fallback ID when question has no id', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"question":"No ID?"}]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state?.questions[0].id).toBe('q-1');
   });
@@ -121,7 +127,7 @@ describe('parseAssistantState', () => {
   test('trims options to max 4', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"question":"Q?","options":["A","B","C","D","E","F"]}]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state?.questions[0].options).toHaveLength(4);
   });
@@ -129,7 +135,7 @@ describe('parseAssistantState', () => {
   test('filters out non-string options', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"question":"Q?","options":["A",42,true,null,"B"]}]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state?.questions[0].options).toEqual(['A', 'B']);
   });
@@ -137,11 +143,11 @@ describe('parseAssistantState', () => {
   test('keeps a patch string and treats a missing patch as absent', () => {
     const text =
       '<interview_state>\n{"summary":"Updated scope","patch":"--- a/spec\\n+++ b/spec\\n@@ -1 +1 @@\\n-old\\n+new","questions":[]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
     expect(result.state?.summary).toBe('Updated scope');
     expect(result.state?.patch).toContain('+++ b/spec');
 
-    const legacy = parseAssistantState(
+    const legacy = parseStateFromAssistantText(
       '<interview_state>\n{"summary":"Full spec","questions":[]}\n</interview_state>',
     );
     expect(legacy.state?.patch).toBeUndefined();
@@ -150,7 +156,7 @@ describe('parseAssistantState', () => {
   test('handles non-string summary gracefully', () => {
     const text =
       '<interview_state>\n{"summary":123,"questions":[]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.summary).toBe('');
@@ -159,7 +165,7 @@ describe('parseAssistantState', () => {
   test('handles non-string title gracefully', () => {
     const text =
       '<interview_state>\n{"summary":"Test","title":456,"questions":[]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.title).toBeUndefined();
@@ -168,7 +174,7 @@ describe('parseAssistantState', () => {
   test('handles missing questions field', () => {
     const text =
       '<interview_state>\n{"summary":"No questions field"}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.questions).toHaveLength(0);
@@ -177,7 +183,7 @@ describe('parseAssistantState', () => {
   test('handles question with empty question text', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"question":"  "}]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state?.questions).toHaveLength(0);
   });
@@ -185,7 +191,7 @@ describe('parseAssistantState', () => {
   test('is case-insensitive for interview_state tag', () => {
     const text =
       '<INTERVIEW_STATE>\n{"summary":"Upper","questions":[]}\n</INTERVIEW_STATE>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.summary).toBe('Upper');
@@ -194,7 +200,7 @@ describe('parseAssistantState', () => {
   test('handles deeply nested unexpected objects', () => {
     const text =
       '<interview_state>\n{"summary":"Test","questions":[{"question":"Q?","options":[{"nested":true}]}]}\n</interview_state>';
-    const result = parseAssistantState(text);
+    const result = parseStateFromAssistantText(text);
 
     expect(result.state?.questions[0].options).toEqual([]);
   });
@@ -205,7 +211,7 @@ describe('parseAssistantState', () => {
       question: `Question ${i}?`,
     }));
     const text = `<interview_state>\n${JSON.stringify({ summary: 'Large', questions })}\n</interview_state>`;
-    const result = parseAssistantState(text, 5);
+    const result = parseStateFromAssistantText(text, 5);
 
     expect(result.state?.questions).toHaveLength(5);
   });
@@ -221,7 +227,7 @@ describe('parseAssistantState', () => {
       '}',
       '</interview_state>',
     ].join('\n');
-    const result = parseAssistantState(textWithLiteralNewlines);
+    const result = parseStateFromAssistantText(textWithLiteralNewlines);
 
     expect(result.state).not.toBeNull();
     expect(result.state?.summary).toBe(

@@ -107,41 +107,6 @@ export function stripTaggedContent(
 }
 
 /**
- * Multi-key variant of `stripTaggedContent`: one pass removes every part
- * tagged with ANY of the keys and drops the messages this empties.
- *
- * Semantically identical to calling `stripTaggedContent` once per key, in
- * order — the exact shape the root compaction path and the v2 compaction
- * bridge used to spell as sequential scans over the same array. Equivalence
- * rests on two properties of the sequential form: a message emptied by key
- * N is removed in pass N, so it never reaches pass N+1, and a message that
- * was already empty before a pass is preserved by that pass (the
- * `hadParts` gate is evaluated per pass, on the parts still present). The
- * single pass therefore evaluates `hadParts` once — before any key's parts
- * are filtered — so a message stripped empty by any combination of the
- * keys is removed exactly once, while a message that entered the pass with
- * no parts stays. Surviving messages keep their relative order: the pass
- * walks from the end and only ever splices the entry it stands on.
- */
-export function stripTaggedContents(
-  messages: unknown[],
-  metadataKeys: readonly string[],
-): void {
-  if (metadataKeys.length === 0) {
-    return;
-  }
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (!isMessageWithParts(message)) continue;
-    const hadParts = message.parts.length > 0;
-    message.parts = message.parts.filter(
-      (part) => !metadataKeys.some((key) => isTaggedPart(part, key)),
-    );
-    if (hadParts && message.parts.length === 0) messages.splice(i, 1);
-  }
-}
-
-/**
  * Append volatile content as its own synthetic message at the very end of
  * the payload. Call `stripTaggedContent` first so at most one instance
  * exists; the volatile zone must stay strictly behind all stable content.

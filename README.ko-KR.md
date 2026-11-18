@@ -155,7 +155,7 @@ bun run build
 2. **OpenCode에서 사용할 수 있는 모델 목록을 새로고침하고 확인하세요**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **플러그인 설정 파일**인 `~/.config/opencode/oh-my-opencode-slim.json`을 여세요.
 

@@ -1,5 +1,3 @@
-export const DEDUP_WINDOW_MS = 5_000;
-
 export function asHttpStatus(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isInteger(value)) {
     return value >= 100 && value <= 599 ? value : undefined;

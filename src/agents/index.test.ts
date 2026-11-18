@@ -741,13 +741,13 @@ describe('orchestrator agent', () => {
   });
 
   test('orchestrator is allowed to invoke task-control tools', () => {
-    const agents = createAgents(runtimeFor());
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const permission = (
       orchestrator as { config: { permission: Record<string, unknown> } }
     ).config.permission;
 
-    for (const toolName of ['task_cancel', 'task_revive', 'task_status']) {
+    for (const toolName of ['task_cancel', 'task_status']) {
       expect(permission[toolName]).toBe('allow');
     }
   });
@@ -808,15 +808,6 @@ describe('orchestrator agent', () => {
     );
     const fixer = agents.find((agent) => agent.name === 'fixer');
     expect(fixer?.config.permission).toBe('allow');
-  });
-
-  test('orchestrator is allowed to invoke wait_for_user', () => {
-    const agents = createAgents(runtimeFor());
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(
-      (orchestrator as { config: { permission: Record<string, unknown> } })
-        .config.permission.wait_for_user,
-    ).toBe('allow');
   });
 
   test('interview_submit_state is allowed for the primary agent only', () => {
@@ -1231,13 +1222,13 @@ describe('tool permissions', () => {
   });
 
   test('oracle is denied access to task-control tools by default', () => {
-    const agents = createAgents(runtimeFor());
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const oracle = agents.find((a) => a.name === 'oracle');
     const permission = (
       oracle as { config: { permission: Record<string, unknown> } }
     ).config.permission;
 
-    for (const toolName of ['task_cancel', 'task_revive', 'task_status']) {
+    for (const toolName of ['task_cancel', 'task_status']) {
       expect(permission[toolName]).toBe('deny');
     }
   });
@@ -1408,7 +1399,8 @@ describe('generated default permission availability', () => {
 
   test('disabled task controls omit primary allows but keep every deny', () => {
     const agents = createAgents(
-      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }),
+      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }, 'v2'),
+      { hostFlavor: 'v2' },
     );
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(Object.hasOwn(orchestrator, 'task_cancel')).toBe(false);
@@ -1419,14 +1411,14 @@ describe('generated default permission availability', () => {
     expect(oracle.task_reply).toBe('deny');
   });
 
-  test('native lifecycle registers only task_cancel and task_status defaults', () => {
+  test('native lifecycle registers task-control defaults', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { mode: 'native' } }),
+      runtimeFor({ backgroundJobs: { mode: 'native' } }, 'v2'),
+      { hostFlavor: 'v2' },
     );
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
-    expect(Object.hasOwn(orchestrator, 'task_reply')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'task_revive')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'wait_for_user')).toBe(false);
   });
@@ -1478,20 +1470,6 @@ describe('generated default permission availability', () => {
       reply: false,
       report: false,
     },
-    {
-      hostFlavor: 'v1',
-      mode: 'native',
-      disabled: [],
-      reply: false,
-      report: false,
-    },
-    {
-      hostFlavor: 'v1',
-      mode: 'managed',
-      disabled: [],
-      reply: true,
-      report: false,
-    },
   ] as const)(
     '$hostFlavor $mode reply/report grants follow actual tool availability ($disabled)',
     ({ hostFlavor, mode, disabled, reply, report }) => {
@@ -1514,7 +1492,7 @@ describe('generated default permission availability', () => {
       for (const name of ['explorer', 'reviewer']) {
         expect(permissionsOf(agents, name).task_reply).toBe('deny');
         expect(permissionsOf(agents, name).task_report).toBe(
-          report || hostFlavor === 'v1' ? 'allow' : 'deny',
+          report ? 'allow' : 'deny',
         );
       }
     },
@@ -1640,14 +1618,13 @@ describe('generated default permission availability', () => {
   });
 
   test('enabled generations keep the role permission stance', () => {
-    const agents = createAgents(runtimeFor({ disabled_agents: [] }));
+    const agents = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
+      hostFlavor: 'v2',
+    });
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_reply).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
-    expect(orchestrator.task_revive).toBe('allow');
-    expect(orchestrator.task_message).toBe('allow');
-    expect(orchestrator.wait_for_user).toBe('allow');
     expect(orchestrator.interview_submit_state).toBe('allow');
     expect(orchestrator.marketplace_inspect).toBe('allow');
     expect(permissionsOf(agents, 'explorer').question).toBe('deny');
@@ -3099,21 +3076,6 @@ describe('createAgents with malformed disabled_tools', () => {
     };
     expect(() => createAgents(runtimeFor(config))).not.toThrow();
   });
-
-  test('orchestrator keeps wait_for_user available when disabled_tools is malformed', () => {
-    const config: PluginConfig = {
-      disabled_tools: 'not-an-array' as any,
-    };
-    const agents = createAgents(runtimeFor(config));
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(orchestrator).toBeDefined();
-    // A malformed list is treated as empty: the managed v1 lifecycle
-    // registers wait_for_user, so the primary default stays available.
-    expect(
-      (orchestrator as { config: { permission: Record<string, unknown> } })
-        .config.permission.wait_for_user,
-    ).toBe('allow');
-  });
 });
 
 describe('observer dispatch instruction injection', () => {
@@ -3123,7 +3085,7 @@ describe('observer dispatch instruction injection', () => {
       agents: { reviewer: { model: 'openai/gpt-5.5' } },
       council: councilConfig(),
     };
-    const agents = createAgents(runtimeFor(config), { hostFlavor: 'v2' });
+    const agents = createAgents(runtimeFor(config, 'v2'), { hostFlavor: 'v2' });
     for (const name of [
       'oracle',
       'explorer',
@@ -3139,15 +3101,10 @@ describe('observer dispatch instruction injection', () => {
       (agent) => agent.name === 'councillor-alpha',
     );
     expect(councillor?.config.permission).toMatchObject({ task: 'deny' });
-    const v1 = createAgents(runtimeFor(config), { hostFlavor: 'v1' });
-    const v1Permission = v1.find((agent) => agent.name === 'oracle')?.config
-      .permission;
-    expect(v1Permission).toBeDefined();
-    expect(v1Permission).not.toHaveProperty('task');
   });
 
-  test('advisory prompts gain the dispatch line only on v2 with observer enabled', () => {
-    const enabled = createAgents(runtimeFor({ disabled_agents: [] }), {
+  test('advisory prompts gain the dispatch line with observer enabled', () => {
+    const enabled = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
       hostFlavor: 'v2',
     });
     const oracleOn = enabled.find((a) => a.name === 'oracle');
@@ -3155,16 +3112,8 @@ describe('observer dispatch instruction injection', () => {
       'dispatch @observer with the file path',
     );
 
-    // v1 never gains the line, even with observer enabled: the host has no
-    // depth limit and children keep their pre-PR toolsets.
-    const v1 = createAgents(runtimeFor({ disabled_agents: [] }));
-    const oracleV1 = v1.find((a) => a.name === 'oracle');
-    expect(oracleV1?.config.prompt).not.toContain(
-      'dispatch @observer with the file path',
-    );
-
     const disabledSet = createAgents(
-      runtimeFor({ disabled_agents: ['observer'] }),
+      runtimeFor({ disabled_agents: ['observer'] }, 'v2'),
       { hostFlavor: 'v2' },
     );
     const oracleOff = disabledSet.find((a) => a.name === 'oracle');

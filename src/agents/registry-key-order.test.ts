@@ -9,13 +9,13 @@ import { createAgents } from './index';
 import { buildResolvedAgentRegistry } from './registry';
 
 // Re-pin recipe:
-// Run this suite on the base commit (8d202cbd) and print serialize(run()) per scenario.
+// Run this suite on the base commit (908f9a1f) with v2 options and print serialize(run()) per scenario.
 // Re-pin only for intentional byte changes.
 const DIR = 'runtime-key-order-registry';
 
 function runtimeFor(config: Parameters<typeof RuntimeConfig.init>[1]) {
   RuntimeConfig.reset(DIR);
-  return RuntimeConfig.init(DIR, config);
+  return RuntimeConfig.init(DIR, config, 'v2');
 }
 
 function build(
@@ -23,13 +23,14 @@ function build(
   hostSnapshot: Record<string, unknown>,
   options: Record<string, unknown> = {},
 ) {
-  const definitions = createAgents(
-    runtime,
-    options as Parameters<typeof createAgents>[1],
-  );
+  const definitions = createAgents(runtime, {
+    hostFlavor: 'v2',
+    ...options,
+  } as Parameters<typeof createAgents>[1]);
   return buildResolvedAgentRegistry(runtime, {
     hostSnapshot,
     definitions,
+    hostFlavor: 'v2',
     ...options,
   } as Parameters<typeof buildResolvedAgentRegistry>[1]);
 }
@@ -147,15 +148,15 @@ function serialize(registry: ReturnType<typeof build>) {
 const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
   default: {
     keys: ['orchestrator', 'explorer', 'oracle', 'designer', 'fixer'],
-    sha256: 'bf454a869c6fc841549b1b5ea012a8687352dfe4d7cb4fb2922e17e8d867edbc',
+    sha256: '0ffbb77d1549ebb725419c9685745d8914e165f9500b93d5981a5eb6c7caf027',
   },
   'host override': {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],
-    sha256: '9fb563164d1e0e84fd818f9c1093d42d3b0b0e1bf8ececd325438a7dd8f80187',
+    sha256: '787cb6140275257d97da3083acb6e6dd347b4deb68f31f44052ab1ffaa08a8ec',
   },
   preset: {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],
-    sha256: '0f3c360d5d87e84cb340bdd13b90879d8d367a073a59c904981bfd563c933756',
+    sha256: 'acdd96deceb769d9735819940e5ec318dac161151debba5245a664c1dc380b6c',
   },
   'marketplace orchestrator': {
     keys: [
@@ -166,7 +167,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'fixer',
       'orchestrator-agent',
     ],
-    sha256: '1939b4e36063e53f6d0f3898e7c3560510b2ed49c470292f8f2a2542eab96aee',
+    sha256: '0adb9239949e240a627fbf21d8b912b5e98d1c2c7cbc4fde0b2ba0acb15711a5',
   },
   'marketplace builtin': {
     keys: [
@@ -178,7 +179,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'fixer',
       'writer-agent',
     ],
-    sha256: '3ed76169ed36bd874f22de275f7b31dcddf562f5e50873998d761c30abe829d8',
+    sha256: 'c2bc2d6139ab58deed5e4ac4c9e9dec002b32e80faee4b6325d92ce80fe83264',
   },
   'orchestrator display alias': {
     keys: [
@@ -190,7 +191,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'orchestrator-agent',
       'Lead',
     ],
-    sha256: 'b3c45089302797746322ae20334309290ba4cbedf3f0c2b8d4d14ecc3abae061',
+    sha256: '5223497bf9b41bbf67588d0cf3a82e63294fda981ea00654d2cc373ce1a2a4f8',
   },
   'session follow': {
     keys: [
@@ -201,7 +202,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'fixer',
       'follows-session',
     ],
-    sha256: 'cecf3bb347ebf884da5a2c7b479fc5e0827cc9d2cc09761f90c42e143c4ead55',
+    sha256: '022ca433c7a2e23fcb58224c696d03e7781fe0206e6e9228849edd0b8541a587',
   },
   'aliased council': {
     keys: [
@@ -215,11 +216,11 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'councillor-alpha',
       'panel',
     ],
-    sha256: 'c3598f79e7ab3f1c053e496ec0499e9e1afae29dee235f461d5a5c355bc847ae',
+    sha256: 'ab12bd9ebb885b3c79bdac23e4a7c4b951b17a23cfeb853c9d5c24fd7fd52752',
   },
   'empty host model': {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],
-    sha256: 'f879d253122670f20c3e290fc0eef09397a1322a8c255437a85eabe28a7a4011',
+    sha256: '7e7ec35a459cc39a78a5451d9f3640ff35acacfa4dda5b5a49248b53f2b9a17c',
   },
 };
 

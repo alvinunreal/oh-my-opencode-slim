@@ -7,11 +7,7 @@ export function resolveEventSessionID(event: {
   };
 }): string | undefined {
   const info = event.properties?.info;
-  if (
-    event.type === 'message.updated' ||
-    event.type === 'step-finish' ||
-    event.type === 'message.part.updated'
-  ) {
+  if (event.type === 'message.updated' || event.type === 'step-finish') {
     return info?.sessionID ?? event.properties?.sessionID;
   }
   return info?.id ?? event.properties?.sessionID;

@@ -35,12 +35,9 @@
  * invariant).
  *
  * The synthesized shapes are pinned to what the v1 consumers actually read:
- * - `session.created` early registration (task-session-manager
- *   event-router): `properties.info.{id,parentID,agent?}` — plugin
- *   relevance is gated on `info.parentID` (child sessions only).
- * - `session.deleted` deletion cleanup (task-session-manager
- *   rememberDeletedSession tombstone/teardown, cache-monitor session
- *   eviction): `properties.info.id` AND `properties.sessionID` — the two
+ * - `session.created` early registration: `properties.info.{id,parentID,agent?}`.
+ * - `session.deleted` deletion cleanup (including cache-monitor session
+ *   eviction): `properties.info.id` AND `properties.sessionID` — the
  *   consumers read different spellings, so the synthesized event carries
  *   both. Synthesized from v2's flat `{sessionID}` payload; no
  *   `generation` is fabricated.
@@ -48,8 +45,7 @@
  *   parseCompletedAssistantMessage): `properties.info.{role:'assistant',
  *   sessionID, id, time.completed, tokens.input, tokens.cache.read,
  *   tokens.cache.write}`.
- * - `question.asked/replied/rejected` (companionManager,
- *   task-session-manager input-wait tracker, orchestrator-wake): the v1
+ * - `question.asked/replied/rejected` (companionManager): the v1
  *   QuestionV1 shapes `{id, sessionID, questions}` /
  *   `{sessionID, requestID, answers}` / `{sessionID, requestID}`,
  *   synthesized from the v2 Form flow (form.created/replied/cancelled).
@@ -198,15 +194,13 @@ function formAnswerToV1Answers(answer: unknown): Array<Array<string>> {
 
 /**
  * v2 `form.created` → v1 `question.asked`. v2 replaced the v1
- * question.* events with the Form flow; the v1 consumers
- * (companionManager, task-session-manager input-wait tracker,
- * orchestrator-wake) key on `{id, sessionID}` for asks and
+ * question.* events with the Form flow; shared consumers key on
+ * `{id, sessionID}` for asks and
  * `{sessionID, requestID}` for resolutions — the shapes below follow the
  * v1 QuestionV1 event schema so the full contract stays intact.
  *
  * Forms owned by the `"global"` sentinel (MCP elicitation) are skipped:
- * v1 question.* are session-scoped, and the tracker gates on
- * `shouldManageSession(sessionID)` (a real orchestrator session).
+ * v1 question.* are session-scoped.
  */
 function formCreatedToQuestionAsked(
   props: Record<string, unknown>,
@@ -283,19 +277,16 @@ function permissionAskedToV1(
  *   or reconcile a newer run;
  *   `succeeded`/`interrupted` → `session.status` idle + `session.idle`;
  *   `failed` → a v1 `session.error` (host error payload passed through
- *   best-effort) followed by the same idle pair — error-before-idle
- *   preserves the error-then-idle flow the task-session-manager
- *   event-router expects (deferred inline errors are terminalized by the
- *   following idle). Only the four known subtypes map — unknown
+ *   best-effort) followed by the same idle pair. Only the four known
+ *   subtypes map — unknown
  *   `session.execution.*` variants stay passthrough-only rather than
  *   guessing a lifecycle meaning;
  * - child `session.created` (parentID present) → v1 early-registration
  *   shape `{info: {id, parentID, title?, agent?}}`;
  * - `session.deleted` → v1 deletion-cleanup shape with the DUAL id
  *   spelling (`properties.info.id` + `properties.sessionID`) the v1
- *   consumers read (cache-monitor keys on `info.id`, the event router on
- *   either; no `generation` is fabricated so the router's
- *   unproven-relaunch deletion fence keeps its strength);
+ *   consumers read (cache-monitor keys on `info.id`; no `generation`
+ *   is fabricated);
  * - usage telemetry → v1 completed-assistant `message.updated`;
  * - `form.created/replied/cancelled` → v1 `question.asked/replied/
  *   rejected` (QuestionV1 shapes; "global"-owned forms skipped);
@@ -326,8 +317,7 @@ export function mapV2EventToV1(
   ) {
     // v2 hosts publish durable `session.execution.*` and no longer
     // stream busy/idle `session.status`.
-    // Synthesize the v1 lifecycle shapes the wake scheduler, the
-    // task-session-manager, and the foreground fallback key on. Terminal
+    // Synthesize the v1 lifecycle shapes shared consumers key on. Terminal
     // subtypes synthesize an idle `session.status` + `session.idle` pair,
     // so a consumer watching both must tolerate duplicate idle (the
     // documented double-idle invariant). Only the four known subtypes
@@ -353,13 +343,10 @@ export function mapV2EventToV1(
         });
       } else {
         if (type === 'session.execution.failed') {
-          // The v1 `session.error` consumers classify the payload
-          // themselves (foreground-fallback `isFailoverError`,
-          // event-router failover deferral), so the host's error field
-          // passes through verbatim; a missing error degrades to a
-          // best-effort message that classifies as non-failover. Emitted
-          // BEFORE the idle pair so the error-then-idle ordering the
-          // event-router expects is preserved on the synthesized stream.
+          // session.error marks the session inactive for the TUI and
+          // companion status; the host error passes through verbatim (a
+          // missing error degrades to a best-effort message). Emitted before
+          // the idle pair to keep the error-then-idle order.
           out.push({
             type: 'session.error',
             properties: {
@@ -407,21 +394,18 @@ export function mapV2EventToV1(
         parentID: props.parentID,
       };
       if (typeof props.title === 'string') info.title = props.title;
-      // event-router matches parallel task calls by child agent; pass the
-      // host-provided value through when present, never fabricate one.
+      // Pass the host-provided agent through when present, never fabricate one.
       if (typeof props.agent === 'string') info.agent = props.agent;
       out.push({ type: 'session.created', properties: { info } });
     }
   } else if (type === 'session.deleted') {
     // v2 delivers deletion flat (`{sessionID}`); without this synthesis the
-    // v1 deletion cleanup (task-session-manager rememberDeletedSession
-    // tombstone + board teardown, cache-monitor session eviction) never
-    // fires on v2 and deleted runs resurrect via rehydrate. The v1
+    // shared deletion cleanup, including cache-monitor session eviction,
+    // would not fire on v2. The
     // consumers read two different spellings — `properties.info.id`
     // (cache-monitor deletedSessionID) and `properties.sessionID`
-    // (event-router deletion handler) — so BOTH are carried. No
-    // `generation` is fabricated: the event-router's unproven-relaunch
-    // deletion fence must stay free to reject same-ID replaunch deletions.
+    // (other deletion handlers) — so BOTH are carried. No `generation`
+    // is fabricated.
     if (typeof props.sessionID === 'string') {
       out.push({
         type: 'session.deleted',

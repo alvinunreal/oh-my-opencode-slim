@@ -1,25 +1,13 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   createPresetCommand,
-  createPresetDefaultCommand,
-  createPresetStatusCommand,
   PRESET_COMMAND_DESCRIPTION,
   PRESET_COMMAND_NAME,
   presetApplyFeedback,
-  presetDefaultFeedback,
   presetListFeedback,
-  presetStatusFeedback,
 } from './preset-command';
 import type { SessionPresetState } from './session-presets';
 
@@ -115,10 +103,7 @@ describe('presetListFeedback', () => {
   test('lists visible presets with the session team and the global default', async () => {
     writeUserConfig({
       preset: 'fast',
-      presets: {
-        fast: { fixer: { model: 'test/fast' } },
-        broken: { extends: 'missing-parent' },
-      },
+      presets: { fast: { fixer: { model: 'test/fast' } } },
     });
     const project = path.join(tempDir, 'project');
     fs.mkdirSync(path.join(project, '.opencode'), { recursive: true });
@@ -134,11 +119,9 @@ describe('presetListFeedback', () => {
       applyToSession: async () => boundState('ses_caller', 'deep'),
     });
 
-    expect(message).toContain('Available presets: deep, fast.');
-    expect(message).toContain('Saved session preset: deep.');
-    expect(message).toContain('Global default: fast.');
-    expect(message).toContain('/preset-status');
-    expect(message).toContain('/preset-default <name>');
+    expect(message).toBe(
+      'Session team: deep (explicit). Global default: fast. Effective default: fast (user config). Available presets: deep, fast. Run /preset <name> to apply one to this session.',
+    );
   });
 
   test('an unbound session says so instead of implying a team', async () => {
@@ -158,7 +141,7 @@ describe('presetListFeedback', () => {
     expect(message).toContain('Global default: fast.');
   });
 
-  test('an unreadable binding reports unknown instead of silently guessing', async () => {
+  test('an unreadable binding reports unknown alongside the defaults', async () => {
     writeUserConfig({
       preset: 'fast',
       presets: { fast: { fixer: { model: 'test/fast' } } },
@@ -173,11 +156,59 @@ describe('presetListFeedback', () => {
       applyToSession: async () => boundState('ses_caller', 'fast'),
     });
 
-    expect(message).not.toContain('Session team');
-    expect(message).toContain(
-      'Session status: unknown — Error: storage unavailable',
-    );
+    expect(message).toContain('Session team: unknown.');
     expect(message).toContain('Global default: fast.');
+  });
+
+  test('shows default provenance without changing a saved binding or config', async () => {
+    writeUserConfig({
+      preset: 'fast',
+      presets: { fast: { fixer: { model: 'test/fast' } } },
+    });
+    const configFile = path.join(
+      tempDir,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    const config = JSON.stringify({
+      preset: 'deep',
+      presets: { deep: { fixer: { model: 'test/deep' } } },
+    });
+    fs.writeFileSync(configFile, config);
+
+    const options = {
+      directory: tempDir,
+      sessionID: 'ses_caller',
+      readSessionPreset: async () => ({
+        ...boundState('ses_caller', 'fast'),
+        presetName: null,
+        selection: 'default' as const,
+      }),
+    };
+    const message = await presetListFeedback(options);
+    expect(message).toContain('Session team: (unnamed) (default-derived).');
+    expect(message).toContain('Global default: fast.');
+    expect(message).toContain('Effective default: deep (project config).');
+    process.env.OH_MY_OPENCODE_SLIM_PRESET = 'fast';
+    expect(await presetListFeedback(options)).toContain(
+      'Effective default: fast (environment).',
+    );
+    expect(readUserConfig().preset).toBe('fast');
+    expect(fs.readFileSync(configFile, 'utf-8')).toBe(config);
+  });
+
+  test('shows a saved binding when the config is unreadable', async () => {
+    fs.writeFileSync(userConfigPath(), '{ broken');
+    const message = await presetListFeedback({
+      directory: tempDir,
+      sessionID: 'ses_caller',
+      readSessionPreset: readBound('saved'),
+    });
+    expect(message).toContain('Session team: saved (explicit).');
+    expect(message).toContain(
+      'Preset defaults and available presets: unknown.',
+    );
   });
 
   test('no presets configured points at the config file', async () => {
@@ -188,8 +219,8 @@ describe('presetListFeedback', () => {
         readSessionPreset: async (sessionID) => unboundState(sessionID),
         applyToSession: async () => boundState('ses_caller', 'fast'),
       }),
-    ).toContain(
-      'No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
+    ).toBe(
+      'Session team: not bound yet. Global default: (none). Effective default: (none). No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
     );
   });
 });
@@ -294,274 +325,24 @@ describe('createPresetCommand', () => {
         sessionID: 'ses_preset',
         prompt: { text: '  ' },
       }),
-    ).rejects.toThrow('Available presets: fast.');
+    ).rejects.toThrow(
+      'Session team: not bound yet. Global default: (none). Effective default: (none). Available presets: fast. Run /preset <name> to apply one to this session.',
+    );
   });
 
-  test('binds the invoking session without a turn/default write, trimming and reapplying the whole name', async () => {
+  test('rejects with the feedback instead of starting a turn, binding the invoking session', async () => {
     writeUserConfig({
-      presets: { 'fast team': { fixer: { model: 'test/fast' } } },
+      presets: { fast: { fixer: { model: 'test/fast' } } },
     });
     const { calls, applyToSession } = recorder();
-    const command = createPresetCommand({ ...options(), applyToSession });
-    for (let i = 0; i < 2; i++) {
-      await expect(
-        command.execute({
-          sessionID: 'ses',
-          prompt: { text: '  fast team  ' },
-        }),
-      ).rejects.toThrow('Applied preset "fast team"');
-    }
-    expect(calls).toEqual([
-      { sessionID: 'ses', presetName: 'fast team' },
-      { sessionID: 'ses', presetName: 'fast team' },
-    ]);
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: 'fast' },
+      }),
+    ).rejects.toThrow('Applied preset "fast" to this session\'s team.');
+    expect(calls).toEqual([{ sessionID: 'ses_preset', presetName: 'fast' }]);
     expect(readUserConfig().preset).toBeUndefined();
-  });
-});
-
-describe('read-only preset status and defaults', () => {
-  test('reports saved bindings even with an empty catalog, including unnamed bound sessions', async () => {
-    const before = fs.readFileSync(userConfigPath(), 'utf-8');
-    for (const [presetName, selection, label] of [
-      [null, 'default', 'default-derived (root sessions refresh'],
-      ['deleted', 'explicit', 'explicit (fixed'],
-      ['legacy', undefined, 'legacy explicit (fixed'],
-    ] as const) {
-      const read = mock(async () => ({
-        ...boundState('ses', presetName ?? ''),
-        presetName,
-        selection,
-      }));
-      const message = await presetStatusFeedback({
-        directory: tempDir,
-        sessionID: 'ses',
-        readSessionPreset: read,
-      });
-      expect(message).toContain('Session status: bound.');
-      expect(message).toContain(`Selection: ${label}`);
-      expect(message).toContain(
-        `Saved session preset: ${presetName ?? '(no named preset)'}.`,
-      );
-      expect(message).toContain('No presets configured.');
-      expect(message).not.toContain('not bound');
-      expect(read).toHaveBeenCalledTimes(1);
-    }
-    const read = mock(async () => unboundState('ses'));
-    const command = createPresetStatusCommand({
-      directory: tempDir,
-      readSessionPreset: read,
-    });
-    await expect(
-      command.execute({ sessionID: 'ses', prompt: { text: 'oops' } }),
-    ).rejects.toThrow('Usage: /preset-status');
-    expect(read).not.toHaveBeenCalled();
-    await expect(command.execute({ sessionID: 'ses' })).rejects.toThrow(
-      'Session status: unbound.',
-    );
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe(before);
-  });
-
-  test('distinguishes default sources and reports configuration errors without hiding saved bindings', async () => {
-    writeUserConfig({
-      preset: 'user',
-      presets: { user: { fixer: { model: 'test/user' } } },
-    });
-    const project = path.join(tempDir, 'project');
-    fs.mkdirSync(path.join(project, '.opencode'), { recursive: true });
-    const file = path.join(project, '.opencode', 'oh-my-opencode-slim.json');
-    fs.writeFileSync(file, JSON.stringify({ preset: 'project' }));
-    const options = {
-      directory: project,
-      sessionID: 'ses',
-      readSessionPreset: async () => unboundState('ses'),
-    };
-    const projectMessage = await presetStatusFeedback(options);
-    expect(projectMessage).toContain('Global default: user.');
-    expect(projectMessage).toContain(
-      'Effective project default: project (source: project config (.opencode)).',
-    );
-    process.env.OH_MY_OPENCODE_SLIM_PRESET = 'env';
-    const envMessage = await presetStatusFeedback(options);
-    expect(envMessage).toContain('Global default: user.');
-    expect(envMessage).toContain(
-      'Effective project default: env (source: environment: OH_MY_OPENCODE_SLIM_PRESET).',
-    );
-    expect(JSON.parse(fs.readFileSync(file, 'utf-8')).preset).toBe('project');
-    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
-    fs.writeFileSync(file, JSON.stringify({ preset: '' }));
-    expect(await presetStatusFeedback(options)).toContain(
-      'Effective project default: (none) (source: project config (.opencode)).',
-    );
-    for (const corrupt of [
-      () => fs.writeFileSync(userConfigPath(), '{ broken'),
-      () => {
-        fs.rmSync(userConfigPath());
-        fs.mkdirSync(userConfigPath());
-      },
-    ]) {
-      corrupt();
-      const message = await presetStatusFeedback({
-        directory: tempDir,
-        sessionID: 'ses',
-        readSessionPreset: readBound('saved'),
-      });
-      expect(message).toContain('Saved session preset: saved.');
-      expect(message).toContain('Preset defaults/catalog: unknown');
-      expect(message).not.toContain('Global default: (none)');
-    }
-  });
-});
-
-describe('changing the user default without applying a session preset', () => {
-  beforeEach(() =>
-    writeUserConfig({
-      preset: 'fast',
-      presets: {
-        fast: { fixer: { model: 'test/fast' } },
-        'deep team': { fixer: { model: 'test/deep' } },
-        marketBase: { marketplace: { agents: ['team/toolkit'] } },
-        market: { extends: 'marketBase' },
-        broken: { extends: 'missing-parent' },
-      },
-    }),
-  );
-
-  test('no argument only displays defaults/options; a whole trimmed name saves and awaits refresh exactly once', async () => {
-    const previousMarketBase = process.env.OMO_TEST_MARKET_BASE;
-    process.env.OMO_TEST_MARKET_BASE = 'marketBase';
-    try {
-      const config = readUserConfig();
-      (config.presets as Record<string, unknown>).market = {
-        extends: '{env:OMO_TEST_MARKET_BASE}',
-      };
-      writeUserConfig(config);
-      const refreshDefault = mock(async () => ({ ok: true as const }));
-      const command = createPresetDefaultCommand({
-        directory: tempDir,
-        refreshDefault,
-      });
-      expect(command.name).toBe('preset-default');
-      const before = fs.readFileSync(userConfigPath(), 'utf-8');
-      await expect(
-        command.execute({ sessionID: 'ses', prompt: { text: '  ' } }),
-      ).rejects.toThrow('Global default: fast.');
-      expect(refreshDefault).not.toHaveBeenCalled();
-      expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe(before);
-      await expect(
-        command.execute({ sessionID: 'ses', prompt: { text: '  market  ' } }),
-      ).rejects.toThrow('Runtime profiles refreshed');
-      expect(readUserConfig().preset).toBe('market');
-      expect(readUserConfig()).toHaveProperty(
-        'presets.market.extends',
-        '{env:OMO_TEST_MARKET_BASE}',
-      );
-      expect(readUserConfig()).toHaveProperty(
-        'presets.marketBase.marketplace.agents',
-        ['team/toolkit'],
-      );
-      expect(refreshDefault).toHaveBeenCalledTimes(1);
-    } finally {
-      if (previousMarketBase === undefined)
-        delete process.env.OMO_TEST_MARKET_BASE;
-      else process.env.OMO_TEST_MARKET_BASE = previousMarketBase;
-    }
-  });
-
-  test('refused or failed default changes preserve files and never refresh', async () => {
-    const refreshDefault = mock(async () => ({ ok: true as const }));
-    const before = fs.readFileSync(userConfigPath(), 'utf-8');
-    const project = path.join(tempDir, 'project');
-    fs.mkdirSync(path.join(project, '.opencode'), { recursive: true });
-    const file = path.join(project, '.opencode', 'oh-my-opencode-slim.json');
-    const content = JSON.stringify({ preset: 'fast' });
-    fs.writeFileSync(file, content);
-    expect(
-      await presetDefaultFeedback({
-        directory: project,
-        presetName: 'deep team',
-        refreshDefault,
-      }),
-    ).toContain('project config (.opencode) explicitly sets preset "fast"');
-    process.env.OH_MY_OPENCODE_SLIM_PRESET = 'fast';
-    expect(
-      await presetDefaultFeedback({
-        directory: tempDir,
-        presetName: 'deep team',
-        refreshDefault,
-      }),
-    ).toContain('OH_MY_OPENCODE_SLIM_PRESET');
-    expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe(before);
-    expect(fs.readFileSync(file, 'utf-8')).toBe(content);
-    expect(refreshDefault).not.toHaveBeenCalled();
-    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
-    const emptyOverride = JSON.stringify({ preset: '' });
-    fs.writeFileSync(file, emptyOverride);
-    expect(
-      await presetDefaultFeedback({
-        directory: project,
-        presetName: 'deep team',
-        refreshDefault,
-      }),
-    ).toContain('explicitly sets an empty preset');
-    expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe(before);
-    expect(fs.readFileSync(file, 'utf-8')).toBe(emptyOverride);
-    expect(refreshDefault).not.toHaveBeenCalled();
-    expect(
-      await presetDefaultFeedback({
-        directory: tempDir,
-        presetName: 'missing',
-        refreshDefault,
-      }),
-    ).toContain('not found');
-    // Inject the existing persistence boundary: filesystem denial is not
-    // portable when the suite runs as root.
-    const write = spyOn(fs, 'writeFileSync').mockImplementation(() => {
-      throw new Error('disk full');
-    });
-    try {
-      const message = await presetDefaultFeedback({
-        directory: tempDir,
-        presetName: 'deep team',
-        refreshDefault,
-      });
-      expect(message).toContain('Could not save');
-      expect(message).toContain('disk full');
-    } finally {
-      write.mockRestore();
-    }
-    expect(readUserConfig().preset).toBe('fast');
-    expect(refreshDefault).not.toHaveBeenCalled();
-    fs.writeFileSync(userConfigPath(), '{ bad');
-    await expect(
-      presetDefaultFeedback({
-        directory: tempDir,
-        presetName: 'deep team',
-        refreshDefault,
-      }),
-    ).rejects.toThrow(userConfigPath());
-    expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe('{ bad');
-    expect(refreshDefault).not.toHaveBeenCalled();
-  });
-
-  test('a saved default remains saved when runtime refresh refuses or throws', async () => {
-    for (const refreshDefault of [
-      async () => ({ ok: false as const, reason: 'invalid runtime config' }),
-      async () => {
-        throw new Error('refresh unavailable');
-      },
-    ]) {
-      const message = await presetDefaultFeedback({
-        directory: tempDir,
-        presetName: 'deep team',
-        refreshDefault,
-      });
-      expect(message).toContain(
-        'Saved global default "deep team". Session bindings unchanged.',
-      );
-      expect(message).toContain('Runtime refresh failed:');
-      expect(message).not.toContain('Runtime profiles refreshed');
-      expect(readUserConfig().preset).toBe('deep team');
-    }
   });
 });

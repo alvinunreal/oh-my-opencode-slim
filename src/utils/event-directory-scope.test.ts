@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import {
   createEventDirectoryScope,
   type EventDirectoryScope,
-  hasLiveInstances,
+  liveDirectoryCountForTests,
   normalizeScopeDirectory,
   resetLiveDirectoriesForTests,
 } from './event-directory-scope';
@@ -25,28 +25,25 @@ describe('event-directory-scope', () => {
     expect(normalizeScopeDirectory('/')).toBe('/');
   });
 
-  test('hasLiveInstances tracks claims and clears after release', () => {
-    resetLiveDirectoriesForTests();
-    expect(hasLiveInstances()).toBe(false);
-
-    const scope = createEventDirectoryScope('/proj/x');
-    expect(hasLiveInstances()).toBe(true);
-
-    scope.release();
-    scope.release(); // idempotent
-    expect(hasLiveInstances()).toBe(false);
-  });
-
   test('keeps a directory live until every claim is released', () => {
     resetLiveDirectoriesForTests();
+    expect(liveDirectoryCountForTests()).toBe(0);
+    const observer = makeScope('/proj/observer');
     const first = createEventDirectoryScope('/proj/x');
     const second = createEventDirectoryScope('/proj/x');
+    const event = { location: { directory: '/proj/x' } };
+    expect(liveDirectoryCountForTests()).toBe(2);
 
     first.release();
-    expect(hasLiveInstances()).toBe(true);
+    first.release(); // idempotent
+    expect(observer.isForeign(event)).toBe(true);
+    expect(liveDirectoryCountForTests()).toBe(2);
 
     second.release();
-    expect(hasLiveInstances()).toBe(false);
+    expect(observer.isForeign(event)).toBe(false);
+    expect(liveDirectoryCountForTests()).toBe(1);
+    observer.release();
+    expect(liveDirectoryCountForTests()).toBe(0);
   });
 
   test('processes its own directory and unresolved events', () => {

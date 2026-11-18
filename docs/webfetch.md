@@ -130,17 +130,18 @@ the first 2,048 bytes. Later declarations do not override the decoder fallback.
 
 ### Disabling
 
-Set `webfetch.enabled` to `false` to skip loading the enhanced version and its
-JSDOM startup probe, and use OpenCode's built-in `webfetch` instead. Listing
-`webfetch` in `disabled_tools` has the same cold behavior:
+List `webfetch` in `disabled_tools` to skip loading the enhanced version and
+its JSDOM startup probe. OpenCode's built-in `webfetch` remains available:
 
 ```jsonc
 {
-  "webfetch": {
-    "enabled": false
-  }
+  "disabled_tools": ["webfetch"]
 }
 ```
+
+The retired root `webfetch` block has no effect; use the form above.
+Lists replace the whole array, so a nearer `disabled_tools: []` re-enables
+the enhanced tool.
 
 ### Permissions
 

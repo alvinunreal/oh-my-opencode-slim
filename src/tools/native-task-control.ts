@@ -65,8 +65,7 @@ export interface NativeTaskControlOptions {
 export interface NativeTaskControlTools {
   task_cancel: ToolDefinition;
   task_status: ToolDefinition;
-  /** Present only for v2; v1 native exposes status/cancel only. */
-  task_reply?: ToolDefinition;
+  task_reply: ToolDefinition;
 }
 
 /** Ownership-verified child for one control call, or why it was refused. */
@@ -128,39 +127,31 @@ async function ownedChild(
 }
 
 /**
- * Normalize one host interruption answer across both hosts. v2's shim
- * returns the bare `{interrupted}` payload (idle interrupt is a host-side
- * no-op); v1's SDK resolves `{data: boolean}`. An absent outcome means the
- * host accepted the request but did not report one — never fake `false`.
+ * Normalize the host interruption answer. The shim returns the bare
+ * `{interrupted}` payload (idle interrupt is a host-side no-op). An absent
+ * outcome means the host did not report one — never fake `false`.
  */
 function interruptionOutcome(result: unknown): string {
   const failure = sessionAbortFailure(result);
   if (failure) return `rejected (${failure})`;
   const payload =
     result && typeof result === 'object'
-      ? (result as { data?: unknown; interrupted?: unknown })
+      ? (result as { interrupted?: unknown })
       : undefined;
-  const flag = payload?.interrupted ?? payload?.data;
+  const flag = payload?.interrupted;
   if (flag === true) return 'Interrupt accepted';
   if (flag === false) return 'No active execution interrupted';
   return 'Abort request accepted; the host did not report an interruption outcome';
 }
 
 function nativeTaskArgs(
-  hostFlavor: unknown,
   description: string,
 ): Record<string, ReturnType<typeof z.string>> {
-  return hostFlavor === 'v2'
-    ? { sessionID: z.string().describe(description) }
-    : { task_id: z.string().describe(description) };
+  return { sessionID: z.string().describe(description) };
 }
 
-function nativeTaskID(
-  args: Record<string, unknown>,
-  hostFlavor: unknown,
-): string {
-  const value =
-    hostFlavor === 'v2' ? args.sessionID : (args.task_id ?? args.sessionID);
+function nativeTaskID(args: Record<string, unknown>): string {
+  const value = args.sessionID;
   return typeof value === 'string' ? value.trim() : '';
 }
 
@@ -307,9 +298,7 @@ function permissionClient(
 async function pendingPermissionLines(
   options: NativeTaskControlOptions,
   childID: string,
-  hostFlavor: unknown,
 ): Promise<string[]> {
-  if (hostFlavor !== 'v2') return [];
   const permission = permissionClient(options);
   if (typeof permission?.list !== 'function') {
     return ['pending permissions: unavailable on this host'];
@@ -413,26 +402,18 @@ function boundedStatusOutput(
 export function createNativeTaskControlTools(
   options: NativeTaskControlOptions,
 ): NativeTaskControlTools {
-  const hostFlavor = (options.input as { hostFlavor?: unknown }).hostFlavor;
-  const idDescription =
-    hostFlavor === 'v2' ? 'Exact child session ID' : 'Exact child task ID';
-  const delegation = delegationWording(
-    typeof hostFlavor === 'string' ? hostFlavor : undefined,
-  );
+  const idDescription = 'Exact child session ID';
+  const delegation = delegationWording();
 
   const task_status = tool({
     description:
       "Read a child session's state and latest result from the host. Use after a missing completion notice; do not poll.",
-    args: nativeTaskArgs(hostFlavor, idDescription),
+    args: nativeTaskArgs(idDescription),
     async execute(args, toolContext) {
       const parentSessionID = toolContext?.sessionID;
       if (!parentSessionID) throw new Error('task_status requires sessionID');
-      const requested = nativeTaskID(
-        args as Record<string, unknown>,
-        hostFlavor,
-      );
-      const idParam = hostFlavor === 'v2' ? 'sessionID' : 'task_id';
-      if (!requested) throw new Error(`task_status requires ${idParam}`);
+      const requested = nativeTaskID(args as Record<string, unknown>);
+      if (!requested) throw new Error('task_status requires sessionID');
       const child = await ownedChild(options, requested, parentSessionID);
       if (!child.ok) throw new Error(child.error);
       const evidence = await readUntrackedEvidence(
@@ -448,7 +429,6 @@ export function createNativeTaskControlTools(
       const permissionLines = await pendingPermissionLines(
         options,
         child.identity,
-        hostFlavor,
       );
       if (options.isDisposed?.()) {
         throw new Error('Plugin instance disposed');
@@ -503,16 +483,12 @@ export function createNativeTaskControlTools(
   const task_cancel = tool({
     description:
       'Interrupt a child session without deleting it. The host owns cleanup and the completion notification.',
-    args: nativeTaskArgs(hostFlavor, idDescription),
+    args: nativeTaskArgs(idDescription),
     async execute(args, toolContext) {
       const parentSessionID = toolContext?.sessionID;
       if (!parentSessionID) throw new Error('task_cancel requires sessionID');
-      const requested = nativeTaskID(
-        args as Record<string, unknown>,
-        hostFlavor,
-      );
-      const idParam = hostFlavor === 'v2' ? 'sessionID' : 'task_id';
-      if (!requested) throw new Error(`task_cancel requires ${idParam}`);
+      const requested = nativeTaskID(args as Record<string, unknown>);
+      if (!requested) throw new Error('task_cancel requires sessionID');
       const child = await ownedChild(options, requested, parentSessionID);
       if (!child.ok) throw new Error(child.error);
       // Invoke as a member: the SDK method reads `this._client`, so a
@@ -551,106 +527,99 @@ export function createNativeTaskControlTools(
     },
   });
 
-  const task_reply =
-    hostFlavor === 'v2'
-      ? tool({
-          description:
-            'Reply to a pending permission request on an owned child session. The host confirms whether it is still pending.',
-          args: {
-            ...nativeTaskArgs(hostFlavor, idDescription),
-            request_id: z
-              .string()
-              .trim()
-              .min(1)
-              .describe('Pending permission request ID'),
-            reply: z
-              .enum(['once', 'always', 'reject'])
-              .optional()
-              .describe('Permission decision; defaults to once'),
-          },
-          async execute(args, toolContext) {
-            const parentSessionID = toolContext?.sessionID;
-            if (!parentSessionID)
-              throw new Error('task_reply requires sessionID');
-            const inputArgs = args as Record<string, unknown>;
-            const requested = nativeTaskID(inputArgs, hostFlavor);
-            if (!requested) throw new Error('task_reply requires sessionID');
-            const requestID =
-              typeof inputArgs.request_id === 'string'
-                ? inputArgs.request_id.trim()
-                : '';
-            if (!requestID) throw new Error('task_reply requires request_id');
-            const permission = permissionClient(options);
-            if (
-              typeof permission?.get !== 'function' ||
-              typeof permission.reply !== 'function'
-            ) {
-              throw new Error(
-                'Host permission get/reply APIs are unavailable; answer the child permission in the host UI',
-              );
-            }
-            const child = await ownedChild(options, requested, parentSessionID);
-            if (!child.ok) throw new Error(child.error);
+  const task_reply = tool({
+    description:
+      'Reply to a pending permission request on an owned child session. The host confirms whether it is still pending.',
+    args: {
+      ...nativeTaskArgs(idDescription),
+      request_id: z
+        .string()
+        .trim()
+        .min(1)
+        .describe('Pending permission request ID'),
+      reply: z
+        .enum(['once', 'always', 'reject'])
+        .optional()
+        .describe('Permission decision; defaults to once'),
+    },
+    async execute(args, toolContext) {
+      const parentSessionID = toolContext?.sessionID;
+      if (!parentSessionID) throw new Error('task_reply requires sessionID');
+      const inputArgs = args as Record<string, unknown>;
+      const requested = nativeTaskID(inputArgs);
+      if (!requested) throw new Error('task_reply requires sessionID');
+      const requestID =
+        typeof inputArgs.request_id === 'string'
+          ? inputArgs.request_id.trim()
+          : '';
+      if (!requestID) throw new Error('task_reply requires request_id');
+      const permission = permissionClient(options);
+      if (
+        typeof permission?.get !== 'function' ||
+        typeof permission.reply !== 'function'
+      ) {
+        throw new Error(
+          'Host permission get/reply APIs are unavailable; answer the child permission in the host UI',
+        );
+      }
+      const child = await ownedChild(options, requested, parentSessionID);
+      if (!child.ok) throw new Error(child.error);
 
-            let request: NativePermissionRequest | undefined;
-            try {
-              const response = await permissionCall(
-                permission.get({
-                  sessionID: child.identity,
-                  requestID,
-                }),
-                'permission get timed out',
-              );
-              request = permissionRequestOf(response);
-              if (!request) throw new Error('permission request was malformed');
-            } catch (error) {
-              if (isPermissionNotFound(error)) {
-                return `Permission ${requestID} on ${child.identity} is no longer pending; it was resolved elsewhere or never existed. Nothing was replied.`;
-              }
-              throw new Error(
-                `task_reply could not read permission ${requestID}: ${errorText(error)}`,
-              );
-            }
-            if (
-              request.id !== requestID ||
-              request.sessionID !== child.identity
-            ) {
-              throw new Error(
-                `Permission ${requestID} does not belong to child session ${child.identity}; nothing was replied.`,
-              );
-            }
-            if (options.isDisposed?.()) {
-              throw new Error('Plugin instance disposed');
-            }
-            const decision: PermissionDecision =
-              inputArgs.reply === 'always' || inputArgs.reply === 'reject'
-                ? inputArgs.reply
-                : 'once';
-            try {
-              await permissionCall(
-                permission.reply({
-                  sessionID: child.identity,
-                  requestID,
-                  decision,
-                }),
-                'permission reply timed out',
-              );
-            } catch (error) {
-              if (isPermissionNotFound(error)) {
-                return `Permission ${requestID} on ${child.identity} was resolved elsewhere before the ${decision} reply landed. Nothing was replied.`;
-              }
-              throw new Error(
-                `task_reply could not reply to permission ${requestID}: ${errorText(error)}`,
-              );
-            }
-            return `Permission ${requestID} on ${child.identity} replied with ${decision}.`;
-          },
-        })
-      : undefined;
+      let request: NativePermissionRequest | undefined;
+      try {
+        const response = await permissionCall(
+          permission.get({
+            sessionID: child.identity,
+            requestID,
+          }),
+          'permission get timed out',
+        );
+        request = permissionRequestOf(response);
+        if (!request) throw new Error('permission request was malformed');
+      } catch (error) {
+        if (isPermissionNotFound(error)) {
+          return `Permission ${requestID} on ${child.identity} is no longer pending; it was resolved elsewhere or never existed. Nothing was replied.`;
+        }
+        throw new Error(
+          `task_reply could not read permission ${requestID}: ${errorText(error)}`,
+        );
+      }
+      if (request.id !== requestID || request.sessionID !== child.identity) {
+        throw new Error(
+          `Permission ${requestID} does not belong to child session ${child.identity}; nothing was replied.`,
+        );
+      }
+      if (options.isDisposed?.()) {
+        throw new Error('Plugin instance disposed');
+      }
+      const decision: PermissionDecision =
+        inputArgs.reply === 'always' || inputArgs.reply === 'reject'
+          ? inputArgs.reply
+          : 'once';
+      try {
+        await permissionCall(
+          permission.reply({
+            sessionID: child.identity,
+            requestID,
+            decision,
+          }),
+          'permission reply timed out',
+        );
+      } catch (error) {
+        if (isPermissionNotFound(error)) {
+          return `Permission ${requestID} on ${child.identity} was resolved elsewhere before the ${decision} reply landed. Nothing was replied.`;
+        }
+        throw new Error(
+          `task_reply could not reply to permission ${requestID}: ${errorText(error)}`,
+        );
+      }
+      return `Permission ${requestID} on ${child.identity} replied with ${decision}.`;
+    },
+  });
 
   return {
     task_cancel,
     task_status,
-    ...(task_reply ? { task_reply } : {}),
+    task_reply,
   };
 }

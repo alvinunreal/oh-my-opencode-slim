@@ -28,12 +28,11 @@
 - `index.ts` exports `createInterviewManager`.
 
 - `runtime.ts` defines the interview-only session boundary (`messages`,
-  `notify`, `continue`, and `rename`). v1 uses nested SDK calls
-  (`createV1InterviewSessionRuntime`); v2 supplies a context-backed
-  implementation without expanding the global client shim.
+  `notify`, `continue`, and `rename`). The v2 interview bridge supplies a
+  context-backed implementation without expanding the global client shim.
 
 - `manager.ts` (composition root)
-  - Chooses mode via `computeInterviewMode` for both v1 and v2:
+  - Chooses mode via `computeInterviewMode`:
     `interview.dashboard === true || interview.port > 0`:
     - per-session mode → `createPerSessionInterviewServer` (`session-server.ts`)
     - dashboard mode → `createDashboardManager` (`dashboard-manager.ts`)
@@ -119,8 +118,8 @@
 
 ## Flow
 
-- `src/index.ts` wires this folder through
-  `createInterviewManager(ctx, config)`.
+- `src/v2/interview-bridge.ts` creates the shared interview manager with its
+  context-backed session runtime.
 
 - **Per-session mode**
   - service created and bound to a lazy `createInterviewServer({ port: 0 })`,
@@ -155,8 +154,7 @@
 
 ## Integration
 
-- v1 loads `manager.ts`; v2 loads only its Interview bridge. Both reuse the
-  same Interview Implementation rather than constructing two owners on v2.
+- The v2 interview bridge creates one shared manager and exposes its service.
 - Native v2 text observations use complete `session.text.ended` values keyed
   by the host's `assistantMessageID` and ordinal, distinct from idle boundaries.
 - The v2 bridge replays command expansions for each context rebuild without

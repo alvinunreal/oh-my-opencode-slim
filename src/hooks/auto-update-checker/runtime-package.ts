@@ -9,7 +9,7 @@ import { findOwnedPackageJson } from '../../utils/package-root';
  * Shared with the TUI update notice (`src/utils/package-root.ts`) — no
  * caller-side traversal logic duplicates here.
  */
-export function findPackageJsonUp(startPath: string): string | null {
+function findPackageJsonUp(startPath: string): string | null {
   return findOwnedPackageJson(startPath, PLUGIN_ID)?.path ?? null;
 }
 

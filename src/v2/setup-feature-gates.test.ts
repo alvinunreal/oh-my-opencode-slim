@@ -22,11 +22,7 @@ import * as path from 'node:path';
 import * as configWatch from './config-watch';
 import { sessionPresetRpc } from './preset-rpc';
 import { createV2Setup } from './setup';
-import type {
-  V2CommandDefinition,
-  V2Context,
-  V2SessionContextEvent,
-} from './types';
+import type { V2Context, V2SessionContextEvent } from './types';
 
 /** Mock v2 context capturing the registrations the gates must suppress. */
 function makeCtx(
@@ -38,7 +34,7 @@ function makeCtx(
     scan: async () => ({ entries: [] }),
   },
 ) {
-  const commandAdds: V2CommandDefinition[] = [];
+  const commandAdds: Array<{ name: string }> = [];
   const toolUpdates: Array<{ id: string; description?: unknown }> = [];
   const beforeHooks: Array<(event: never) => Promise<void>> = [];
   const subagentTools: Array<Record<string, unknown>> = [];
@@ -143,7 +139,7 @@ function makeCtx(
       transform: async (cb: (draft: unknown) => void) => {
         cb({
           add: (definition: Record<string, unknown>) => {
-            commandAdds.push(definition as unknown as V2CommandDefinition);
+            commandAdds.push({ name: definition.name as string });
           },
         });
         return reg('command.transform');
@@ -349,12 +345,6 @@ describe('v2 setup feature gates', () => {
       expect(commandAdds.map((command) => command.name)).not.toContain(
         'preset',
       );
-      expect(commandAdds.map((command) => command.name)).not.toContain(
-        'preset-status',
-      );
-      expect(commandAdds.map((command) => command.name)).not.toContain(
-        'preset-default',
-      );
       expect(rpcDefinitions).not.toContain(sessionPresetRpc);
       const before = beforeHooks[0];
       if (!before) throw new Error('tool:execute.before not captured');
@@ -373,39 +363,9 @@ describe('v2 setup feature gates', () => {
     const cleanup = await createV2Setup()(ctx);
     try {
       expect(commandAdds.map((command) => command.name)).toContain('preset');
-      expect(commandAdds.map((command) => command.name)).toContain(
-        'preset-status',
-      );
-      expect(commandAdds.map((command) => command.name)).toContain(
-        'preset-default',
-      );
       expect(rpcDefinitions).toContain(sessionPresetRpc);
     } finally {
       await cleanup();
-    }
-  }, 20_000);
-
-  test('status and default commands can each be disabled without disabling preset or its RPC', async () => {
-    for (const disabled of ['preset-status', 'preset-default']) {
-      await writeProjectConfig({
-        companion: { enabled: false },
-        liveConfigRefresh: false,
-        disabled_commands: [disabled],
-      });
-      const { ctx, commandAdds, rpcDefinitions, hooks } = makeCtx(projectDir);
-      const cleanup = await createV2Setup()(ctx);
-      try {
-        const names = commandAdds.map(({ name }) => name);
-        expect(names).toContain('preset');
-        expect(names).not.toContain(disabled);
-        expect(names).toContain(
-          disabled === 'preset-status' ? 'preset-default' : 'preset-status',
-        );
-        expect(rpcDefinitions).toContain(sessionPresetRpc);
-      } finally {
-        await cleanup();
-      }
-      expect(hooks).toContain('dispose:command.transform');
     }
   }, 20_000);
 
@@ -413,7 +373,7 @@ describe('v2 setup feature gates', () => {
     await writeProjectConfig({
       companion: { enabled: false },
       backgroundJobs: { mode: 'native' },
-      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+      disabled_hooks: ['tool-loop-guard'],
     });
     const { ctx, hooks } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
@@ -429,7 +389,7 @@ describe('v2 setup feature gates', () => {
     await writeProjectConfig({
       companion: { enabled: false },
       backgroundJobs: { mode: 'off' },
-      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+      disabled_hooks: ['tool-loop-guard'],
     });
     const { ctx, hooks } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
@@ -488,6 +448,80 @@ describe('v2 setup feature gates', () => {
           'storage',
         );
         expect(fs.existsSync(stateDir)).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
+  for (const mode of [undefined, 'native', 'managed'] as const) {
+    test(`startup does not inspect retained managed histories (${mode ?? 'default'})`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        ...(mode ? { backgroundJobs: { mode } } : {}),
+      });
+      const configFile = path.join(
+        projectDir,
+        '.opencode',
+        'oh-my-opencode-slim.json',
+      );
+      const before = fs.readFileSync(configFile, 'utf8');
+      const retained = new Map(
+        Array.from({ length: 500 }, (_, index) => {
+          const taskID = `ses_retained_${String(index).padStart(3, '0')}`;
+          return [
+            `omo/bgj/child/${taskID}`,
+            {
+              taskID,
+              parentSessionID: 'ses_retained_parent',
+              agent: 'explorer',
+              background: true,
+              launchedAt: 1,
+              deliveredAt: 2,
+            },
+          ] as const;
+        }),
+      );
+      const { ctx, storageCalls } = makeCtx(projectDir, {
+        get: async (key) => retained.get(key),
+        set: async () => {
+          throw new Error('Startup must not rewrite managed records');
+        },
+        remove: async () => {
+          throw new Error('Startup must not remove managed records');
+        },
+        scan: async ({ prefix, after, limit = 100 }) => {
+          const matches = [...retained.entries()].filter(
+            ([key]) => key.startsWith(prefix) && (!after || key > after),
+          );
+          const page = matches.slice(0, limit);
+          return {
+            entries: page.map(([key, value]) => ({ key, value })),
+            ...(matches.length > limit ? { next: page.at(-1)?.[0] } : {}),
+          };
+        },
+      });
+      const reads = { get: 0, list: 0, context: 0 };
+      Object.assign(ctx.session, {
+        get: async () => {
+          reads.get += 1;
+          throw new Error('Startup must not inspect retained sessions');
+        },
+        list: async () => {
+          reads.list += 1;
+          throw new Error('Startup must not list retained sessions');
+        },
+        context: async () => {
+          reads.context += 1;
+          throw new Error('Startup must not read retained histories');
+        },
+      });
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expect(reads).toEqual({ get: 0, list: 0, context: 0 });
+        expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+        expect(retained.size).toBe(500);
+        expect(fs.readFileSync(configFile, 'utf8')).toBe(before);
       } finally {
         await cleanup();
       }
@@ -571,12 +605,6 @@ describe('v2 setup feature gates', () => {
     try {
       expect(rpcHandlers).toEqual([]);
       expect(commandAdds.map((entry) => entry.name)).not.toContain('preset');
-      expect(commandAdds.map((entry) => entry.name)).not.toContain(
-        'preset-status',
-      );
-      expect(commandAdds.map((entry) => entry.name)).not.toContain(
-        'preset-default',
-      );
       expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
     } finally {
       await cleanup();
@@ -631,22 +659,12 @@ describe('v2 setup feature gates', () => {
     await writeProjectConfig({
       companion: { enabled: false },
       liveConfigRefresh: false,
+      preset: 'cheap',
+      presets: {
+        cheap: { explorer: { model: 'openai/gpt-5-mini' } },
+        strong: { explorer: { model: 'anthropic/claude-sonnet-4-5' } },
+      },
     });
-    const userFile = path.join(
-      process.env.OPENCODE_CONFIG_DIR as string,
-      'oh-my-opencode-slim.json',
-    );
-    await mkdir(path.dirname(userFile), { recursive: true });
-    await Bun.write(
-      userFile,
-      JSON.stringify({
-        preset: 'cheap',
-        presets: {
-          cheap: { explorer: { model: 'openai/gpt-5-mini' } },
-          strong: { explorer: { model: 'anthropic/claude-sonnet-4-5' } },
-        },
-      }),
-    );
     const factory = configWatch.watchPluginConfigFiles;
     const watcherFactory = spyOn(
       configWatch,
@@ -654,18 +672,7 @@ describe('v2 setup feature gates', () => {
     ).mockImplementation(((options: configWatch.WatchPluginConfigOptions) => {
       return factory(options);
     }) as never);
-    const records = new Map<string, unknown>();
-    const { ctx, rpcHandlers, commandAdds, beforeHooks, storageCalls } =
-      makeCtx(projectDir, {
-        get: async (key) => records.get(key),
-        set: async (key, value) => {
-          records.set(key, value);
-        },
-        remove: async (key) => {
-          records.delete(key);
-        },
-        scan: async () => ({ entries: [] }),
-      });
+    const { ctx, rpcHandlers } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
       expect(watcherFactory).not.toHaveBeenCalled();
@@ -690,53 +697,6 @@ describe('v2 setup feature gates', () => {
         { signal: new AbortController().signal },
       );
       expect(applied.presetName).toBe('strong');
-      const explicitBefore = structuredClone([...records.entries()]);
-      const status = commandAdds.find(({ name }) => name === 'preset-status');
-      const defaults = commandAdds.find(
-        ({ name }) => name === 'preset-default',
-      );
-      if (!status || !defaults || !beforeHooks[0])
-        throw new Error('preset commands/hooks missing');
-      const writes = storageCalls.set;
-      await expect(
-        status.execute({ sessionID: 'ses_unbound' }),
-      ).rejects.toThrow('Session status: unbound.');
-      expect(storageCalls.set).toBe(writes);
-      await beforeHooks[0](delegationEvent() as never);
-      const read = handlers?.read as (input: {
-        sessionID: string;
-      }) => Promise<{ presetName: string; selection: string }>;
-      expect(await read({ sessionID: 'ses_gate_parent' })).toMatchObject({
-        presetName: 'cheap',
-        selection: 'default',
-      });
-      await expect(
-        defaults.execute({
-          sessionID: 'ses_preset_off',
-          prompt: { text: 'strong' },
-        }),
-      ).rejects.toThrow('Runtime profiles refreshed');
-      expect(JSON.parse(await Bun.file(userFile).text()).preset).toBe('strong');
-      // A default write never applies a preset to any session. Existing
-      // default-bound roots adopt the refreshed bundle on the next admission.
-      for (const [key, value] of explicitBefore)
-        expect(records.get(key)).toEqual(value);
-      expect(await read({ sessionID: 'ses_gate_parent' })).toMatchObject({
-        presetName: 'cheap',
-        selection: 'default',
-      });
-      await beforeHooks[0]({
-        ...delegationEvent(),
-        id: 'call_after_default',
-      } as never);
-      expect(await read({ sessionID: 'ses_gate_parent' })).toMatchObject({
-        presetName: 'strong',
-        selection: 'default',
-      });
-      expect(await read({ sessionID: 'ses_preset_off' })).toMatchObject({
-        presetName: 'strong',
-        selection: 'explicit',
-      });
       await expect(
         apply(
           { sessionID: 'ses_preset_missing', presetName: 'missing' },

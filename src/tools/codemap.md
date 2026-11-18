@@ -8,7 +8,7 @@ Centralized tool factory and registry for the OpenCode plugin system. This direc
 - **Code intelligence tools**: AST-grep pattern matching and transformation across languages
 - **Web capabilities**: Smart web fetching with caching and content extraction
 - **ACP integration**: External agent protocol execution
-- **Preset switching**: On-disk preset persistence helpers used by the TUI `/preset` managers (v1 and v2); the pure editor domain lives in `src/preset-editor-domain.ts`
+- **Preset switching**: On-disk persistence helpers used by the v2 TUI `/preset` manager; the pure editor domain lives in `src/preset-editor-domain.ts`
 - **Interview state**: `interview-submit-state.ts` persists quiet interview
   kickoff/status/patch updates for primary agents.
 
@@ -44,7 +44,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 ### State Management
 
-- **Runtime Presets**: Preset switching (`preset-switch.ts`) persists the preset name (or edits) to the user config file. The agent registry is never hot-swapped mid-session; on v2 hosts the shared `src/preset-editor-domain.ts` helpers back both the v1 JSX editor and the v2 promise-dialog editor, and only the inference fields (`model`, `variant`, `temperature`, `options`) hot-apply to NEW child sessions (frozen before the child's first request via the awaited `session.prompt` hook — the `session.created` event consumer is only a prewarm) plus the sidebar (via `src/v2/config-watch.ts` + `src/v2/runtime-profiles.ts`); a malformed refresh (`invalid-json`/`invalid-schema`/`read-error`) is rejected before any swap so the last-known-good profiles/sidebar stay — hot-swapping the full agent tree during an active conversation risks context truncation, drifted prior turns, and stale subagent references
+- **Runtime Presets**: Preset switching (`preset-switch.ts`) persists the preset name (or edits) to the user config file. The agent registry is never hot-swapped mid-session; the v2 promise-dialog editor uses `src/preset-editor-domain.ts` helpers, and only the inference fields (`model`, `variant`, `temperature`, `options`) hot-apply to NEW child sessions (frozen before the child's first request via the awaited `session.prompt` hook — the `session.created` event consumer is only a prewarm) plus the sidebar (via `src/v2/config-watch.ts` + `src/v2/runtime-profiles.ts`); a malformed refresh (`invalid-json`/`invalid-schema`/`read-error`) is rejected before any swap so the last-known-good profiles/sidebar stay — hot-swapping the full agent tree during an active conversation risks context truncation, drifted prior turns, and stale subagent references
 
 ## Flow
 
@@ -73,8 +73,10 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 `native-task-control.ts` verifies ownership by exact session ID. Status reads
 host transcript and pending permission evidence. Cancel asks the host to
 interrupt the active child. Reply sends a verified permission response.
-`task-report.ts` steers a child's update to its parent and requests a wake
-unless the parent's outcome is `interrupted`.
+`task-report.ts` reads the child for ownership and the parent for interruption
+state, then uses native `session.synthetic` with `delivery: "steer"` and the
+existing internal-initiator tracking. It requests a wake unless the parent's
+outcome is `interrupted`; no parent-agent pin or V1 prompt conversion is used.
 
 ### ACP Agent Execution Flow
 
@@ -128,7 +130,7 @@ unless the parent's outcome is `interrupted`.
   - Individual agents use `acp_run` tool for specialized tasks
   - All agents use `ast_grep_search`/`ast_grep_replace` for code manipulation
 
-- **TUI** (`src/tui-preset.ts`):
+- **TUI** (`src/v2/preset-manager.ts`):
   - `/preset` manager uses `switchPresetOnDisk` / `writePreset` / `deletePreset` from `preset-switch.ts`
   - Tool factories receive CLI configuration for ACP agents
 
@@ -189,9 +191,8 @@ enhanced webfetch factory is loaded directly from `./smartfetch` after its
 feature gate.
 
 Preset switching is not a tool: `preset-switch.ts` exposes on-disk helpers
-(`switchPresetOnDisk`, `writePreset`, `deletePreset`, `setAgentOverride`,
-`removeAgentFromPreset`) consumed by the TUI `/preset` manager
-(`src/tui-preset.ts`).
+(`switchPresetOnDisk`, `writePreset`, `deletePreset`) consumed by the TUI
+`/preset` manager (`src/v2/preset-manager.ts`).
 
 ### Tool-Specific Configuration
 
@@ -209,9 +210,9 @@ Preset switching is not a tool: `preset-switch.ts` exposes on-disk helpers
 #### Presets (preset-switch.ts)
 - Defined in plugin config under `presets` field
 - Each preset maps agent names to `AgentOverrideConfig`
-- `switchPresetOnDisk` persists the preset name to the user config file. v1
-  applies it on reload; v2 requests a live inference-profile/sidebar refresh
-  for new child sessions while existing sessions stay frozen.
+- `switchPresetOnDisk` persists the preset name to the user config file. The
+  v2 manager requests a live inference-profile/sidebar refresh for new child
+  sessions while existing sessions stay frozen.
 
 #### AST-grep (ast-grep/)
 - Auto-downloads CLI binary on first use

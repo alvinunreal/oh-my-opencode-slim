@@ -96,7 +96,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Variant** — An optional model qualifier (e.g., a preview build) used in fallback resolution.
 - **Fallback / failover** — The mechanism that switches models when a call is rate-limited or returns empty.
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.
-- **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
+- **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
 
 ## Mutation testing
 

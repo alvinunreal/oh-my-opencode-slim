@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { maskTaskOutputStructure, redactSecretsForLog } from './redact';
+import { redactSecretsForLog } from './redact';
 
 // Partner-pattern fixtures are runtime-joined rather than written as
 // contiguous string literals so secret scanning / GitHub push protection
@@ -178,105 +178,19 @@ describe('redactSecretsForLog', () => {
   });
 });
 
-describe('maskTaskOutputStructure', () => {
-  // Structure-only disclosure for untrusted-format previews: field/tag
-  // names survive, every VALUE is fully masked as [masked].
-  test('live v2 sample (a): subagent XML — attr names kept, values masked, inner text survives', () => {
-    const input =
-      '<subagent sessionID="ses_1a2b3c" state="completed" description="Fix login bug">done</subagent>';
-    const out = maskTaskOutputStructure(input);
-    expect(out).toContain('<subagent');
-    expect(out).toContain('sessionID=');
-    expect(out).toContain('state=');
-    expect(out).toContain('description=');
-    expect(out).toContain('"[masked]"');
-    expect(out).not.toContain('ses_1a2b3c');
-    expect(out).not.toContain('completed');
-    expect(out).not.toContain('Fix login bug');
-    expect(out).toContain('>done</subagent>');
-  });
-
-  test('live v2 sample (b): prose key-value — words intact, value masked', () => {
-    const input =
-      'The subagent is working in the background (sessionID: ses_9f8e7d).';
-    const out = maskTaskOutputStructure(input);
-    expect(out).toBe(
-      'The subagent is working in the background (sessionID: [masked]).',
-    );
-  });
-
-  test('live v2 sample (c): key-value masked AND prose pass redacts the DSN password', () => {
+describe('redactSecretsForLog task output', () => {
+  test('prose pass redacts the DSN password', () => {
     const input =
       'Subagent failed (sessionID: ses_5d4c3b): connection refused for postgres://deploy:hunter2@db';
-    const out = maskTaskOutputStructure(input);
-    expect(out).toContain('(sessionID: [masked])');
+    const out = redactSecretsForLog(input);
     expect(out).toContain('connection refused');
-    expect(out).not.toContain('ses_5d4c3b');
     expect(out).not.toContain('hunter2');
-    // The prose pass kept user+host readable and masked only the password.
     expect(out).toContain('postgres://deploy:');
     expect(out).toContain('@db');
   });
 
-  test('v1 task XML: names kept, values masked', () => {
-    expect(maskTaskOutputStructure('<task id="abc" state="running">')).toBe(
-      '<task id="[masked]" state="[masked]">',
-    );
-  });
-
-  test('single-quoted, unquoted, and self-closing attribute forms', () => {
-    expect(maskTaskOutputStructure("<task id='abc' />")).toBe(
-      "<task id='[masked]' />",
-    );
-    expect(maskTaskOutputStructure('<task id=abc/>')).toBe(
-      '<task id=[masked]/>',
-    );
-    expect(maskTaskOutputStructure('<task state=running>')).toBe(
-      '<task state=[masked]>',
-    );
-  });
-
-  test('unquoted prose key=value form masks the value', () => {
-    expect(maskTaskOutputStructure('state=running task_id=abc123')).toBe(
-      'state=[masked] task_id=[masked]',
-    );
-    expect(maskTaskOutputStructure('task_id: abc123')).toBe(
-      'task_id: [masked]',
-    );
-  });
-
-  test('malformed pseudo-tags are left to the prose pass unbroken', () => {
-    const malformed = '<not xml';
-    expect(maskTaskOutputStructure(malformed)).toBe(malformed);
-    const mixed = 'a < b and 3 > 2';
-    expect(maskTaskOutputStructure(mixed)).toBe(mixed);
-  });
-
-  test('a secret-looking attribute value never leaks (masked before prose)', () => {
-    // Runtime-joined so secret scanning does not flag the fixture.
-    const token = ['ghp_', 'ABCDEFGHIJKLMNOP', 'QRSTUVWXYZ1234'].join('');
-    const out = maskTaskOutputStructure(
-      `<subagent sessionID="${token}" state="completed">`,
-    );
-    expect(out).not.toContain(token);
-    expect(out).toContain('sessionID="[masked]"');
-  });
-
-  test('URL schemes are not treated as key-value tokens', () => {
+  test('URL schemes are retained', () => {
     const input = 'see https://api.example.com/v1 and postgres://deploy@db';
-    // Schemes survive the key-value pass; the prose pass leaves the short
-    // benign URL and the password-less DSN untouched.
-    expect(maskTaskOutputStructure(input)).toBe(input);
-  });
-
-  test('deterministic: same input twice → identical output', () => {
-    const input =
-      '<task id="abc" state="running">text (sessionID: ses_9f8e7d) postgres://deploy:hunter2@db';
-    const first = maskTaskOutputStructure(input);
-    const second = maskTaskOutputStructure(input);
-    expect(first).toBe(second);
-    expect(first).toBe(
-      '<task id="[masked]" state="[masked]">text (sessionID: [masked]) postgres://deploy:…@db',
-    );
+    expect(redactSecretsForLog(input)).toBe(input);
   });
 });
