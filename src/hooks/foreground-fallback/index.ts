@@ -85,6 +85,12 @@ const QUOTA_BILLING_PATTERNS = [
   /"1310"/,
   /\bcoding plan package has expired\b/i,
   /\b(?:weekly|monthly) limit exhausted\b/i,
+  // Deterministic claude-agent subscription-limit signature (issue #1918):
+  // "You've hit your weekly limit · Resets at <ISO timestamp>". No HTTP
+  // status and type provider.unknown, so only this exact phrasing can
+  // classify it. Narrow by design: a bare "weekly limit" without the
+  // "You've hit your" prefix must not match.
+  /you['’]?ve hit your (?:weekly|5-hour) limit/i,
   /\bindividual quota reached\b/i,
   /\bupgrade your subscription to increase your limits\b/i,
   /\baccount pool (?:has no account available|is unavailable)\b/i,
