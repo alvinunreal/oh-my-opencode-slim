@@ -474,9 +474,7 @@ export class RuntimeConfig {
   }
 
   /**
-   * Update checker switch: enabled unless `autoUpdate: false` or the
-   * `auto-update-checker` hook is disabled. Both are independent off
-   * switches for the same update hook.
+   * Update checker switch: enabled unless `autoUpdate: false` is set.
    */
   get updateCheckerEnabled(): boolean {
     return this.featureGates.updateChecker;

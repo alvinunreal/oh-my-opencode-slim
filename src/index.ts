@@ -945,7 +945,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // ── Probe jsdom (async, non-blocking) ───────────────────────────────
   // Don't await this; we don't want to block init. The warning will
   // appear shortly after startup if jsdom is broken. Skipped entirely when
-  // the enhanced webfetch is unavailable (config switch or disabled_tools):
+  // the enhanced webfetch is unavailable (disabled_tools: ["webfetch"]):
   // a disabled feature must not pay for the JSDOM load (the probe is the only
   // startup importer of jsdom).
   if (webfetch) {

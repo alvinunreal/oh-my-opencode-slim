@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Database } from 'bun:sqlite';
 /**
- * Packed-artifact, headless OpenCode 2.3.0 lifecycle verification.
+ * Packed-artifact, headless OpenCode 2.3.2 lifecycle verification.
  *
  * Build first, then run:
  *   bun scripts/verify-v2-native-lifecycle.ts
@@ -63,7 +63,7 @@ type Mode = 'default' | 'native' | 'off';
 type PackEntry = { filename?: string };
 
 const ROOT = '/tmp/opencode/v2-native-lifecycle';
-const HOST_VERSION = '2.3.0';
+const HOST_VERSION = '2.3.2';
 const HOST = process.env.V2_LIFECYCLE_HOST ?? 'opencode';
 const REPO = path.resolve(import.meta.dir, '..');
 const args = process.argv.slice(2);
@@ -436,6 +436,7 @@ function pluginConfig(mode: Mode) {
     ...(mode === 'default' ? {} : { backgroundJobs: { mode } }),
     tui: false,
     sidebar: false,
+    autoUpdate: false,
     liveConfigRefresh: false,
     interview: { enabled: false },
     marketplace: { enabled: false },
@@ -450,7 +451,6 @@ function pluginConfig(mode: Mode) {
       'ast_grep_replace',
     ],
     disabled_hooks: [
-      'auto-update-checker',
       'foreground-fallback',
       'phase-reminder',
       'absolute-path-rescue',
@@ -2035,7 +2035,7 @@ async function selfCheck() {
     assert.equal(pluginConfig('off').backgroundJobs?.mode, 'off');
     assert('plugins' in hostConfig('/tmp/opencode/local-only', model));
     assert(!('plugin' in hostConfig('/tmp/opencode/local-only', model)));
-    assert.equal(HOST_VERSION, '2.3.0');
+    assert.equal(HOST_VERSION, '2.3.2');
     assert.deepEqual(subagent('Local', { sessionID: 'ses_local' }).input, {
       agent: 'explorer',
       description: 'Local lifecycle verification',

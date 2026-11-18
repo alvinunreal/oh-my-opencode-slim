@@ -25,12 +25,8 @@ export interface FeatureGateConfig {
   readonly marketplace?: {
     readonly enabled?: boolean;
   };
-  readonly webfetch?: {
-    readonly enabled?: boolean;
-  };
   readonly liveConfigRefresh?: boolean;
   readonly autoUpdate?: boolean;
-  readonly disabled_hooks?: readonly string[];
   readonly disabled_tools?: readonly string[];
 }
 
@@ -132,9 +128,6 @@ export function resolveFeatureGates(
   const disabledTools = Array.isArray(config.disabled_tools)
     ? config.disabled_tools
     : [];
-  const disabledHooks = Array.isArray(config.disabled_hooks)
-    ? config.disabled_hooks
-    : [];
   return Object.freeze({
     backgroundJobsMode,
     presetRouting: backgroundJobsMode !== 'off',
@@ -142,11 +135,8 @@ export function resolveFeatureGates(
     sidebar: tui && config.sidebar !== false,
     interview: config.interview?.enabled !== false,
     marketplace: config.marketplace?.enabled !== false,
-    webfetch:
-      config.webfetch?.enabled !== false && !disabledTools.includes('webfetch'),
+    webfetch: !disabledTools.includes('webfetch'),
     liveConfigRefresh: config.liveConfigRefresh !== false,
-    updateChecker:
-      config.autoUpdate !== false &&
-      !disabledHooks.includes('auto-update-checker'),
+    updateChecker: config.autoUpdate !== false,
   });
 }

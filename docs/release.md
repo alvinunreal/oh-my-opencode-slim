@@ -142,7 +142,7 @@ V2_LIFECYCLE_HOST="$(command -v opencode)" bun run verify:host-smoke
 
 CI uses the Bun version pinned in `packageManager`, `bun ci`, JUnit/LCOV reports,
 a non-blocking latest-Bun canary, package smoke for package-affecting PRs, and
-scheduled compatibility checks against OpenCode 2.3.0.
+scheduled compatibility checks against OpenCode 2.3.2.
 
 Inspect `git status --short`, `git diff`, and `git log --oneline -10`. Stage only
 intended files. Commit/push release preparation before versioning.

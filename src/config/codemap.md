@@ -169,12 +169,12 @@ This allows consumers to import directly from `src/config` rather than individua
 ### PluginConfig (Root Schema)
 - `preset`: Active preset name
 - `setDefaultAgent`: Whether to set default agent model
-- `autoUpdate`: Master switch for OMOS plugin update checks, notices, and automatic installs; `disabled_hooks: ["auto-update-checker"]` is the per-hook form of the same off switch
+- `autoUpdate`: Single master switch for OMOS plugin update checks, notices, and automatic installs; the `auto-update-checker` hook-list alias is removed
 - `presets`: Named preset groupings (map of presetName → AgentOverrideConfig)
 - `agents`: Per-agent overrides (map of agentName → AgentOverrideConfig)
 - `disabled_agents`: List of agents to disable
 - `disabled_mcps`: List of MCPs to disable
-- `disabled_tools`: List of tools to disable
+- `disabled_tools`: Tool-level cold gate, including enhanced `webfetch`; its former root `webfetch.enabled` switch is removed
 - `disabled_skills`: List of skills to disable
 - `disabled_hooks`: List of hooks to disable (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`)
 - `disabled_commands`: List of slash commands to disable (`interview`, `implement`, `deepwork`, `reflect`, `loop`, `preset`)
@@ -219,7 +219,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ## Backward Compatibility
 
-- Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, `webfetch.model`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
+- Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, root `webfetch`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
 - `legacy-preset-defaults.ts` removes only the empty Explorer MCP override matching the historical Librarian/Explorer preset pair before alias merging. Loader, doctor, and the effective preset catalog share the rule; files, root overrides, and other fields remain unchanged.
 - Invalid `multiplexer` values disable pane management (`type: "none"`) with one diagnostic
 
