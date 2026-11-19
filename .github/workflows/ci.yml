@@ -111,6 +111,31 @@ jobs:
       - name: Run knip
         run: bun run knip --no-exit-code --reporter symbols --reporter markdown --output-file markdown=$GITHUB_STEP_SUMMARY
 
+  fallow:
+    name: Report / Fallow (non-blocking)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Pinned past the v3 tag: 65ff0b9 carries a verifier that treats glibc
+      # runners as musl and fails install (fallow-rs#4591). Return to @v3 once
+      # v3.43.1 retags it (fallow-rs#4607).
+      - uses: fallow-rs/fallow@b14326dcc7af8468e19abeeab6bb960e80094e17
+        with:
+          command: audit
+          version: '3.43.0'
+          only: architecture,health,dupes
+          gate: new-only
+          fail-on-issues: false
+          annotations: false
+          args: '--no-css'
+
   bun-latest-canary:
     name: Canary / Bun latest
     continue-on-error: true
