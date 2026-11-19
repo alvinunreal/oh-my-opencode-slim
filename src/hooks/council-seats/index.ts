@@ -1,88 +1,78 @@
-/**
- * Council seat-result assembly hook (`tool.execute.before`).
- *
- * Acts only on a delegation call whose target agent is exactly `council`
- * (v1 `task` + `subagent_type`, or the raw v2 `subagent` + `agent`), and
- * only when the prompt carries a final `Seats: <ref, ref>` line. Anything
- * else passes through byte-identically. The seat results themselves come
- * from the injected {@link SeatResultResolver}; `native.ts` reads them
- * from host sessions.
- *
- * Unconditional and fail-open: the resolver only acts on the final Seats
- * line and never refuses — a shape check that failed closed (rejecting
- * prompts whose quoted content mentions a Seats line) would DoS
- * legitimate council calls. No timers, no polling, no persistence.
- */
+import type { PluginInput } from '@opencode-ai/plugin';
+import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
-import { assembleCouncilPrompt, parseSeatRefs } from './assemble';
-import type { SeatResultResolver } from './types';
+import {
+  readNativeSeats,
+  type SeatEvidence,
+  type SeatReadOptions,
+} from './native';
 
-const COUNCIL_AGENT = 'council';
-const DELEGATION_TOOLS = new Set(['task', 'subagent']);
+const SEATS_LINE_PATTERN = /^Seats:\s*(.+)$/;
 
-/** v1/v2 tool.execute.before input shapes (see the v2→v1 bridge in src/v2/setup.ts). */
-interface ToolExecuteBeforeInput {
-  tool: string;
-  sessionID?: string;
-  callID?: string;
-}
-
-interface ToolExecuteBeforeOutput {
-  args?: unknown;
-}
-
-export interface CouncilSeatHook {
+interface CouncilSeatHook {
   'tool.execute.before': (
-    input: ToolExecuteBeforeInput,
-    output: ToolExecuteBeforeOutput,
+    input: { tool: string; sessionID?: string; callID?: string },
+    output: { args?: unknown },
   ) => Promise<void>;
 }
 
-export interface CouncilSeatHookDeps {
-  resolveSeats: SeatResultResolver;
-}
-
+/** Assemble only the council calls already normalized by the V2 bridge. */
 export function createCouncilSeatHook(
-  deps: CouncilSeatHookDeps,
+  input: PluginInput,
+  options?: SeatReadOptions,
 ): CouncilSeatHook {
   return {
-    'tool.execute.before': async (input, output) => {
-      if (!input || typeof input.tool !== 'string') return;
-      if (!DELEGATION_TOOLS.has(input.tool.toLowerCase())) return;
-      const sessionID = input.sessionID;
+    'tool.execute.before': async (call, output) => {
+      if (typeof call?.tool !== 'string' || call.tool.toLowerCase() !== 'task')
+        return;
+      const sessionID = call.sessionID;
       if (typeof sessionID !== 'string' || sessionID.trim() === '') return;
       const args = output?.args;
-      if (!args || typeof args !== 'object' || Array.isArray(args)) return;
-      const record = args as Record<string, unknown>;
-      // v1 carries `subagent_type`; a raw v2 subagent call carries `agent`.
-      // The v2→v1 bridge normalizes calls before this hook runs; both
-      // normalized and raw argument shapes are accepted.
-      const agent = record.subagent_type ?? record.agent;
-      if (typeof agent !== 'string' || agent.trim() !== COUNCIL_AGENT) {
+      if (!isRecord(args) || Array.isArray(args)) return;
+      const agent = args.subagent_type;
+      if (typeof agent !== 'string' || agent.trim() !== 'council') return;
+      if (typeof args.prompt !== 'string') return;
+
+      // The last matching line wins over a roster quoted in the question.
+      const lines = args.prompt.split('\n');
+      for (let index = lines.length - 1; index >= 0; index--) {
+        const match = SEATS_LINE_PATTERN.exec(lines[index]);
+        if (!match) continue;
+        const refs = match[1]
+          .split(',')
+          .map((ref) => ref.trim())
+          .filter((ref) => ref !== '');
+        let results: SeatEvidence[] = [];
+        if (refs.length > 0) {
+          try {
+            results = await readNativeSeats(input, sessionID, refs, options);
+          } catch (error) {
+            log('[council-seats] seat resolver failed; using placeholders', {
+              parentSessionID: sessionID,
+              seats: refs.length,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            results = refs.map(() => ({ reason: 'resolver error' }));
+          }
+        }
+        const sections = results.map((result, seatIndex) => {
+          const label = result.label ?? refs[seatIndex];
+          const body =
+            'text' in result ? result.text : `[no response — ${result.reason}]`;
+          return `## Seat: ${label}\n${body}`;
+        });
+        lines.splice(index, 1);
+        const kept = lines.join('\n').replace(/\n+$/, '');
+        const assembled = `${kept}\n\n${refs.length ? sections.join('\n\n') : '[no seat references were provided]'}`;
+        if (assembled === args.prompt) return;
+        args.prompt = assembled;
+        log('[council-seats] seat assembly applied', {
+          parentSessionID: sessionID,
+          seats: refs.length,
+          promptLength: assembled.length,
+        });
         return;
       }
-      if (typeof record.prompt !== 'string') return;
-      const parsed = parseSeatRefs(record.prompt);
-      if (!parsed) return;
-      const seats = parsed.refs.map((ref) => ({
-        seat: ref,
-        ...(ref.startsWith('ses_') ? { childID: ref } : {}),
-      }));
-      const assembled = await assembleCouncilPrompt({
-        prompt: record.prompt,
-        parentSessionID: sessionID,
-        seats,
-        resolveSeats: deps.resolveSeats,
-      });
-      if (assembled === record.prompt) return;
-      record.prompt = assembled;
-      // One line, no prompt content: the orchestrator's prompt is
-      // untrusted text and the log is a diagnostics surface.
-      log('[council-seats] seat assembly applied', {
-        parentSessionID: sessionID,
-        seats: parsed.refs.length,
-        promptLength: assembled.length,
-      });
     },
   };
 }
