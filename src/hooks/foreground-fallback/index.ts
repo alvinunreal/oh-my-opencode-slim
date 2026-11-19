@@ -2269,8 +2269,11 @@ export class ForegroundFallbackManager {
    *    not part of the configured chain (combined inheritModelFrom + chain
    *    mode: follow the session model first, descend into the configured
    *    entries only when it fails)
-   * 2. Agent name known but NO chain → return [] (no fallback; never
-   *    bleed into other agents' chains)
+   * 2. Agent name known but NO chain in the pinned generation → fall back
+   *    to the live chain table for the SAME agent (#1927: a scalar-era
+   *    snapshot has no entry at all, so failover would otherwise stay
+   *    disabled for it). An explicitly disabled (empty) chain stays empty,
+   *    and this never bleeds into other agents' chains.
    * 3. Agent name unknown, current model known → search all chains for
    *    the model to infer which chain to use
    * 4. Nothing matches → flatten all chains as a last resort (only
@@ -2302,7 +2305,26 @@ export class ForegroundFallbackManager {
       chains[name] = normalized.map((entry) => entry.id);
     }
     if (agentName) {
-      const chain = chains[agentName];
+      let chain = chains[agentName];
+      let entries = chainEntries[agentName];
+      if (chain === undefined) {
+        // No entry in the pinned generation: the session snapshot predates
+        // the chain config (scalar-era bundle, #1927) — fall back to the
+        // live chain table for the SAME agent. An explicitly disabled chain
+        // keeps its empty entry and stays disabled, and this never bleeds
+        // into another agent's chain.
+        const live = this.chainSource[agentName];
+        if (live?.length) {
+          const normalized = live.map((entry) =>
+            typeof entry === 'string' ? { id: entry } : { ...entry },
+          );
+          // Adopt into the existing pin so refreshes cannot change the
+          // chain while this session retains its retry and exhaustion state.
+          generation[agentName] = normalized;
+          entries = normalized;
+          chain = normalized.map((entry) => entry.id);
+        }
+      }
       if (chain) {
         // Dynamic head: when the session runs a model outside the
         // configured chain (session-inherited or /model-picked), that model
@@ -2314,11 +2336,11 @@ export class ForegroundFallbackManager {
         if (currentModel && chain.length > 0 && !chain.includes(currentModel)) {
           return {
             chain: [currentModel, ...chain],
-            entries: chainEntries[agentName],
+            entries,
             source: agentName,
           };
         }
-        return { chain, entries: chainEntries[agentName], source: agentName };
+        return { chain, entries, source: agentName };
       }
       // Any known agent without a configured chain: no fallback.
       // Don't bleed into other agents' chains via model-matching —
