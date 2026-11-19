@@ -36,6 +36,12 @@ import {
 } from '../../v2/terminal-fallback';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { asHttpStatus } from './dedup';
+import {
+  getCoolingQuotaModelKeys,
+  isQuotaModelCooling as isQuotaModelCoolingOnDisk,
+  quotaModelKey,
+  recordQuotaCooldown,
+} from './quota-cooldown';
 
 /** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
  *  `now` is observation time; scheduling
@@ -569,6 +575,61 @@ export function isPermanentQuotaBillingError(error: unknown): boolean {
 }
 
 /**
+ * Return the host's explicit quota reset duration only for confirmed quota
+ * exhaustion. Request-scoped failures and authentication remain ephemeral.
+ */
+export function quotaCooldownResetDuration(error: unknown): number | undefined {
+  if (!isRecord(error)) return undefined;
+  const statusCode = extractStatusCode(error);
+  const type = nestedField(error, 'type');
+  if (
+    type === 'provider.auth' ||
+    type === 'provider.content-filter' ||
+    type === 'provider.no-route' ||
+    type === 'provider.invalid-request' ||
+    statusCode === 401 ||
+    failoverScope(error) === 'request' ||
+    errorMessages(error).some((message) =>
+      /\b(?:invalid|malformed|unsupported)\s+(?:json\s+)?(?:schema|request|parameter|argument)\b|\bschema validation\b|\bvalidation error\b/i.test(
+        message,
+      ),
+    )
+  ) {
+    return undefined;
+  }
+  const carriers = failoverCarriers(error);
+  if (
+    carriers.some((carrier) =>
+      /(?:Antigravity did not begin a response within the pre-response time limit|requested Antigravity model is not available to the configured accounts|account pool (?:has no account available|is unavailable))/i.test(
+        carrier,
+      ),
+    )
+  ) {
+    return undefined;
+  }
+  const hasPermanentQuotaEvidence = carriers.some((carrier) =>
+    /\b(?:individual quota reached|personal-team-blocked|spending.?limit|(?:ran|run) out of credits|credits exhausted|coding plan package has expired|(?:weekly|monthly) limit exhausted|free usage exceeded|subscribe to go|upgrade your subscription to increase your limits|1113|1308|1309|1310)\b/i.test(
+      carrier,
+    ),
+  );
+  const permanentQuota =
+    isPermanentQuotaBillingError(error) &&
+    (statusCode === 402 || hasPermanentQuotaEvidence);
+  const supportedQuotaType =
+    type === undefined || type === 'provider.rate-limit';
+  const quotaExhausted =
+    type === 'provider.quota' ||
+    (supportedQuotaType && (isSpentQuotaError(error) || permanentQuota));
+  if (!quotaExhausted) return undefined;
+  const resetAfterMs = error.retryAfterMs;
+  return typeof resetAfterMs === 'number' &&
+    Number.isFinite(resetAfterMs) &&
+    resetAfterMs > 0
+    ? resetAfterMs
+    : undefined;
+}
+
+/**
  * True when the error is the kind the runtime surfaces inline (401 auth,
  * 410 model gone) — persistent, user-visible, already in the conversation.
  * These should NOT get a toast; the runtime's inline rendering is enough.
@@ -660,6 +721,8 @@ export type ForegroundFallbackOptions = {
    * @default 500
    */
   retryDelayMs?: number;
+  /** Test seam; production derives the quota store from getConfigDir(). */
+  quotaCooldownFilePath?: string;
   /** Enables steering of host retry decisions. */
   v2RetryEnabled?: boolean;
   timers?: ForegroundFallbackTimers;
@@ -761,9 +824,63 @@ export class ForegroundFallbackManager {
     model: string,
     detail?: V2SwitchDetail,
   ) => void;
+  private readonly quotaCooldownFilePath?: string;
   /** Reports an in-flight fallback switch. */
   isFallbackInProgress(sessionID: string): boolean {
     return this.inProgress.has(sessionID);
+  }
+
+  private quotaCooldownEnabledFor(sessionID: string): boolean {
+    return this.retryEnabledFor(sessionID);
+  }
+
+  /** Synchronous final-admission read used by the v2 model.request bridge. */
+  isQuotaModelCooling(
+    sessionID: string,
+    providerID: string,
+    modelID: string,
+    now = this.now(),
+  ): boolean {
+    return (
+      this.quotaCooldownEnabledFor(sessionID) &&
+      isQuotaModelCoolingOnDisk(
+        providerID,
+        modelID,
+        now,
+        this.quotaCooldownFilePath,
+      )
+    );
+  }
+
+  private quotaCoolingModels(sessionID: string): ReadonlySet<string> {
+    return this.quotaCooldownEnabledFor(sessionID)
+      ? getCoolingQuotaModelKeys(this.now(), this.quotaCooldownFilePath)
+      : new Set();
+  }
+
+  private async recordV2QuotaCooldown(
+    sessionID: string,
+    providerID: string,
+    modelID: string,
+    resetAfterMs: number,
+  ): Promise<void> {
+    try {
+      await recordQuotaCooldown(
+        providerID,
+        modelID,
+        resetAfterMs,
+        this.now(),
+        this.quotaCooldownFilePath
+          ? { filePath: this.quotaCooldownFilePath }
+          : undefined,
+      );
+    } catch (writeError) {
+      log('[foreground-fallback] quota cooldown write failed', {
+        sessionID,
+        model: `${providerID}/${modelID}`,
+        error: stringifyError(writeError),
+      });
+    }
   }
 
   /**
@@ -956,6 +1073,7 @@ export class ForegroundFallbackManager {
       onSessionModelChanged,
       initialRetryDelayMs = 0,
       retryDelayMs = 500,
+      quotaCooldownFilePath,
       v2RetryEnabled = false,
       timers,
     } = options;
@@ -963,6 +1081,7 @@ export class ForegroundFallbackManager {
     this.maxRetries = maxRetries;
     this.initialRetryDelayMs = initialRetryDelayMs;
     this.retryDelayMs = retryDelayMs;
+    this.quotaCooldownFilePath = quotaCooldownFilePath;
     this.v2RetryEnabled = v2RetryEnabled;
     this.chainSource = chains;
     this.onSessionModelChanged = onSessionModelChanged;
@@ -1047,10 +1166,55 @@ export class ForegroundFallbackManager {
       )
     )
       return;
+    const origin = parseModelReference(descent.model);
+    if (
+      origin &&
+      this.isQuotaModelCooling(sessionID, origin.providerID, origin.modelID)
+    )
+      return;
     return {
       model: descent.model,
       ...(descent.variant ? { variant: descent.variant } : {}),
     };
+  }
+
+  private restoredFallbackAttributionState(
+    sessionID: string,
+    restored: FallbackDescent | undefined,
+    failedModel: string | undefined,
+    failedVariant?: string,
+  ): 'pending' | 'restored' | 'ordinary' | 'invalid' | undefined {
+    if (
+      !restored ||
+      !failedModel ||
+      restored.fallback !== failedModel ||
+      (restored.fallbackVariant ?? 'default') !== (failedVariant ?? 'default')
+    )
+      return;
+
+    const descent = this.descent.get(sessionID);
+    const model = this.sessionModel.get(sessionID);
+    const activeFallback = this.activeFallback.get(sessionID);
+    if (this.restoring.has(sessionID)) {
+      return descent === restored &&
+        activeFallback === restored.fallback &&
+        (model === restored.fallback || model === restored.model)
+        ? 'pending'
+        : 'invalid';
+    }
+    if (
+      descent === undefined &&
+      model === restored.model &&
+      activeFallback === undefined
+    )
+      return 'restored';
+    if (
+      descent === restored &&
+      activeFallback === restored.fallback &&
+      (model === restored.fallback || model === restored.model)
+    )
+      return 'ordinary';
+    return 'invalid';
   }
 
   private clearRestoreTimer(sessionID: string): void {
@@ -1474,6 +1638,7 @@ export class ForegroundFallbackManager {
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
     let failover = false;
+    let ownsInProgress = false;
     try {
       const scope = failoverScope(event.error);
       failover = scope !== undefined;
@@ -1484,19 +1649,90 @@ export class ForegroundFallbackManager {
       )
         return;
       if (!failover) return;
-      // After a timed-out switch the descent is still live, so the normal
-      // path stays safe; only a pending or confirmed restore needs this.
+
+      let restoredState = this.restoredFallbackAttributionState(
+        sessionID,
+        restored,
+        from,
+        event.model.variant,
+      );
+      if (restoredState === 'invalid') return;
+      const restoredAtEntry = restoredState !== undefined;
+      const descentAtEntry = this.descent.get(sessionID);
+      const modelAtEntry = this.sessionModel.get(sessionID);
+      const activeFallbackAtEntry = this.activeFallback.get(sessionID);
       if (
-        restored?.fallback === from &&
-        (this.restoring.has(sessionID) ||
-          this.descent.get(sessionID) !== restored)
+        this.sessionTried.get(sessionID)?.has(from) &&
+        this.sessionModel.get(sessionID) !== from &&
+        !restoredAtEntry
+      )
+        return;
+
+      const quotaResetAfterMs = quotaCooldownResetDuration(event.error);
+      if (
+        quotaResetAfterMs !== undefined &&
+        this.quotaCooldownEnabledFor(sessionID)
       ) {
+        // The writer is asynchronous. Reserve the existing single-flight slot
+        // before its first await so an overlapping retry cannot steer too.
+        this.inProgress.add(sessionID);
+        ownsInProgress = true;
+        await this.recordV2QuotaCooldown(
+          sessionID,
+          event.model.providerID,
+          event.model.id,
+          quotaResetAfterMs,
+        );
+        // A newer external prompt or disposal may have happened while the
+        // durable write waited for the shared lock. Do not bookkeep or steer
+        // the superseded turn.
+        if (
+          !this.isCurrentTurn(sessionID, epoch) ||
+          !this.retryEnabledFor(sessionID)
+        )
+          return;
+        const afterWrite = this.restoredFallbackAttributionState(
+          sessionID,
+          restored,
+          from,
+          event.model.variant,
+        );
+        if (restoredAtEntry) {
+          if (afterWrite === undefined || afterWrite === 'invalid') return;
+          // A rejected or timed-out restore with its original descent still
+          // live follows the ordinary upstream path, not the restore shortcut.
+          restoredState = afterWrite;
+        } else if (
+          afterWrite !== undefined ||
+          this.descent.get(sessionID) !== descentAtEntry ||
+          this.sessionModel.get(sessionID) !== modelAtEntry ||
+          this.activeFallback.get(sessionID) !== activeFallbackAtEntry
+        ) {
+          return;
+        }
+      }
+
+      // Persistence and the restored-fallback shortcut are sibling gates:
+      // the failing model's quota is recorded before any retry decision.
+      if (restoredState === 'pending' || restoredState === 'restored') {
         if (scope === 'request') {
           const rejected = this.requestRejected.get(sessionID) ?? new Set();
           rejected.add(from);
           this.requestRejected.set(sessionID, rejected);
         }
         this.markQuotaExhausted(sessionID, from, event.error);
+        const restoredOrigin = restored
+          ? parseModelReference(restored.model)
+          : undefined;
+        if (
+          !restoredOrigin ||
+          this.isQuotaModelCooling(
+            sessionID,
+            restoredOrigin.providerID,
+            restoredOrigin.modelID,
+          )
+        )
+          return;
         event.decision = { retry: true, delay: this.retryDelayMs };
         return;
       }
@@ -1519,7 +1755,8 @@ export class ForegroundFallbackManager {
       }
       if (
         this.sessionTried.get(sessionID)?.has(from) &&
-        this.sessionModel.get(sessionID) !== from
+        this.sessionModel.get(sessionID) !== from &&
+        restoredState === undefined
       )
         return;
       const agent = this.v2AgentName(sessionID, event.agent);
@@ -1539,11 +1776,19 @@ export class ForegroundFallbackManager {
         event.decision = { retry: true, delay: 0 };
         return;
       }
+      const sourceQuotaCooling = this.isQuotaModelCooling(
+        sessionID,
+        event.model.providerID,
+        event.model.id,
+      );
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
         // Request rejections and spent allowance cannot recover by retrying
-        // this model, so steer without charging the host-retry budget.
+        // this model, so steer without charging the host-retry budget. A
+        // persisted cooldown also makes another same-model host retry unsafe;
+        // only an actual readable cooldown skips absorption.
         if (
+          !sourceQuotaCooling &&
           !auth401 &&
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&
@@ -1552,27 +1797,26 @@ export class ForegroundFallbackManager {
         )
           return;
       }
-      this.inProgress.add(sessionID);
-      try {
-        const nextModel = await this.switchV2InPlace(
-          sessionID,
-          from,
-          event.error,
-          switchModel,
-          epoch,
-          event.model.variant,
-        );
-        if (nextModel)
-          event.decision = { retry: true, delay: this.retryDelayMs };
-      } finally {
-        this.inProgress.delete(sessionID);
+      if (!ownsInProgress) {
+        this.inProgress.add(sessionID);
+        ownsInProgress = true;
       }
+      const nextModel = await this.switchV2InPlace(
+        sessionID,
+        from,
+        event.error,
+        switchModel,
+        epoch,
+        event.model.variant,
+      );
+      if (nextModel) event.decision = { retry: true, delay: this.retryDelayMs };
     } catch (err) {
       log(
         '[foreground-fallback] retry hook switch failed; host decision unchanged',
         { sessionID: event?.sessionID, error: stringifyError(err) },
       );
     } finally {
+      if (ownsInProgress) this.inProgress.delete(sessionID);
       const error = isRecord(event.error) ? event.error : undefined;
       log('[foreground-fallback] v2 retry hook observed', {
         sessionID,
@@ -1860,10 +2104,19 @@ export class ForegroundFallbackManager {
     const from = step.model
       ? `${step.model.providerID}/${step.model.id}`
       : undefined;
+    let restoredState = this.restoredFallbackAttributionState(
+      sessionID,
+      restored,
+      from,
+      step.model?.variant,
+    );
+    if (restoredState === 'invalid') return;
+    const restoredAtEntry = restoredState !== undefined;
     if (
       from &&
       this.sessionTried.get(sessionID)?.has(from) &&
-      this.sessionModel.get(sessionID) !== from
+      this.sessionModel.get(sessionID) !== from &&
+      !restoredAtEntry
     )
       return;
     this.v2Steps.delete(sessionID);
@@ -1886,9 +2139,29 @@ export class ForegroundFallbackManager {
         'foreground refusal session lookup timed out',
       );
       const data: unknown = result.data;
-      if (this.disposed || !isRecord(data)) return;
+      if (
+        !this.isCurrentTurn(sessionID, epoch) ||
+        !this.retryEnabledFor(sessionID) ||
+        !isRecord(data)
+      )
+        return;
+      restoredState = this.restoredFallbackAttributionState(
+        sessionID,
+        restored,
+        from,
+        step.model?.variant,
+      );
+      if (restoredState === 'invalid') return;
+      if (
+        restoredAtEntry &&
+        restoredState !== 'pending' &&
+        restoredState !== 'restored' &&
+        restoredState !== 'ordinary'
+      )
+        return;
       const current = data.model;
       const restoredStep =
+        (restoredState === 'pending' || restoredState === 'restored') &&
         restored &&
         from === restored.fallback &&
         (step.model?.variant ?? 'default') ===
@@ -1910,7 +2183,15 @@ export class ForegroundFallbackManager {
               (step.model.variant ?? 'default')))
       )
         return;
-      if ((this.turnEpoch.get(sessionID) ?? 0) !== epoch) return;
+      if (!this.isCurrentTurn(sessionID, epoch)) return;
+      if (
+        !restoredStep &&
+        from &&
+        this.sessionTried.get(sessionID)?.has(from) &&
+        this.sessionModel.get(sessionID) !== from &&
+        !restoredAtEntry
+      )
+        return;
       if (typeof data.parentID === 'string' && data.parentID) {
         this.sessionParent.set(sessionID, data.parentID);
       }
@@ -1921,6 +2202,20 @@ export class ForegroundFallbackManager {
         rejected.add(from);
         this.requestRejected.set(sessionID, rejected);
       }
+      const restoredOrigin =
+        restoredStep && restored
+          ? parseModelReference(restored.model)
+          : undefined;
+      if (
+        restoredStep &&
+        (!restoredOrigin ||
+          this.isQuotaModelCooling(
+            sessionID,
+            restoredOrigin.providerID,
+            restoredOrigin.modelID,
+          ))
+      )
+        return;
       const nextModel = restoredStep
         ? restored.model
         : await this.switchV2InPlace(
@@ -2141,6 +2436,21 @@ export class ForegroundFallbackManager {
     );
     const hasAllowance = (model: string) =>
       !quotaExhausted?.has(parseModelReference(model)?.providerID ?? '');
+    const cooledModels = this.quotaCoolingModels(sessionID);
+    const isCooling = (model: string) => {
+      const ref = parseModelReference(model);
+      const key = ref ? quotaModelKey(ref.providerID, ref.modelID) : undefined;
+      return key !== undefined && cooledModels.has(key);
+    };
+
+    if (chain.every(isCooling)) {
+      log('[foreground-fallback] fallback chain exhausted', {
+        sessionID,
+        agentName,
+        tried: [...tried],
+      });
+      return 'exhausted' as const;
+    }
 
     const downProviders = this.getDownProviders(sessionID);
     const parentID = this.sessionParent.get(sessionID);
@@ -2157,6 +2467,7 @@ export class ForegroundFallbackManager {
             !tried.has(model) &&
             !rejected?.has(model) &&
             hasAllowance(model) &&
+            !isCooling(model) &&
             !downProviders.has(provider) &&
             !parentDownProviders?.has(provider)
           );
@@ -2166,7 +2477,9 @@ export class ForegroundFallbackManager {
         // Retry the last chain entry once, ignoring provider exclusions but
         // retaining tried models. After it fails, stop intervening. Spent
         // allowance (issue #966) is never retried.
-        const stickyFallback = chain.findLast(hasAllowance);
+        const stickyFallback = chain.findLast(
+          (model) => hasAllowance(model) && !isCooling(model),
+        );
         if (stickyFallback === undefined) {
           log(
             '[foreground-fallback] spent quota on every chain provider; surfacing',

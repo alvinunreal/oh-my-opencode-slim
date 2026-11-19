@@ -51,6 +51,10 @@ const ALLOWLIST = new Map<string, string>([
     'hooks/foreground-fallback/index.ts',
     'Date.now() gates retry/dedup windows for model failover; no prompt content is derived from it.',
   ],
+  [
+    'hooks/foreground-fallback/quota-cooldown.ts',
+    'Date.now() calculates and checks persisted quota reset deadlines only; timestamp values never enter prompt content.',
+  ],
 ]);
 
 async function scanForViolations(): Promise<string[]> {

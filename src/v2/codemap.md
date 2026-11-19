@@ -9,6 +9,13 @@ OpenCode loads `default.setup(ctx)` from `src/plugin.ts`. Setup wraps the shared
 factory and translates its v1-shaped `Hooks` into v2 registrations.
 Registration-only embedded contexts skip setup before configuration validation.
 
+The existing retry hook can record explicit quota-reset deadlines through the
+foreground fallback manager. The final `model.request` bridge checks a cooling
+provider/model before transport, under the same fallback enable/disable controls.
+Durability lives in the configuration-domain quota store, not a second native
+retry or session state machine; explicit cooling selections are refused, not
+silently replaced.
+
 `client-shim.ts` treats a named `session.prompt` agent as an owning-identity
 assertion against the persisted session agent, not a selection override;
 unverified identity and model/variant overrides fail before prompt admission.

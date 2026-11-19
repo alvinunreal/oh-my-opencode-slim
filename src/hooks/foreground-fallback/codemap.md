@@ -37,6 +37,17 @@ continuation when the switch succeeds.
 - Spent allowance marks the failing provider in `quotaExhaustedProviders`.
   Once no chain provider remains available, the failure surfaces without a
   switch. Provider failure marks used for child routing expire after 30 minutes.
+- Confirmed quota exhaustion with a positive native `retryAfterMs` persists a
+  fixed provider/model deadline in `omos-quota-cooldowns.json`; ordinary rate
+  limits and request-scoped failures do not create a durable exclusion.
+- `quotaCooldownFilePath` is a test seam; production stores deadlines under the
+  OpenCode config directory. `isQuotaModelCooling` uses the session's
+  `retryEnabledFor` decision, and the native `model.request` gate refuses an
+  explicitly selected cooling model instead of substituting another model.
+- Normal and sticky selection, plus idle and mid-turn restoration, skip cooling
+  models. A late fallback quota event remains attributed to its failing model;
+  restore checks re-read the origin deadline after the asynchronous session
+  lookup. Reads never slide or clear a stored deadline.
 
 ## Refusals and no-route failures
 

@@ -610,6 +610,17 @@ The retry-hook steering path absorbs host retry events up to
 the current turn on it. `fallback.initialRetryDelayMs` has no steering form and
 is ignored there.
 
+Confirmed quota exhaustion with a positive native `retryAfterMs` additionally
+records a model-scoped absolute deadline shared by sessions using the same
+OpenCode configuration directory. The existing retry hook observes the failure;
+existing fallback selection skips cooling entries, and the final `model.request`
+hook refuses an explicitly cooling selection before transport. This does not
+replace native retry/backoff, infer account identity or invent a TTL for errors
+without reset information. Both recording and refusal respect the existing
+foreground-fallback disable controls. See
+[Quota reset cooldowns](configuration.md#quota-reset-cooldowns-on-v2) for storage,
+expiry and operator-clear limitations.
+
 ## Native child lifecycle on v2
 
 V2 has no plugin-side child-job ledger, rehydrate probe, persistence, delivery
