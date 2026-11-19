@@ -134,7 +134,8 @@ You can enable the companion by adding a `companion` section to your setting con
     "gifPack": "default",
     "loopStyle": "classic",
     "speed": 1,
-    "debug": false
+    "debug": false,
+    "hideWhenIdle": false
   }
 }
 ```
@@ -175,6 +176,12 @@ surface; no code is removed.
 - **`companion.debug`**: set to `true` to enable verbose native companion debug
   logs while troubleshooting window/session behavior. Logs are written under
   `$XDG_DATA_HOME/opencode/log/` or `~/.local/share/opencode/log/`.
+
+- **`companion.hideWhenIdle`**: set to `true` to hide the companion window while
+  no agent is active instead of playing the idle animation. Requires companion
+  v0.1.10 or later. While hidden, the right-click control popup, preset
+  switching, and drag-to-reposition are unavailable until activity resumes, and
+  a pending input request keeps the window visible. Default `false`.
 
 - **`companion.binaryPath`**: optional path to a custom companion binary. When
   set, the runtime launches this binary instead of the default install path.
