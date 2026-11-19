@@ -139,6 +139,7 @@ import type {
   V2PermissionRule,
   V2SessionCompactionEvent,
   V2SessionContextEvent,
+  V2SessionGenerateEvent,
   V2SessionModelRequestEvent,
   V2SessionPromptEvent,
   V2ToolAfterEvent,
@@ -360,6 +361,58 @@ export function attributeAgentsByHistory(
   return attribution;
 }
 
+/** The request-shaping steps shared by the `context` and `generate` session
+ * hooks: the v1 system transform and the session-frozen runtime profile. */
+type ShapingStepDeps = Pick<
+  V2SessionContextHandlerDeps,
+  'systemTransform' | 'applyRuntimeProfile'
+>;
+
+/** System transform step: v2 SystemPart[] -> v1 string[] -> mutate -> back.
+ * Shared verbatim by both hooks so the shaped system bytes are identical;
+ * the per-step guard and log line match the original context handler. */
+async function applySystemTransform(
+  event: V2SessionContextEvent,
+  deps: Pick<ShapingStepDeps, 'systemTransform'>,
+): Promise<void> {
+  if (deps.systemTransform && Array.isArray(event.system)) {
+    try {
+      const sysStrings = event.system.map((s) => s.text ?? '');
+      await deps.systemTransform(
+        // Forward the request-scoped agent so the transform can tell a
+        // real orchestrator request from an auxiliary (title/compaction)
+        // request running in the same session. When absent, the transform
+        // falls back to a structural heuristic.
+        { sessionID: event.sessionID, agent: event.agent },
+        { system: sysStrings },
+      );
+      event.system = sysStrings.map((text) => ({
+        type: 'text' as const,
+        text,
+      }));
+    } catch (err) {
+      log('[v2] system transform bridge failed', String(err));
+    }
+  }
+}
+
+/** Session-frozen runtime-profile step: a captured child session gets its
+ * profile's temperature/provider options on the request `options` record.
+ * Model/variant travel through session.switchModel at capture time;
+ * system/messages/tools stay byte-stable. */
+async function applyRuntimeProfileStep(
+  event: V2SessionContextEvent,
+  deps: Pick<ShapingStepDeps, 'applyRuntimeProfile'>,
+): Promise<void> {
+  if (deps.applyRuntimeProfile) {
+    try {
+      await deps.applyRuntimeProfile(event);
+    } catch (err) {
+      log('[v2] runtime profile apply failed', String(err));
+    }
+  }
+}
+
 /** Build the single `ctx.session.hook("context")` handler: interview marker
  * bridge, generic command marker dispatch, chat.message agent tracking, and
  * the v1 system/messages transforms — each independently try/catch-guarded. */
@@ -419,25 +472,7 @@ export function createSessionContextHandler(
       }
     }
     // System transform: v2 SystemPart[] -> v1 string[] -> mutate -> back.
-    if (deps.systemTransform && Array.isArray(event.system)) {
-      try {
-        const sysStrings = event.system.map((s) => s.text ?? '');
-        await deps.systemTransform(
-          // Forward the request-scoped agent so the transform can tell a
-          // real orchestrator request from an auxiliary (title/compaction)
-          // request running in the same session. When absent, the transform
-          // falls back to a structural heuristic.
-          { sessionID: event.sessionID, agent: event.agent },
-          { system: sysStrings },
-        );
-        event.system = sysStrings.map((text) => ({
-          type: 'text' as const,
-          text,
-        }));
-      } catch (err) {
-        log('[v2] system transform bridge failed', String(err));
-      }
-    }
+    await applySystemTransform(event, deps);
     // Messages transform: v2 Message.content -> v1 {info, parts} -> back.
     // Pass the full v2 message as `info` (preserves id/metadata identity;
     // isMessageWithParts only needs info.role + parts) with content as
@@ -657,17 +692,33 @@ export function createSessionContextHandler(
         log('[v2] messages transform bridge failed', String(err));
       }
     }
-    // Session-frozen runtime profile: a captured child session gets its
-    // profile's temperature/provider options on the request options record.
-    // Model/variant travel through session.switchModel at capture time;
-    // system/messages/tools stay byte-stable.
-    if (deps.applyRuntimeProfile) {
-      try {
-        await deps.applyRuntimeProfile(event);
-      } catch (err) {
-        log('[v2] runtime profile apply failed', String(err));
-      }
-    }
+    // Session-frozen runtime profile (options record only).
+    await applyRuntimeProfileStep(event, deps);
+  };
+}
+
+/** Build the `ctx.session.hook("generate")` handler (issue #1934).
+ *
+ * Upstream fires `session.generate` requests through the `generate` session
+ * hook instead of `context`, with the identical mutable
+ * `system`/`messages`/`options`/`tools` payload built from the same
+ * `SessionModelRequest.baseTranscript` as the primary loop. Without a
+ * bridge, a warm-up generate request never received the orchestrator system
+ * prompt, `collapseSystemInPlace`, or the session-frozen runtime-profile
+ * options, and its prompt prefix could not match the primary request (a
+ * provider cache miss on every such request). Only the two idempotent
+ * shaping steps replay here: messages shaping is turn-state dependent
+ * (injection gates, volatile tails, per-turn breakpoints) and is NOT
+ * replayed, and `title`/`compaction` stay unshaped on purpose so
+ * orchestrator instructions never enter title/summarization requests. The
+ * shaped system bytes are intentionally identical to the primary path —
+ * that byte parity is the point of the bridge. */
+export function createSessionGenerateHandler(
+  deps: ShapingStepDeps,
+): (event: V2SessionGenerateEvent) => Promise<void> {
+  return async (event) => {
+    await applySystemTransform(event, deps);
+    await applyRuntimeProfileStep(event, deps);
   };
 }
 
@@ -3467,6 +3518,48 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           }
           return {};
         };
+        // Primaries use the startup registry; child profiles stay
+        // session-frozen. `off` has no profile bridge: every agent applies
+        // its own startup registry settings instead.
+        const applyRuntimeProfile = async (event: V2SessionContextEvent) => {
+          const profiles = sessionProfileBridge;
+          const binding =
+            profiles?.effectiveBinding(event.sessionID) ??
+            sessionPresets?.peek(event.sessionID);
+          const profile =
+            profiles?.profileForSession(event.sessionID, event.agent) ??
+            (binding?.parentID && pluginAgents.has(event.agent)
+              ? sessionAdmissionProfiles(
+                  binding,
+                  currentProfiles,
+                  registeredProfiles,
+                )[event.agent]
+              : undefined);
+          if (profile) {
+            const providerOptions = await variantCompatibleOptions(
+              profile.providerOptions ?? {},
+              event.model,
+              'child',
+            );
+            applyRuntimeProfileOptions(
+              event,
+              { ...profile, providerOptions },
+              binding,
+            );
+          } else if (!binding?.parentID && isRecord(event.options)) {
+            const primary = staticRequestOptions.get(event.agent);
+            if (!primary) return;
+            const options = await variantCompatibleOptions(
+              primary.options,
+              event.model,
+              'primary',
+            );
+            Object.assign(event.options, options);
+            if (primary.temperature !== undefined) {
+              event.options.temperature = primary.temperature;
+            }
+          }
+        };
         const handler = createSessionContextHandler({
           // Interview marker bridge (transcript projection + /interview);
           // a no-op when the interview subsystem is disabled by config.
@@ -3492,52 +3585,24 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           refusalRecovery: v1Hooks[
             'v2.refusalRecovery'
           ] as ForegroundFallbackManager['refusalRecovery'],
-          // Primaries use the startup registry; child profiles stay
-          // session-frozen. `off` has no profile bridge: every agent applies
-          // its own startup registry settings instead.
-          applyRuntimeProfile: async (event: V2SessionContextEvent) => {
-            const profiles = sessionProfileBridge;
-            const binding =
-              profiles?.effectiveBinding(event.sessionID) ??
-              sessionPresets?.peek(event.sessionID);
-            const profile =
-              profiles?.profileForSession(event.sessionID, event.agent) ??
-              (binding?.parentID && pluginAgents.has(event.agent)
-                ? sessionAdmissionProfiles(
-                    binding,
-                    currentProfiles,
-                    registeredProfiles,
-                  )[event.agent]
-                : undefined);
-            if (profile) {
-              const providerOptions = await variantCompatibleOptions(
-                profile.providerOptions ?? {},
-                event.model,
-                'child',
-              );
-              applyRuntimeProfileOptions(
-                event,
-                { ...profile, providerOptions },
-                binding,
-              );
-            } else if (!binding?.parentID && isRecord(event.options)) {
-              const primary = staticRequestOptions.get(event.agent);
-              if (!primary) return;
-              const options = await variantCompatibleOptions(
-                primary.options,
-                event.model,
-                'primary',
-              );
-              Object.assign(event.options, options);
-              if (primary.temperature !== undefined) {
-                event.options.temperature = primary.temperature;
-              }
-            }
-          },
+          applyRuntimeProfile,
         });
         const reg = await ctx.session.hook('context', handler);
         disposers.push(() => reg.dispose());
         log('[v2] session context hook registered');
+
+        // v2 session.generate: auxiliary generate requests (e.g. warm-up)
+        // get the same system/profile shaping as the primary loop so their
+        // prompt prefix stays cacheable — see createSessionGenerateHandler.
+        const generateReg = await ctx.session.hook(
+          'generate',
+          createSessionGenerateHandler({
+            systemTransform,
+            applyRuntimeProfile,
+          }),
+        );
+        disposers.push(() => generateReg.dispose());
+        log('[v2] generate bridge registered (session.generate)');
 
         // v1 chat.headers → v2 session.model.request (per-provider-request
         // HTTP headers; registered unconditionally when the v1
