@@ -3687,6 +3687,82 @@ describe('ForegroundFallbackManager chain generation pins', () => {
       id: 'y',
     });
   });
+
+  test('a pinned snapshot without a chain for the agent falls back to the live chain table (#1927)', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = {
+      orchestrator: ['test/a', 'test/b'],
+      designer: ['glm/glm-5.3', 'kimi/kimi-k2.8-preview'],
+    };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    try {
+      // Scalar-era frozen bundle: the snapshot predates fallback chains, so
+      // it carries no entry for designer at all. Unlike disableChain, which
+      // keeps an explicit empty entry, a missing key means "never configured
+      // when this snapshot was taken".
+      manager.pinSessionChains('stale-parent', {
+        orchestrator: ['test/a', 'test/b'],
+      });
+
+      // The frozen model goes down: failover must engage the live chain
+      // instead of erroring on every request with no fallback.
+      await manager.handleV2Retry(
+        {
+          sessionID: 'stale-parent',
+          agent: 'designer',
+          model: { providerID: 'kimi', id: 'kimi-k2.8-preview' },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+      expect(switchModel).toHaveBeenCalledWith('stale-parent', {
+        providerID: 'glm',
+        id: 'glm-5.3',
+      });
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  test('an explicitly disabled chain stays disabled even when the live table has a chain (#1927)', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = {
+      orchestrator: ['test/a', 'test/b'],
+      designer: ['glm/glm-5.3', 'kimi/kimi-k2.8-preview'],
+    };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    try {
+      // Same stale snapshot as above, but the agent's chain was explicitly
+      // disabled afterwards: the empty entry must keep failover off.
+      manager.pinSessionChains('stale-parent', {
+        orchestrator: ['test/a', 'test/b'],
+      });
+      manager.disableChain('designer');
+
+      await manager.handleV2Retry(
+        {
+          sessionID: 'stale-parent',
+          agent: 'designer',
+          model: { providerID: 'kimi', id: 'kimi-k2.8-preview' },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+      expect(switchModel).not.toHaveBeenCalled();
+    } finally {
+      manager.dispose();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
