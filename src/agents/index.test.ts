@@ -2388,10 +2388,8 @@ describe('council compaction exception', () => {
     expect(prompt).toContain(
       'if the host asks you to produce a session checkpoint or compaction summary in a specific template',
     );
-    // The override keeps the format marker, so single-track reinforcement
-    // appends nothing (no pointer, no fallback) on top of it.
-    expect(prompt).not.toContain('You MUST follow the Synthesis Process');
-    expect(prompt).not.toContain('You MUST produce: ## Council Response');
+    expect(prompt?.split('## Council Response')).toHaveLength(2);
+    expect(prompt).not.toContain('## Per-Councillor Details');
   });
 
   test('council prompt override without a format marker gets the fallback in createAgents', () => {
@@ -2409,7 +2407,8 @@ describe('council compaction exception', () => {
     expect(prompt).toContain('Custom council prompt with no format rules.');
     // The fallback reinforcement restores the required report structure the
     // override dropped — applied to the FINAL effective prompt.
-    expect(prompt).toContain('You MUST produce: ## Council Response');
+    expect(prompt).toContain('## Council Response');
+    expect(prompt).toContain('## Per-Councillor Details');
     expect(prompt).toContain('## Council Summary');
     expect(prompt).toContain(
       'if the host asks you to produce a session checkpoint or compaction summary in a specific template',

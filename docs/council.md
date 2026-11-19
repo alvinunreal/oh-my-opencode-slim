@@ -53,11 +53,9 @@ itself. The
 council agent itself waits for no one: it has no tools and starts from
 whatever its context carries.
 
-> The seat hook reads each child session and its transcript directly from the
-> host. One call-start cutoff guards attribution: a seat
-> whose newest prompt arrived at or after the synthesis call opened
-> reports `[no response — unverified result]` rather than replaying an
-> older answer (see [What you see](#what-you-see)).
+> The seat hook reads each child session and its transcript from the host. It
+> only attaches answers attributable to a seat's newest prompt before synthesis
+> started (see [What you see](#what-you-see)).
 
 ### Who dispatches whom
 
@@ -376,25 +374,22 @@ dispatch-returned session IDs, and
 the harness attaches the collected responses to that call; the council
 agent synthesizes the report.
 
-The resolver reads host sessions directly in both `native` and `off` modes.
-Only exact `ses_` IDs resolve, each child must still report this parent, and
-the seat body is the child's latest answer. Text from an earlier round is
-never replayed: a seat still working on its newest prompt reports
-`[no response — still running]`, an unreadable session reports
-`[no response — unverified result]`, and a seat whose newest prompt arrived at
-or after the synthesis call opened reports `[no response — unverified result]`
-too — its transcript can no longer be attributed to this council run.
+The resolver reads host sessions in both `native` and `off` modes. Only exact
+`ses_` IDs belonging to the calling parent resolve. A seat still working on
+its latest prompt reports `[no response — still running]`. Unreadable sessions
+and prompts admitted at or after synthesis started get a `[no response — …]`
+placeholder instead of historical text.
 
 ### Output
 
 Council responses include:
 
 1. **Council Response** — the synthesized final answer.
-2. **Per-Councillor Details** — each responding councillor's individual response,
-   using the councillor names from the configured preset.
-3. **Council Summary** — agreement, disagreement resolution, remaining
-   uncertainty, and a consensus confidence rating of `unanimous`, `majority`,
-   or `split`.
+2. **Per-Councillor Details** — each seat's key insight or failure status,
+   using its exact seat name.
+3. **Council Summary** — agreements, disagreements and their resolution,
+   remaining uncertainty, next action, and the consensus level among responding
+   seats (`unanimous`, `majority`, or `split`).
 
 ### Failure behavior
 

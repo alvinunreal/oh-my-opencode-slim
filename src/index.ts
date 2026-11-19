@@ -821,13 +821,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // a real council agent exists — no council, no seat machinery.
     // Council-inject stays independently switchable by disabled_hooks above.
     if (agentDefs.some((a) => a.name === 'council')) {
-      const [seatHookModule, native] = await Promise.all([
-        import('./hooks/council-seats'),
-        import('./hooks/council-seats/native'),
-      ]);
-      councilSeatHook = seatHookModule.createCouncilSeatHook({
-        resolveSeats: native.createNativeSeatResolver(ctx),
-      });
+      const { createCouncilSeatHook } = await import('./hooks/council-seats');
+      councilSeatHook = createCouncilSeatHook(ctx);
     }
     if (runtime.interviewEnabled) {
       const { collapseInterviewHistory } = await import('./interview/history');
