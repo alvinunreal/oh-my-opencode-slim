@@ -3702,6 +3702,14 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 }) => {
                   const key = captureKey(parentSessionID, callID);
                   const explicitModel = typeof args.model === 'string';
+                  // A resume may omit the agent. Reuse the validated host
+                  // identity before classifying its owner; named native
+                  // targets keep the no-read passthrough below.
+                  if (!agentType && typeof args.task_id === 'string') {
+                    agentType =
+                      (await presets.ensureAdmission(args.task_id))?.identity
+                        .agent ?? '';
+                  }
                   // Legacy configuration aliases do not own native agents.
                   // Even passthrough calls need a handoff to the wrapper.
                   if (!pluginAgents.has(agentType)) {

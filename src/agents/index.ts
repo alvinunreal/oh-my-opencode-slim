@@ -25,11 +25,7 @@ import {
 } from '../utils/agent-variant';
 import { parseModelRef } from '../v2/adapters';
 
-import {
-  createCouncilAgent,
-  ensureCouncilCompactionException,
-  ensureCouncilSynthesisReinforcement,
-} from './council';
+import { createCouncilAgent, ensureCouncilPrompt } from './council';
 import { buildCouncillorAgents, councillorSeatNames } from './council-agents';
 import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
@@ -1119,13 +1115,7 @@ function createAgentViews(
         customPrompts.appendPrompt,
       );
       if (name === 'council') {
-        // resolvePrompt above may have replaced the generated prompt with
-        // an inline or council.md override; re-apply the idempotent
-        // fallback reinforcement so the required report structure and the
-        // compaction exception survive the override.
-        agent.config.prompt = ensureCouncilCompactionException(
-          ensureCouncilSynthesisReinforcement(agent.config.prompt ?? ''),
-        );
+        agent.config.prompt = ensureCouncilPrompt(agent.config.prompt);
       }
 
       return agent;

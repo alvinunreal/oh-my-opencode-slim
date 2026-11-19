@@ -96,13 +96,9 @@ return [orchestrator, ...allSubAgents];
 The council agent is a synthesis-only specialist:
 - Receives raw responses from multiple councillors (different models) via orchestrator dispatch
 - Has NO tools - cannot read, glob, grep, or run shell commands
-- Follows mandatory Synthesis Process steps before producing output
-- Formats output with Council Response, Per-Councillor Details, and Council Summary sections
-- `ensureCouncilSynthesisReinforcement()` re-applies the fallback-only
-  synthesis reinforcement (compact fallback when a custom prompt override
-  dropped the report format) to the final effective prompt;
-  `ensureCouncilCompactionException()` keeps the host-template exception
-  idempotently
+- Uses one report format: Council Response, Per-Councillor Details, and Council Summary
+- `ensureCouncilPrompt()` restores that format only when an override drops it and
+  keeps the host compaction exception without duplication
 
 ### Model Resolution and Fallback
 

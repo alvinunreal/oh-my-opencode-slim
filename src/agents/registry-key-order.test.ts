@@ -216,7 +216,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'councillor-alpha',
       'panel',
     ],
-    sha256: 'ab12bd9ebb885b3c79bdac23e4a7c4b951b17a23cfeb853c9d5c24fd7fd52752',
+    sha256: '207de4c45004390c0a61157819973767e622d1ff91f1f5773f6b864cbe4659c8',
   },
   'empty host model': {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],

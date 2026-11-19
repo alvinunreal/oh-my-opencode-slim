@@ -1068,6 +1068,21 @@ describe('createV2Setup e2e', () => {
         temperature: 0.35,
         native: true,
       });
+      // Resume a bound child with a model but no agent. The public tool
+      // bridge must preserve the override through admission and retry.
+      const agentlessChild = await launch('agentless-child', 'root', {});
+      expect(stored.get(`session-preset/v1/${agentlessChild}`).explicitModel).toBe(false);
+      await launch('agentless-resume', 'root', {
+        agent: undefined,
+        sessionID: agentlessChild,
+        model: 'manual/agentless#low',
+      });
+      expect(stored.get(`session-preset/v1/${agentlessChild}`).explicitModel).toBe(true);
+      expect(nativeInputs.at(-1)?.model).toBe('manual/agentless#low');
+      const beforeAgentlessRetry = switches.length;
+      await retry(agentlessChild, 'manual', 'agentless');
+      expect(switches).toHaveLength(beforeAgentlessRetry);
+
       const explicitChild = await launch('explicit-call', 'root', {
         model: 'manual/chosen#low',
       });
@@ -1357,6 +1372,9 @@ describe('createV2Setup e2e', () => {
       });
       afterNativePrompt = undefined;
       expect(nativeInputs.at(-1)?.model).toBe('manual/resumed#low');
+      expect(stored.get('session-preset/v1/ses_child-1').explicitModel).toBe(
+        true,
+      );
       expect(
         stored.get('session-preset/v1/ses_child-1').bundle.presetName,
       ).toBe('A');
