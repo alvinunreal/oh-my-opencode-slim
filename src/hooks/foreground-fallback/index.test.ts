@@ -3729,6 +3729,53 @@ describe('ForegroundFallbackManager chain generation pins', () => {
     }
   });
 
+  test('an adopted live chain keeps its models and variants across refresh', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = {
+      designer: [
+        'first/a',
+        { id: 'second/b', variant: 'high' },
+        { id: 'third/c', variant: 'low' },
+      ],
+    };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    const fail = (providerID: string, id: string, variant?: string) =>
+      manager.handleV2Retry(
+        {
+          sessionID: 'stale-descent',
+          agent: 'designer',
+          model: { providerID, id, ...(variant ? { variant } : {}) },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+    try {
+      manager.pinSessionChains('stale-descent', {});
+      await fail('first', 'a');
+      expect(switchModel).toHaveBeenLastCalledWith('stale-descent', {
+        providerID: 'second',
+        id: 'b',
+        variant: 'high',
+      });
+
+      chains.designer = [{ id: 'second/b', variant: 'new-variant' }];
+      await fail('second', 'b', 'high');
+      expect(switchModel).toHaveBeenCalledTimes(2);
+      expect(switchModel).toHaveBeenLastCalledWith('stale-descent', {
+        providerID: 'third',
+        id: 'c',
+        variant: 'low',
+      });
+    } finally {
+      manager.dispose();
+    }
+  });
+
   test('an explicitly disabled chain stays disabled even when the live table has a chain (#1927)', async () => {
     createMockClient();
     const chains: Record<

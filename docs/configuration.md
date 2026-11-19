@@ -488,6 +488,11 @@ on their next admission; invalid configuration preserves their previous
 snapshot. Named-preset bindings stay pinned until explicitly reapplied.
 Bindings persist across restarts.
 
+If a saved snapshot has no fallback-chain entry for an agent, its first chain
+lookup adopts that agent's current configured chain. The adopted models and
+variants stay pinned across later config refreshes. An explicit empty chain
+keeps fallback disabled.
+
 Same-ID continuation is best-effort. The host selects the model, the plugin
 installs inference options before the prompt, and a successful native return
 saves the adopted snapshot. Failures are reported without rolling back native

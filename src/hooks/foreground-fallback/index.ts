@@ -2316,8 +2316,11 @@ export class ForegroundFallbackManager {
         const live = this.chainSource[agentName];
         if (live?.length) {
           const normalized = live.map((entry) =>
-            typeof entry === 'string' ? { id: entry } : entry,
+            typeof entry === 'string' ? { id: entry } : { ...entry },
           );
+          // Adopt into the existing pin so refreshes cannot change the
+          // chain while this session retains its retry and exhaustion state.
+          generation[agentName] = normalized;
           entries = normalized;
           chain = normalized.map((entry) => entry.id);
         }
