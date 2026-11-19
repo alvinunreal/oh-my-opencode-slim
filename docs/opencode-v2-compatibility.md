@@ -264,7 +264,7 @@ different: it first snapshots the configured host namespace inventory from
 `ctx.mcp.transform`, which is required for finalized-registry permission
 policy. A missing transform or unavailable inventory fails setup and
 unwinds registrations already acquired. The session hooks
-(`prompt`, `context`, `model.request`, `compaction`) register
+(`prompt`, `context`, `generate`, `model.request`, `compaction`) register
 **unconditionally** on full v2 contexts: a registration failure fails
 setup loudly instead of degrading — hook-name rejection is treated as a
 host contract violation, not a degrade path. Separately, `session.update`
@@ -404,8 +404,14 @@ currently break this plugin:
   ruleset instead of keeping the parent's inherited session rules;
   triggered on plugin-managed child
   `session.created` and fail-soft with a one-time warning on reduced
-  hosts without the method); the `generate` session hook, the `title`
-  hook, and the `tabs` methods are not used. On the client SDK,
+  hosts without the method); the `generate` session hook is adopted as a
+  request-shaping bridge — auxiliary warm-up requests get the same
+  orchestrator system prompt, system collapse, and session-frozen runtime
+  profile options as the primary loop, so their prompt prefix stays
+  cacheable (issue #1934; only those idempotent steps replay, messages
+  shaping is turn-state dependent and is not replayed, and `title` requests
+  stay unshaped so orchestrator instructions never enter them); the `title`
+  hook and the `tabs` methods are not used. On the client SDK,
   `server.status` is named `server.info` (the plugin never calls it),
   and the `location.reload` / `fs.write` endpoints and the Form
   `hidden` field are likewise not adopted. The applied child-session

@@ -503,6 +503,8 @@ Same-ID continuation is best-effort. The host selects the model, the plugin
 installs inference options before the prompt, and a successful native return
 saves the adopted snapshot. Failures are reported without rolling back native
 model or history changes; repeating a failed call can submit the prompt again.
+An explicit model on a resumed Slim child disables preset fallback for that
+child, including continuations that omit the agent name.
 
 Only subagent inference settings (`model`, `variant`, `temperature`,
 `options`, and fallback chains) are isolated. Prompts, tools, permissions,

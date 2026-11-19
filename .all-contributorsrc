@@ -1370,6 +1370,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "begenchgeldyev",
+      "name": "Begench",
+      "avatar_url": "https://avatars.githubusercontent.com/u/83501597?v=4",
+      "profile": "https://begenchgeldyev.com/",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
