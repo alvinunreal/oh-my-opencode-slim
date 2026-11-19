@@ -166,6 +166,55 @@ describe('durable session team presets', () => {
     };
   }
 
+  test('a null team admission passes native execution through without preset reads', async () => {
+    const presets = createSessionPresets({
+      directory: '/project',
+      storage: {
+        get: async () => {
+          throw new Error('unexpected preset read');
+        },
+        set: async () => {
+          throw new Error('unexpected preset write');
+        },
+        remove: async () => {},
+        scan: async () => ({ entries: [] }),
+      },
+      session: {
+        get: async () => {
+          throw new Error('unexpected session lookup');
+        },
+      } as never,
+      current: () => {
+        throw new Error('unexpected profile resolution');
+      },
+    });
+    const updates: unknown[] = [];
+    for (const sessionID of [undefined, 'native-child']) {
+      const input = { agent: 'explore', ...(sessionID ? { sessionID } : {}) };
+      const context = {
+        sessionID: 'parent',
+        id: `native-${sessionID ?? 'new'}`,
+        signal: new AbortController().signal,
+        progress: async (update: unknown) => {
+          updates.push(update);
+        },
+      };
+      const execute = wrapSessionPresetSubagent({
+        presets,
+        capture: async () => ({ bundle: null, explicitModel: false }),
+        execute: async (received, raw) => {
+          expect(received).toBe(input);
+          await (
+            raw as { progress: (update: unknown) => Promise<void> }
+          ).progress({ sessionID: 'native-child' });
+          return 'native-result';
+        },
+      });
+      expect(await execute(input, context)).toBe('native-result');
+    }
+    expect(updates).toHaveLength(2);
+  });
+
   test('state and RPC display the saved team rather than the edited same-name default without binding on read', async () => {
     const f = fixture();
     const saved = f.bundle('A');

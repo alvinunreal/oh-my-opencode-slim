@@ -107,14 +107,14 @@ describe('plugin feature gates through exported hooks', () => {
       true,
     ],
   ] as const) {
-    test(`webfetch ${label}: registration and JSDOM probe agree`, async () => {
+    test(`webfetch ${label}: registration never loads JSDOM`, async () => {
       await configure({ backgroundJobs: { mode: 'off' }, ...options });
-      const probe = spyOn(jsdom, 'probeJSDOM').mockResolvedValue(null);
+      const probe = spyOn(jsdom, 'loadJSDOM');
       let hooks: PluginHooks | undefined;
       try {
         hooks = await createHooks();
         expect(Boolean(hooks.tool?.webfetch)).toBe(enabled);
-        expect(probe).toHaveBeenCalledTimes(enabled ? 1 : 0);
+        expect(probe).not.toHaveBeenCalled();
       } finally {
         await hooks?.dispose?.();
         probe.mockRestore();

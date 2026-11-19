@@ -133,3 +133,39 @@ describe('nested-dispatch stance', () => {
     }
   });
 });
+
+describe('observer read-only permissions', () => {
+  test('grants inspection tools only and keeps the no-nested stance', () => {
+    const def = createObserverAgent('provider/model');
+    const permission = def.config.permission as Record<
+      string,
+      'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>
+    >;
+
+    for (const tool of [
+      'read',
+      'glob',
+      'grep',
+      'lsp',
+      'list',
+      'codesearch',
+      'ast_grep_search',
+    ]) {
+      expect(permission[tool]).toBe('allow');
+    }
+    for (const tool of [
+      'bash',
+      'edit',
+      'write',
+      'apply_patch',
+      'ast_grep_replace',
+      'question',
+    ]) {
+      expect(permission[tool]).toBe('deny');
+    }
+    // Unlisted tools stay unavailable, and the read-only spread's
+    // `task: 'deny'` yields to the role's nested-dispatch stance.
+    expect(permission['*']).toBe('deny');
+    expect(permission.task).toEqual({ '*': 'deny' });
+  });
+});

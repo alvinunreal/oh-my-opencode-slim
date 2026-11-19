@@ -4,7 +4,8 @@ Council seat assembly loads only when the council agent is present. OpenCode
 owns dispatch, execution, and completion delivery.
 
 - `index.ts` exposes `createCouncilSeatHook(input)`. The existing V2 bridge
-  supplies normalized delegation arguments. The hook parses the last matching
+  supplies normalized delegation arguments. The finalized Council identity
+  predicate also accepts a renamed visible Council agent. The hook parses the last matching
   `Seats:` line once and replaces it with ordered, labeled seat results.
   Other calls and prompts without a matching line pass through unchanged.
 - `native.ts` checks each exact `ses_` reference against the calling parent

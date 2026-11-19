@@ -48,7 +48,11 @@ type ImageCatalog = ReadonlyMap<
 function imageInputOf(capabilities: unknown): boolean | undefined {
   if (!capabilities || typeof capabilities !== 'object') return undefined;
   const input = (capabilities as { input?: unknown }).input;
-  if (Array.isArray(input)) return input.includes('image');
+  if (Array.isArray(input))
+    return input.some(
+      (modality) =>
+        typeof modality === 'string' && modality.startsWith('image'),
+    );
   return undefined;
 }
 
@@ -58,8 +62,9 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** v2 `model.list()` payload: `{ data: ModelInfo[] }`, each entry carrying
- * `providerID`, `modelID` and the merged `capabilities`. */
+/** v2 `model.list()` payload: `{ data: Model.Info[] }`. Index by the stable
+ *  selection `id` that `provider/model` refs name, not the provider-facing
+ *  `modelID` (aliases such as `*-fast` share that with their base model). */
 function catalogFromModelList(payload: unknown): ImageCatalog {
   const catalog = new Map<string, Map<string, boolean | undefined>>();
   const data = recordOf(payload)?.data;
@@ -67,14 +72,14 @@ function catalogFromModelList(payload: unknown): ImageCatalog {
   for (const entry of data) {
     const rec = recordOf(entry);
     const providerID = rec?.providerID;
-    const modelID = rec?.modelID;
-    if (typeof providerID !== 'string' || typeof modelID !== 'string') continue;
+    const id = rec?.id;
+    if (typeof providerID !== 'string' || typeof id !== 'string') continue;
     let models = catalog.get(providerID);
     if (!models) {
       models = new Map<string, boolean | undefined>();
       catalog.set(providerID, models);
     }
-    models.set(modelID, imageInputOf(rec?.capabilities));
+    models.set(id, imageInputOf(rec?.capabilities));
   }
   return catalog;
 }

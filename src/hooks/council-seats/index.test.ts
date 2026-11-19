@@ -473,3 +473,11 @@ test('the real V2 bridge normalizes subagent and serializes the rewritten input'
   expect(session.get.mock.calls).toEqual([[{ sessionID: CHILD }]]);
   expect(session.context.mock.calls).toEqual([[{ sessionID: CHILD }]]);
 });
+
+test('assembles seats for the finalized renamed Council identity', async () => {
+  const host = fakeHost({}, { isCouncilAgent: (name) => name === 'judge' });
+  const args = { ...ARGS, subagent_type: '  judge  ' };
+  await host.before(CALL, { args });
+  expect(args.prompt).toBe(assembled(ANSWER));
+  expect(host.get).toHaveBeenCalledTimes(1);
+});

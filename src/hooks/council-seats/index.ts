@@ -19,7 +19,7 @@ interface CouncilSeatHook {
 /** Assemble only the council calls already normalized by the V2 bridge. */
 export function createCouncilSeatHook(
   input: PluginInput,
-  options?: SeatReadOptions,
+  options?: SeatReadOptions & { isCouncilAgent?: (name: string) => boolean },
 ): CouncilSeatHook {
   return {
     'tool.execute.before': async (call, output) => {
@@ -30,7 +30,11 @@ export function createCouncilSeatHook(
       const args = output?.args;
       if (!isRecord(args) || Array.isArray(args)) return;
       const agent = args.subagent_type;
-      if (typeof agent !== 'string' || agent.trim() !== 'council') return;
+      if (
+        typeof agent !== 'string' ||
+        !(options?.isCouncilAgent?.(agent.trim()) ?? agent.trim() === 'council')
+      )
+        return;
       if (typeof args.prompt !== 'string') return;
 
       // The last matching line wins over a roster quoted in the question.

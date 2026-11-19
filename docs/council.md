@@ -261,9 +261,9 @@ Two model layers: the **Council agent** model (`@council`, the final synthesis)
 and the **councillor** models that fan out in parallel. Configure the Council
 agent to change the synthesizer or shared council behavior; configure
 councillors to change who votes, model diversity, or role behavior.
-`agents.councillor` can set shared councillor options (temperature, MCPs,
-skills) but **never** the councillor model — that always comes from
-`council.presets.<preset>.<councillor>.model`.
+`agents.councillor` can set shared councillor options (temperature, provider
+`options`, MCPs, skills, color) but **never** the councillor model or variant —
+those come from `council.presets.<preset>.<councillor>` (`model` and `variant`).
 
 ---
 

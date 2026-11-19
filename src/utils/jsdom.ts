@@ -35,20 +35,3 @@ const loadJSDOMFromFile = createJSDOMLoader(importJSDOM);
 export function loadJSDOM(): Promise<JsdomModule> {
   return loadJSDOMFromFile();
 }
-
-/**
- * Probe jsdom without making it a prerequisite for the rest of the plugin.
- * The optional loader is a test seam for the non-fatal failure contract.
- */
-export async function probeJSDOM(
-  load: JsdomLoader = loadJSDOM,
-): Promise<string | null> {
-  try {
-    const { JSDOM } = await load();
-    const dom = new JSDOM('<!DOCTYPE html><html><body>test</body></html>');
-    dom.window.close();
-    return null;
-  } catch (err) {
-    return String(err);
-  }
-}

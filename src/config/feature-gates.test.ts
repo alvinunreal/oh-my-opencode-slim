@@ -72,6 +72,7 @@ describe('resolveFeatureGates', () => {
     expect(gates).toEqual({
       backgroundJobsMode: 'native',
       presetRouting: true,
+      replaceBuiltinSubagents: true,
       tui: true,
       sidebar: true,
       interview: true,
@@ -100,6 +101,37 @@ describe('resolveFeatureGates', () => {
     const off = resolveFeatureGates({ backgroundJobs: { mode: 'off' } });
     expect(off.backgroundJobsMode).toBe('off');
     expect(off.presetRouting).toBe(false);
+  });
+
+  test('session preset routing is independent of native task controls', () => {
+    expect(
+      resolveFeatureGates({
+        backgroundJobs: { mode: 'off' },
+        sessionPresetRouting: true,
+      }),
+    ).toMatchObject({ backgroundJobsMode: 'off', presetRouting: true });
+    expect(
+      resolveFeatureGates({
+        backgroundJobs: { mode: 'native' },
+        sessionPresetRouting: false,
+      }),
+    ).toMatchObject({ backgroundJobsMode: 'native', presetRouting: false });
+    expect(
+      resolveFeatureGates({ replaceBuiltinSubagents: false })
+        .replaceBuiltinSubagents,
+    ).toBe(false);
+  });
+
+  test('rejects invalid explicit modes before sanitization or runtime seeding', () => {
+    for (const mode of ['of', null, false, 42, {}]) {
+      const config = { backgroundJobs: { mode } };
+      expect(() =>
+        validateExplicitHostConfig(config, 'v2', '/config/slim.json'),
+      ).toThrow('Invalid backgroundJobs.mode');
+      expect(() => resolveFeatureGates(config as FeatureGateConfig)).toThrow(
+        'Invalid backgroundJobs.mode',
+      );
+    }
   });
 
   test('keeps the sidebar off whenever the TUI master switch is off', () => {
@@ -215,6 +247,7 @@ describe('resolveFeatureGates', () => {
     expect(gates).toEqual({
       backgroundJobsMode: 'native',
       presetRouting: true,
+      replaceBuiltinSubagents: true,
       tui: false,
       sidebar: false,
       interview: false,

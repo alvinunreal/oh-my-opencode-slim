@@ -60,6 +60,10 @@ export function getAgentMcpList(
     return agentConfig.mcps;
   }
 
+  if (agentName.startsWith('councillor-')) {
+    return agents.councillor?.mcps ?? DEFAULT_AGENT_MCPS.councillor;
+  }
+
   const defaultMcps = DEFAULT_AGENT_MCPS[agentName as AgentName];
   return defaultMcps ?? [];
 }

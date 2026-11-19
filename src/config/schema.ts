@@ -522,7 +522,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .enum(['native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "native" (default on OpenCode v2) relies on host delegation, with task_status, task_cancel, task_reply and task_report. Cancellation reports request acceptance, not confirmed interruption. "off" registers no Slim task tools and disables session-preset routing on v2. Agent inference settings still register normally.',
+      'Slim task controls: "native" (default) exposes task_status, task_cancel, task_reply and task_report; "off" registers none. Both use the native OpenCode lifecycle. Session preset routing defaults to on in native and off in off; sessionPresetRouting overrides that default.',
     ),
   enabled: z
     .never({
@@ -845,6 +845,18 @@ const RawPluginConfigSchema = z
   .object({
     preset: z.string().optional(),
     setDefaultAgent: z.boolean().optional(),
+    sessionPresetRouting: z
+      .boolean()
+      .optional()
+      .describe(
+        'Enable per-session preset binding and inference routing independently of Slim task controls. When absent, follows backgroundJobs.mode (native enables routing, off disables it). The static preset still applies at startup.',
+      ),
+    replaceBuiltinSubagents: z
+      .boolean()
+      .optional()
+      .describe(
+        'Hide undeclared OpenCode general and explore subagents in favor of Slim specialists. Set false to leave the host roster untouched. Default true.',
+      ),
     questionTimeoutMs: z
       .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
       .optional()
@@ -879,7 +891,7 @@ const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when oh-my-opencode-slim.json(c) changes on disk. When false, v2 does not watch config files and file edits apply only after a restart; explicit /preset writes still refresh the current generation where applicable. Defaults to true.',
+        'Master switch for the config-file watcher that reloads model/preset profiles. With no session-preset, sidebar, or retry consumer, no watcher or profile seed is constructed. Set false to apply file edits only after restart; explicit preset applications remain available.',
       ),
     stripOrchestratorModel: z
       .boolean()
