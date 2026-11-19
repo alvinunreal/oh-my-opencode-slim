@@ -139,6 +139,7 @@ import type {
   V2PermissionRule,
   V2SessionCompactionEvent,
   V2SessionContextEvent,
+  V2SessionGenerateEvent,
   V2SessionModelRequestEvent,
   V2SessionPromptEvent,
   V2ToolAfterEvent,
@@ -692,6 +693,31 @@ export function createSessionContextHandler(
       }
     }
     // Session-frozen runtime profile (options record only).
+    await applyRuntimeProfileStep(event, deps);
+  };
+}
+
+/** Build the `ctx.session.hook("generate")` handler (issue #1934).
+ *
+ * Upstream fires `session.generate` requests through the `generate` session
+ * hook instead of `context`, with the identical mutable
+ * `system`/`messages`/`options`/`tools` payload built from the same
+ * `SessionModelRequest.baseTranscript` as the primary loop. Without a
+ * bridge, a warm-up generate request never received the orchestrator system
+ * prompt, `collapseSystemInPlace`, or the session-frozen runtime-profile
+ * options, and its prompt prefix could not match the primary request (a
+ * provider cache miss on every such request). Only the two idempotent
+ * shaping steps replay here: messages shaping is turn-state dependent
+ * (injection gates, volatile tails, per-turn breakpoints) and is NOT
+ * replayed, and `title`/`compaction` stay unshaped on purpose so
+ * orchestrator instructions never enter title/summarization requests. The
+ * shaped system bytes are intentionally identical to the primary path —
+ * that byte parity is the point of the bridge. */
+export function createSessionGenerateHandler(
+  deps: ShapingStepDeps,
+): (event: V2SessionGenerateEvent) => Promise<void> {
+  return async (event) => {
+    await applySystemTransform(event, deps);
     await applyRuntimeProfileStep(event, deps);
   };
 }
@@ -3564,6 +3590,19 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         const reg = await ctx.session.hook('context', handler);
         disposers.push(() => reg.dispose());
         log('[v2] session context hook registered');
+
+        // v2 session.generate: auxiliary generate requests (e.g. warm-up)
+        // get the same system/profile shaping as the primary loop so their
+        // prompt prefix stays cacheable — see createSessionGenerateHandler.
+        const generateReg = await ctx.session.hook(
+          'generate',
+          createSessionGenerateHandler({
+            systemTransform,
+            applyRuntimeProfile,
+          }),
+        );
+        disposers.push(() => generateReg.dispose());
+        log('[v2] generate bridge registered (session.generate)');
 
         // v1 chat.headers → v2 session.model.request (per-provider-request
         // HTTP headers; registered unconditionally when the v1
