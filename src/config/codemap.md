@@ -168,7 +168,11 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ### PluginConfig (Root Schema)
 - `preset`: Active preset name
-- `setDefaultAgent`: Whether to set default agent model
+- `setDefaultAgent`: Whether to select the orchestrator as the default agent
+- `sessionPresetRouting`: Session binding and inference routing, independently
+  selectable from Slim task controls; absent follows `backgroundJobs.mode`
+- `replaceBuiltinSubagents`: Controls replacement of undeclared host general/explore
+  agents (default true)
 - `autoUpdate`: Single master switch for OMOS plugin update checks, notices, and automatic installs; the `auto-update-checker` hook-list alias is removed
 - `presets`: Named preset groupings (map of presetName → AgentOverrideConfig)
 - `agents`: Per-agent overrides (map of agentName → AgentOverrideConfig)

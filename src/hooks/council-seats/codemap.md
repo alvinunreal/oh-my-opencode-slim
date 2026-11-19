@@ -22,10 +22,10 @@ the native host-session resolver (`native.ts`).
   refs report themselves (`[no seat references were provided]`). Fail-open:
   a resolver rejection or malformed result becomes one placeholder per ref
   (`[no response — resolver error]`); assembly never throws.
-- **index.ts** — `createCouncilSeatHook({ resolveSeats })`: acts only on a
-  delegation call whose agent is exactly `council` (v1
-  `subagent_type` or raw v2 `agent`, trimmed) with a string prompt that
-  carries a Seats line; everything else passes through byte-identically.
+- **index.ts** — `createCouncilSeatHook({ isCouncilAgent, resolveSeats })`: acts
+  only on a delegation to the canonical or visible Council identity (v1
+  `subagent_type` or raw v2 `agent`, trimmed) with a string prompt that carries
+  a Seats line; everything else passes through byte-identically.
   Logs one line without prompt content. No timers, no polling, no
   persistence.
 - **native.ts** — `createNativeSeatResolver(input)`: no board, no

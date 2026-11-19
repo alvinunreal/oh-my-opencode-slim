@@ -14,6 +14,7 @@ import { RuntimeConfig } from '../config/runtime';
 import {
   type AgentModelProjection,
   applyModelInheritanceToConfig,
+  createAgentInferenceViews,
   createAgents,
   getAgentConfigs,
   getAgentConfigsFromDefinitions,
@@ -1350,6 +1351,26 @@ describe('tool permissions', () => {
     expect(Object.values(permission)).not.toContain('allow');
   });
 
+  test('observer remains read-only after default permissions are applied', () => {
+    const agents = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'));
+    const observer = agents.find((agent) => agent.name === 'observer');
+    const permission = observer?.config.permission as Record<
+      string,
+      'allow' | 'deny' | Record<string, 'allow' | 'deny'>
+    >;
+    expect(permission['*']).toBe('deny');
+    expect(permission.read).toBe('allow');
+    expect(permission.glob).toBe('allow');
+    expect(permission.grep).toBe('allow');
+    expect(permission.bash).toBe('deny');
+    expect(permission.edit).toBe('deny');
+    expect(permission.write).toBe('deny');
+    expect(permission.apply_patch).toBe('deny');
+    expect(permission.ast_grep_replace).toBe('deny');
+    expect(permission.task).toEqual({ '*': 'deny' });
+    expect(permission.task_report).toBe('deny');
+  });
+
   test('councillor remains read-only after default permissions are applied', () => {
     const agents = createAgents(
       runtimeFor({
@@ -2339,6 +2360,94 @@ describe('getAgentConfigs', () => {
 
     expect(configs.council.color).toBe('#123ABC');
     expect(configs['councillor-alpha']?.color).toBe('#123ABC');
+  });
+});
+
+describe('dynamic councillor shared overrides', () => {
+  const seats = {
+    default_preset: 'default',
+    presets: {
+      default: {
+        alpha: { model: 'test/alpha' },
+        beta: { model: 'test/beta' },
+      },
+    },
+  };
+
+  test('shared temperature/options do not replace per-seat models or variants', () => {
+    const runtime = runtimeFor({
+      council: CouncilConfigSchema.parse(seats),
+      agents: {
+        councillor: {
+          model: 'shared/model',
+          variant: 'shared-variant',
+          temperature: 0.3,
+          options: { textVerbosity: 'low' },
+        },
+      },
+    });
+    const configs = getAgentConfigs(runtime);
+    for (const [seat, model] of [
+      ['alpha', 'test/alpha'],
+      ['beta', 'test/beta'],
+    ] as const) {
+      const config = configs[`councillor-${seat}`];
+      expect(config.model).toBe(model);
+      expect(config.variant).toBeUndefined();
+      expect(config.temperature).toBe(0.3);
+      expect(config.options).toEqual({ textVerbosity: 'low' });
+    }
+  });
+
+  test('inference views carry the shared settings without seat prompts', () => {
+    const runtime = runtimeFor({
+      council: CouncilConfigSchema.parse(seats),
+      agents: {
+        councillor: {
+          temperature: 0.4,
+          options: { reasoningEffort: 'medium' },
+        },
+      },
+    });
+    const views = createAgentInferenceViews(runtime);
+    for (const [seat, model] of [
+      ['alpha', 'test/alpha'],
+      ['beta', 'test/beta'],
+    ] as const) {
+      const view = views.find(({ name }) => name === `councillor-${seat}`);
+      expect(view?.config.model).toBe(model);
+      expect(view?.config.temperature).toBe(0.4);
+      expect(view?.config.options).toEqual({ reasoningEffort: 'medium' });
+      expect(view?.config.prompt).toBeUndefined();
+    }
+  });
+
+  test('shared skills grant seat skills without widening read-only or task roles', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({
+        council: CouncilConfigSchema.parse(seats),
+        agents: {
+          councillor: {
+            skills: ['simplify'],
+            permission: {
+              edit: 'allow',
+              task: { '*': 'allow', explorer: 'allow' },
+            },
+          },
+        },
+      }),
+    );
+    const permission = configs['councillor-alpha'].permission as Record<
+      string,
+      unknown
+    >;
+    expect(permission.skill).toMatchObject({ simplify: 'allow' });
+    expect(permission.read).toBe('allow');
+    expect(permission.edit).toBe('deny');
+    expect(permission.write).toBe('deny');
+    expect(permission.bash).toBe('deny');
+    expect(permission.task).toBe('deny');
+    expect(permission.glob).toBe('allow');
   });
 });
 

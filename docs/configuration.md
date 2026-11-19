@@ -244,6 +244,8 @@ council-and-observer-only setup turns off the rest:
 ```jsonc
 {
   "backgroundJobs": { "mode": "off" },
+  // Keep task controls off and skip session-preset routing/profiles too.
+  "sessionPresetRouting": false,
   "interview": { "enabled": false },
   "marketplace": { "enabled": false },
   "tui": false,
@@ -280,7 +282,7 @@ In a resolved configuration, these switches make the listed entries redundant:
 | `tui: false` | `sidebar: false`, `disabled_commands` entries `killall` and `subagent`, and pane settings under `multiplexer` |
 | `interview.enabled: false` | `disabled_commands` entries `interview` and `implement`, and `disabled_tools` entry `interview_submit_state` |
 | `marketplace.enabled: false` | `disabled_tools` entries `marketplace_inspect` and `marketplace_manage` |
-| `backgroundJobs.mode: "off"` | Slim task-tool entries in `disabled_tools`, including `task_status`, `task_cancel`, `task_reply` and `task_report` |
+| `backgroundJobs.mode: "off"` | Slim task-tool entries in `disabled_tools`, including `task_status`, `task_cancel`, `task_reply` and `task_report`, and (unless `sessionPresetRouting: true`) session preset entries |
 | `disabled_skills: ["reflect"]` | `disabled_commands` entry `reflect` |
 
 These implications are one-way. Keep granular disables when a subsystem stays
@@ -304,16 +306,18 @@ otherwise lacks — `task_status` (child state, trailing result, pending
 permissions), `task_cancel` (interrupt a stuck child), permission-only
 `task_reply`, and child `task_report`.
 
-`backgroundJobs.mode: "off"` is stricter: the plugin does not wrap the host's
-`subagent` executor, does not read child sessions before the host validates a
-call, and does not bind session-level presets. Delegated children use the
+With `backgroundJobs.mode: "off"` and no routing override, the plugin does not
+wrap the host's `subagent` executor, does not read child sessions before the
+host validates a call, and does not bind session-level presets. Delegated children use the
 models, variants, temperature and provider options from the registered agent
 configuration (the `preset` default still selects those at startup). Session
-`/preset` bindings and the related RPC are unavailable in this mode; the
-manager keeps global editing and hides session-only actions. Disable the
-`preset` command separately to remove that editor. With `tui: false` as well,
-neither preset command surface is registered. `/preset <name>` reports that
-session routing is disabled. See
+`/preset` bindings and the related RPC are unavailable by default; the manager
+keeps global editing and hides session-only actions. Set `sessionPresetRouting:
+true` to keep session bindings while task controls stay off. Disable the
+`preset` command separately to remove that editor. With routing and `tui`
+both off, neither preset command surface is registered. When the TUI editor
+is available but routing is off, `/preset <name>` reports that session routing
+is disabled. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
@@ -328,7 +332,7 @@ and [Council](council.md) for what remains.
 | `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes. `tui: false` implies this off. |
 | `sidebarShowHiddenAgents` | boolean | `false` | Render internal Council agents (`council`, `councillor`, and the dynamic `councillor-<seat>` agents) as OMOS TUI sidebar rows. When `true`, each row carries the same model, variant, status dot, and session expansion as any other agent. Affects the sidebar only: agent registration, availability, and the host agent picker are unchanged. |
 | `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar and its server-side state, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack, and the server writes no sidebar state; server-side agents, council, observer, hooks, and tools remain active. |
-| `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
+| `liveConfigRefresh` | boolean | `true` | Master switch for the config-file watcher that reloads runtime model/preset profiles. With no session-preset, sidebar, or retry consumer, no watcher or profile seed is constructed. When false, file edits apply after restart; explicit preset applications still resolve the current config. |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
 | `routingBlock` | boolean | `true` | When false, removes the `<Agents>` routing block from the built-in orchestrator prompt. The host's native delegation-tool roster still lists every enabled agent with its one-line description, but it carries no Delegate/Don't routing criteria — the block's routing guidance (~300 tokens) has no roster equivalent, so `false` trades routing quality for tokens, or drops stock routing claims that drift against custom agent prompts (`agents.<name>.prompt`). No effect when an orchestrator.md override already replaces the whole prompt. |
 | `presets` | object | - | Named preset configurations. New preset names are limited to letters, digits, `-`, and `_`; `__omo_*` and JavaScript reserved property names (`__proto__`, `constructor`, `prototype`) are rejected for new presets (pre-existing entries with other names stay visible and applicable) |
@@ -376,11 +380,13 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"mini"` | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. The mini viewer runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.mode` | string | `"native"` | `"native"` enables Slim task controls and session preset binding. `"off"` disables both. OpenCode runs and reports subagents in either mode. |
+| `backgroundJobs.mode` | string | `"native"` | `"native"` enables Slim task controls and session preset binding. `"off"` disables both by default. OpenCode runs and reports subagents in either mode. |
+| `sessionPresetRouting` | boolean | follows `backgroundJobs.mode` | Enables per-session preset binding and inference routing independently: `"native"` defaults on, `"off"` defaults off. Set `true` to keep `/preset` bindings with task controls off; set `false` to leave native task controls without the preset store, RPC, or executor wrapper. The configured `preset` still selects startup agent settings. |
+| `replaceBuiltinSubagents` | boolean | `true` | When true, undeclared OpenCode `general` and `explore` subagents are disabled so the Slim roster is the only delegation target. Set false to retain them with their host inference settings; session preset routing does not apply Slim model or fallback policy to them. |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
-| `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Include `webfetch` to use the native host tool without loading Slim's enhancement or JSDOM probe. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
+| `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Include `webfetch` to use the native host tool without loading Slim's enhancement. JSDOM loads only for HTML extraction, never at startup. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
 | `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
 | `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
@@ -444,7 +450,7 @@ those limits.
 | `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
 | `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
 | `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → host default, `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
-| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning; use `"off"` to disable Slim task tools and session presets. |
+| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning; use `"off"` to disable Slim task tools and (by default) session presets; `sessionPresetRouting: true` keeps the bindings. |
 | `backgroundJobs.maxSessionsPerAgent` | None; Slim no longer retains a reusable-session pool. |
 | `backgroundJobs.stopConfirmationMs` | None; the managed terminal gate was removed. |
 | `backgroundJobs.wallClockTimeoutMs` | None; positive values are rejected on V2. |
@@ -482,7 +488,7 @@ On v2, `/preset` opens a manager with two application scopes:
   session it runs in, like the manager's Current session action.
 
 Each work session binds its resolved inference settings before its first
-managed prompt. New children inherit their direct parent's snapshot,
+managed prompt. New Slim children inherit their direct parent's snapshot,
 including variants, options and fallback chains. Default-bound roots refresh
 on their next admission; invalid configuration preserves their previous
 snapshot. Named-preset bindings stay pinned until explicitly reapplied.
@@ -699,7 +705,8 @@ OpenCode owns child execution, continuation, delivery, and restart recovery.
 Slim defaults to `backgroundJobs.mode: "native"`, which enables exact-ID
 `task_status`, `task_cancel`, permission-only `task_reply`, child
 `task_report`, and session preset binding. Use `"off"` to disable Slim's
-task controls and session bindings.
+task controls; session bindings follow off by default, and
+`sessionPresetRouting: true` keeps them independently.
 
 Remove retired managed lifecycle settings listed in the
 [upgrade guide](v2-native-upgrade.md).

@@ -2174,10 +2174,11 @@ describe('createV2Setup e2e', () => {
     await cleanup();
   }, 20_000);
 
-  test('v2 context bridge preserves live model variant into Companion state', async () => {
+  test('v2 context bridge preserves Companion attribution and variant with sidebar disabled', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({
+        sidebar: false,
         companion: {
           enabled: true,
           binaryPath: path.join(fixtureRoot, 'missing-companion-bin'),

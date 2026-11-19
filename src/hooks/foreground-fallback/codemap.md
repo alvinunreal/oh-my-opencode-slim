@@ -56,7 +56,12 @@ to its parent. Host calls are bounded by timeouts.
 - `sessionModel` tracks observed models; `activeFallback` records confirmed
   switches. An external selection of a different model clears the fallback
   record and its provider marks.
-- `sessionAgent`, `sessionParent`, and pinned chains determine routing.
+- `sessionAgent`, `sessionParent`, and pinned chains determine routing. Observed
+  agent changes replace attribution; a valid current host agent hint takes
+  precedence over a stored identity, including agents without a Slim chain.
+  The registered name selects the chain. Restoration compares canonical
+  owners and drops the old restore state when the owner changes, including
+  when the existing host session lookup first sees the change.
 - `sessionTried`, `sessionRetries`, `requestRejected`, `authGrace`, and
   `chainExhaustion` track the current descent. Confirmed recovery, deletion,
   or an observed return to an eligible primary can re-arm the descent.

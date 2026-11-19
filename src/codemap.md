@@ -216,8 +216,8 @@ Key event flows:
 - **Live Updates**: TUI reads state every 1000ms and animates active Braille
   indicators every 100ms without extra disk reads
 - **Atomic State**: State writes are atomic to prevent corruption
-- **Cold Gating**: Disabled optional subsystems are never constructed — no tools, listeners, timers, state files, or servers — and the enhanced `webfetch` (including the JSDOM probe) is skipped when disabled
-- **Lazy Initialization**: The webfetch JSDOM probe runs async without blocking init, and only when the enhanced tool is enabled
+- **Cold Gating**: Disabled optional subsystems are never constructed — no tools, listeners, timers, state files, or servers. The enhanced `webfetch` implementation is skipped when disabled.
+- **Lazy Initialization**: JSDOM loads only for HTML extraction, never at plugin startup.
 - **Event-Driven**: Minimal polling; relies on OpenCode's event system
 
 ## Future Extensions

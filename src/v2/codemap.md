@@ -48,10 +48,17 @@ entry. Internal inference binding/admission remains active for delegation.
 
 `setup.ts` shares one startup config snapshot with the factory, switches, skills
 and initial profile seed; deliberate refreshes revalidate source identity.
-`backgroundJobs.mode: "off"` cold-gates the whole session-preset subsystem:
-no preset store, profile bridge, RPC, server `/preset`, executor wrapper, or
-child-session reads. Native agents keep the startup model/variant/request
-settings, and the native executor owns delegation.
+`backgroundJobs.mode: "off"` defaults session-preset routing off: no preset
+store, profile bridge, RPC, server `/preset`, executor wrapper, or child-session
+reads. Set `sessionPresetRouting: true` to keep routing with task controls off.
+With no preset, sidebar, or retry consumer, the startup profile seed is also
+skipped; every agent keeps its startup model/variant/request settings, and the
+native executor owns delegation.
+
+Preset dispatch uses the exact finalized plugin roster. Unowned native targets
+carry a null admission through the existing handoff and execute directly without
+preset binding or adoption. Observed foreign identities keep their raw names;
+unregistered configuration aliases never become executable fallback chains.
 When preset routing is enabled, `session-presets.ensureAdmission` returns the
 record and validated host identity from one binding transaction, or `undefined`
 for an id the host reports as not found (advisory absence) or an unavailable
@@ -111,7 +118,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
    - **Session hooks**: Single `ctx.session.hook("context")` handles system/messages transforms, chat.message agent tracking, and marker dispatch with interview bridge integration. Stored synthetic delivery timestamps are projected into the observer by message ID and omitted again from the outgoing context.
    - **Runtime bridges**: Separate session hooks for `prompt`, `model.request`, and `compaction` bridges that adapt v1 chat.headers, chat.message, and session.compaction to v2
    - **Permission rules**: Uses `createPermissionRulesBridge` to apply child-session permission rules via `ctx.session.update({sessionID, permissions})`
-   - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics. With no shared post-tool consumers, v2 still registers the after hook while it owns admission captures (`backgroundJobs.mode` not `off`), and never in `off`
+   - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics. With no shared post-tool consumers, v2 registers the after hook only while session preset routing owns admission captures.
    - **Event pump**: Uses `mapV2EventToV1` for additive-only v2→v1 event synthesis, preserving raw events for the interview bridge
 
 5. **Initialization and Cleanup**: The setup returns a cleanup function that disposes every v2 registration and the v1 `dispose`.
@@ -135,19 +142,22 @@ The v2 runtime surface and plugin contracts are adapted through the following da
   does not disable those bridges. Extension methods on the returned hooks object
   are internal calls, not event subscriptions or timers. Optional consumers keep
   their existing command/tool/feature gates.
-- **Session-frozen runtime profiles.** Config-file refreshes update the profiles
-  available to new children, without rebuilding agent definitions or the host
-  registry. Default-bound roots refresh their saved team on their next
-  admission; named-preset bindings keep theirs until Apply. New-child capture
-  is awaited on `session.prompt`; it preserves valid per-call model selections
-  and refreshes provably retired pins. Existing children keep their captured
-  profile unless an explicit same-agent native continuation adopts a changed
-  parent team through the progress path above. A bound child's agent switch
-  uses that agent's frozen execution profile and preserves the host model;
-  foreign agents receive no plugin profile. System/tools/permissions/skills/MCPs
-  and prompt content stay unchanged. Malformed config refreshes preserve the
-  last-known-good profiles/sidebar, and the TUI reports a refresh request
-  rather than claiming the server has applied it.
+- **Session-frozen runtime profiles.** When a preset, sidebar, or retry consumer
+  exists, config-file refreshes update the profiles available to new children,
+  without rebuilding agent definitions or the host registry. With no such
+  consumer, the startup seed and refresh are skipped and agents keep their
+  startup inference settings. Default-bound roots refresh their saved team on
+  their next admission; named-preset bindings keep theirs until Apply.
+  New-child capture is awaited on `session.prompt`; it preserves valid per-call
+  model selections and refreshes provably retired pins. Existing children keep
+  their captured profile unless an explicit same-agent native continuation
+  adopts a changed parent team through the progress path above. A bound child's
+  agent switch uses that agent's frozen execution profile and preserves the
+  host model; foreign agents receive no plugin profile.
+  System/tools/permissions/skills/MCPs and prompt content stay unchanged.
+  Malformed config refreshes preserve the last-known-good profiles/sidebar, and
+  the TUI reports a refresh request rather than claiming the server has applied
+  it.
 - **Shared session submit.** A single `session-submit.ts` helper submits marker text via `ctx.session.prompt` for both the generic commands and the interview bridge.
 
 ## Integration Points

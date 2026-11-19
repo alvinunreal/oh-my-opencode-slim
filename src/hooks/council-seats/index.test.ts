@@ -10,13 +10,17 @@ import type { SeatRequest, SeatResult } from './types';
 const ASSEMBLED =
   'Question?\n\n## Seat: earl-1\n[no response — unresolved ref]';
 
+const isCanonicalCouncil = (name: string) => name === 'council';
+
 function hookWith(
   results:
     | ((parentSessionID: string, seats: SeatRequest[]) => Promise<SeatResult[]>)
     | Error,
+  isCouncilAgent = isCanonicalCouncil,
 ): { hook: CouncilSeatHook; calls: { count: number } } {
   const calls = { count: 0 };
   const hook = createCouncilSeatHook({
+    isCouncilAgent,
     resolveSeats: async (parent, seats) => {
       calls.count += 1;
       if (results instanceof Error) throw results;
@@ -26,16 +30,10 @@ function hookWith(
   return { hook, calls };
 }
 
-/** The two deps at once: resolver + call counter. */
 function councilHook() {
-  const calls = { count: 0 };
-  const hook = createCouncilSeatHook({
-    resolveSeats: async (_parent, seats) => {
-      calls.count += 1;
-      return seats.map(() => ({ kind: 'missing', reason: 'unresolved ref' }));
-    },
-  });
-  return { hook, calls };
+  return hookWith(async (_parent, seats) =>
+    seats.map(() => ({ kind: 'missing', reason: 'unresolved ref' })),
+  );
 }
 
 async function runBefore(
@@ -71,6 +69,29 @@ describe('council seat hook gating', () => {
     expect(calls.count).toBe(1);
     // seat + childID are both the literal session ref.
     expect(args.prompt).toBe(ASSEMBLED);
+  });
+
+  test('inlines both seat bodies for a renamed council target', async () => {
+    const { hook, calls } = hookWith(
+      async (_parent, seats) =>
+        seats.map(({ seat }) => ({
+          kind: 'completed',
+          text: `Answer from ${seat}`,
+        })),
+      (name) => name === 'judge',
+    );
+    const prompt = 'Question?\nSeats: ses_alpha, ses_beta';
+    const args = { agent: '  judge  ', prompt };
+    await runBefore(hook, 'subagent', args);
+    expect(calls.count).toBe(1);
+    expect(args.prompt).toBe(
+      'Question?\n\n## Seat: ses_alpha\nAnswer from ses_alpha\n\n## Seat: ses_beta\nAnswer from ses_beta',
+    );
+
+    const nonCouncil = { agent: 'council', prompt };
+    await runBefore(hook, 'subagent', nonCouncil);
+    expect(nonCouncil.prompt).toBe(prompt);
+    expect(calls.count).toBe(1);
   });
 
   test('trims the agent value before comparing', async () => {
@@ -188,6 +209,7 @@ describe('council seat hook gating', () => {
   test('session-shaped refs carry childID; aliases do not', async () => {
     let observed: Array<Record<string, unknown>> = [];
     const hook = createCouncilSeatHook({
+      isCouncilAgent: isCanonicalCouncil,
       resolveSeats: async (_parent, seats) => {
         observed = seats as never;
         return seats.map(() => ({ kind: 'missing', reason: 'unresolved ref' }));

@@ -642,6 +642,8 @@ export type ForegroundFallbackOptions = {
    */
   chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>;
   input: PluginInput;
+  /** Canonicalizes actual registered display names, not config aliases. */
+  resolveAgentName?: (agent: string) => string;
   /** Host retry events tolerated before the first model switch. @default 3 */
   maxRetries?: number;
   coordinator?: SessionLifecycle;
@@ -673,6 +675,7 @@ export type ForegroundFallbackOptions = {
  */
 export class ForegroundFallbackManager {
   private readonly input: PluginInput;
+  private readonly resolveAgentName: (agent: string) => string;
   private readonly maxRetries: number;
   private readonly initialRetryDelayMs: number;
   private readonly retryDelayMs: number;
@@ -827,22 +830,38 @@ export class ForegroundFallbackManager {
 
   registerSessionAgent(sessionID: string, agentName: string): void {
     const normalizedAgentName = normalizeAgentHint(agentName);
-    if (
-      !sessionID ||
-      !normalizedAgentName ||
-      this.sessionAgent.has(sessionID)
-    ) {
-      return;
-    }
-    this.sessionAgent.set(sessionID, normalizedAgentName);
+    if (!sessionID || !normalizedAgentName) return;
+    this.acceptAgent(sessionID, normalizedAgentName);
     this.pinSessionChains(sessionID);
   }
 
-  private v2AgentName(sessionID: string, hint?: string): string | undefined {
-    const agent = hint ? normalizeAgentHint(hint) : undefined;
-    return agent && this.pinnedChains(sessionID)[agent]?.length
-      ? agent
-      : (this.sessionAgent.get(sessionID) ?? agent);
+  private sameAgentOwner(
+    a: string | undefined,
+    b: string | undefined,
+  ): boolean {
+    return (
+      a === b ||
+      (a !== undefined &&
+        b !== undefined &&
+        this.resolveAgentName(a) === this.resolveAgentName(b))
+    );
+  }
+
+  /** Compare owners for restoration, but keep the host identity for chains. */
+  private acceptAgent(sessionID: string, agentName: string): void {
+    const previous = this.sessionAgent.get(sessionID);
+    if (previous === agentName) return;
+    if (previous && !this.sameAgentOwner(previous, agentName)) {
+      this.descent.delete(sessionID);
+      this.restoredFrom.delete(sessionID);
+      this.activeFallback.delete(sessionID);
+      this.clearRestoreTimer(sessionID);
+    }
+    this.sessionAgent.set(sessionID, agentName);
+  }
+
+  private v2AgentName(sessionID: string, hint?: unknown): string | undefined {
+    return normalizeAgentHint(hint) ?? this.sessionAgent.get(sessionID);
   }
 
   /** Cancel restore timers and fence off in-flight switches. */
@@ -960,6 +979,7 @@ export class ForegroundFallbackManager {
       timers,
     } = options;
     this.input = input;
+    this.resolveAgentName = options.resolveAgentName ?? ((agent) => agent);
     this.maxRetries = maxRetries;
     this.initialRetryDelayMs = initialRetryDelayMs;
     this.retryDelayMs = retryDelayMs;
@@ -1136,6 +1156,11 @@ export class ForegroundFallbackManager {
           ? `${current.providerID}/${current.id}`
           : undefined;
       if (!hostModel) return;
+      // A native agent switch may retain the fallback model. Check the
+      // identity from this same read before restoring the old agent's model.
+      const agent = this.v2AgentName(sessionID, data.agent);
+      if (agent) this.acceptAgent(sessionID, agent);
+      if (this.descent.get(sessionID) !== descent) return;
       if (
         hostModel === descent.model &&
         (current.variant ?? 'default') === (descent.variant ?? 'default')
@@ -1469,19 +1494,18 @@ export class ForegroundFallbackManager {
     ) => Promise<unknown>,
   ): Promise<void> {
     const { sessionID } = event;
-    const restored = this.restoredFrom.get(sessionID);
-    this.restoredFrom.delete(sessionID);
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
     let failover = false;
     try {
+      if (this.disposed) return;
+      const agent = this.v2AgentName(sessionID, event.agent);
+      if (agent) this.acceptAgent(sessionID, agent);
+      const restored = this.restoredFrom.get(sessionID);
+      this.restoredFrom.delete(sessionID);
       const scope = failoverScope(event.error);
       failover = scope !== undefined;
-      if (
-        !this.retryEnabledFor(sessionID) ||
-        this.disposed ||
-        this.inProgress.has(sessionID)
-      )
+      if (!this.retryEnabledFor(sessionID) || this.inProgress.has(sessionID))
         return;
       if (!failover) return;
       // After a timed-out switch the descent is still live, so the normal
@@ -1522,8 +1546,6 @@ export class ForegroundFallbackManager {
         this.sessionModel.get(sessionID) !== from
       )
         return;
-      const agent = this.v2AgentName(sessionID, event.agent);
-      if (agent) this.sessionAgent.set(sessionID, agent);
       this.sessionModel.set(sessionID, from);
       // Spent allowance on every chain provider: leave the host decision.
       // The host names the model whose attempt failed, so attribution is
@@ -1788,14 +1810,9 @@ export class ForegroundFallbackManager {
       )
         return;
       const agent =
-        this.v2AgentName(
-          sessionID,
-          typeof data.agent === 'string'
-            ? data.agent
-            : typeof anchor.agent === 'string'
-              ? anchor.agent
-              : undefined,
-        ) ??
+        normalizeAgentHint(data.agent) ??
+        normalizeAgentHint(anchor.agent) ??
+        this.sessionAgent.get(sessionID) ??
         (await resolveSessionAgent(getClient(this.input), sessionID, {
           directory: this.input.directory,
         }));
@@ -1844,7 +1861,13 @@ export class ForegroundFallbackManager {
     error: unknown,
     rawFinish: unknown,
   ): Promise<string | undefined> {
-    const restored = this.restoredFrom.get(sessionID);
+    const agent = this.v2AgentName(sessionID, step.agent);
+    const restored = this.sameAgentOwner(
+      agent,
+      this.sessionAgent.get(sessionID),
+    )
+      ? this.restoredFrom.get(sessionID)
+      : undefined;
     this.restoredFrom.delete(sessionID);
     const switchModel = (
       this.input as PluginInput & { experimental_v2?: ExperimentalV2 }
@@ -1867,7 +1890,6 @@ export class ForegroundFallbackManager {
     )
       return;
     this.v2Steps.delete(sessionID);
-    const agent = this.v2AgentName(sessionID, step.agent);
     if (!this.hasFallbackChain(sessionID, agent)) return;
     const epoch = step.epoch;
     this.inProgress.add(sessionID);
@@ -1911,10 +1933,10 @@ export class ForegroundFallbackManager {
       )
         return;
       if ((this.turnEpoch.get(sessionID) ?? 0) !== epoch) return;
+      if (agent) this.acceptAgent(sessionID, agent);
       if (typeof data.parentID === 'string' && data.parentID) {
         this.sessionParent.set(sessionID, data.parentID);
       }
-      if (agent) this.sessionAgent.set(sessionID, agent);
       if (from && !restoredStep) this.sessionModel.set(sessionID, from);
       if (restoredStep && from && failoverScope(error) === 'request') {
         const rejected = this.requestRejected.get(sessionID) ?? new Set();

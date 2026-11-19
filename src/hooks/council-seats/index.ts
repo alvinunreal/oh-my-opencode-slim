@@ -1,12 +1,12 @@
 /**
  * Council seat-result assembly hook (`tool.execute.before`).
  *
- * Acts only on a delegation call whose target agent is exactly `council`
- * (v1 `task` + `subagent_type`, or the raw v2 `subagent` + `agent`), and
- * only when the prompt carries a final `Seats: <ref, ref>` line. Anything
- * else passes through byte-identically. The seat results themselves come
- * from the injected {@link SeatResultResolver}; `native.ts` reads them
- * from host sessions.
+ * Acts only on a delegation to the registered council agent (v1 `task` +
+ * `subagent_type`, or the raw v2 `subagent` + `agent`), and only when the
+ * prompt carries a final `Seats: <ref, ref>` line. Anything else passes
+ * through byte-identically. The seat results themselves come from the
+ * injected {@link SeatResultResolver}; `native.ts` reads them from host
+ * sessions.
  *
  * Unconditional and fail-open: the resolver only acts on the final Seats
  * line and never refuses — a shape check that failed closed (rejecting
@@ -17,7 +17,6 @@ import { log } from '../../utils/logger';
 import { assembleCouncilPrompt, parseSeatRefs } from './assemble';
 import type { SeatResultResolver } from './types';
 
-const COUNCIL_AGENT = 'council';
 const DELEGATION_TOOLS = new Set(['task', 'subagent']);
 
 /** v1/v2 tool.execute.before input shapes (see the v2→v1 bridge in src/v2/setup.ts). */
@@ -39,6 +38,7 @@ export interface CouncilSeatHook {
 }
 
 export interface CouncilSeatHookDeps {
+  isCouncilAgent(name: string): boolean;
   resolveSeats: SeatResultResolver;
 }
 
@@ -58,7 +58,7 @@ export function createCouncilSeatHook(
       // The v2→v1 bridge normalizes calls before this hook runs; both
       // normalized and raw argument shapes are accepted.
       const agent = record.subagent_type ?? record.agent;
-      if (typeof agent !== 'string' || agent.trim() !== COUNCIL_AGENT) {
+      if (typeof agent !== 'string' || !deps.isCouncilAgent(agent.trim())) {
         return;
       }
       if (typeof record.prompt !== 'string') return;

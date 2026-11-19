@@ -116,7 +116,7 @@ function currentSessionID(ctx: V2PresetTuiContext): string | undefined {
  * action, and no restart. Neither path writes the global default. Never
  * throws — failures are surfaced as a toast and logged.
  *
- * When session-scoped preset routing is off (`backgroundJobs.mode: off`),
+ * When session-scoped preset routing is disabled,
  * `/preset <name>` is refused with a clear message; bare `/preset` still
  * opens the manager for global preset editing.
  */
@@ -137,8 +137,7 @@ export async function runPresetFlow(
     if (requested) {
       if (!presetRoutingEnabled) {
         toast(
-          `Session preset binding is unavailable: backgroundJobs.mode is "off". ` +
-            `Use bare /preset to open the manager and edit global presets.`,
+          'Session preset routing is disabled. Use bare /preset to edit global presets.',
         );
         return;
       }

@@ -239,8 +239,10 @@ lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
 child progress reporting. V2 applies the old `"managed"` mode as `"native"`
 with a warning.
 With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
-bindings and all OMOS task tools are disabled, while the configured global
-preset still selects the agent settings registered at startup.
+bindings and all OMOS task tools are disabled by default, while the configured
+global preset still selects the agent settings registered at startup. Set
+`"sessionPresetRouting": true` to keep per-session bindings with task tools
+off.
 See
 [Preset Switching](docs/presets/preset-switching.md) for scope and timing, and
 [Configuration](docs/configuration.md#preset-inheritance) for the inheritance

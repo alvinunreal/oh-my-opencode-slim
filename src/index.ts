@@ -98,7 +98,6 @@ import {
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
-import { probeJSDOM } from './utils/jsdom';
 import { initLogger, log } from './utils/logger';
 import {
   type ModelImageCapabilityCache,
@@ -164,6 +163,7 @@ function buildChainGeneration(
   candidates:
     | Readonly<Record<string, readonly { id: string; variant?: string }[]>>
     | undefined,
+  registered: ResolvedAgentRegistry['managedAgentConfig'] | undefined,
 ): Record<string, ModelChainEntry[]> {
   const copyEntries = (
     entries: readonly { id: string; variant?: string }[],
@@ -185,6 +185,13 @@ function buildChainGeneration(
     for (const [name, entries] of Object.entries(candidates)) {
       if (table[name] || known.has(name) || entries.length <= 1) continue;
       table[name] = copyEntries(entries);
+    }
+  }
+  // Configuration aliases and agents from unregistered presets do not own
+  // host execution identities.
+  if (registered) {
+    for (const name of Object.keys(table)) {
+      if (!Object.hasOwn(registered, name)) delete table[name];
     }
   }
   return table;
@@ -300,6 +307,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     (!!agent && resolveRuntimeAgentName(runtime, agent) === 'orchestrator');
   let agents: ReturnType<typeof getAgentConfigsFromDefinitions>;
   let resolvedAgentRegistry: ResolvedAgentRegistry | undefined;
+  const resolveObservedAgentName = (agent: string): string => {
+    const name = normalizeAgentName(agent);
+    const registry = resolvedAgentRegistry;
+    return (
+      registry?.agentNames.find(
+        (canonical) =>
+          canonical === name || registry.identities[canonical] === name,
+      ) ?? name
+    );
+  };
   let latestHostSnapshot: RegistryHostSnapshot | undefined;
   let hostSnapshotProvenance: 'unknown' | 'clean' = 'unknown';
   let latestNativePermissionsByAgent: Readonly<
@@ -467,6 +484,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     ownedTuiActivitySessions.clear();
   };
   let sessionLifecycle: SessionLifecycle | undefined;
+  const batchEvent = <T>(operation: () => Promise<T>): Promise<T> =>
+    runtime.sidebarEnabled ? withTuiSnapshotBatch(operation) : operation();
   // Mirror of the runtime fallback switches, hoisted out of the try so the
   // returned hooks object can gate v2-only surfaces (retry registration).
   let fallbackRetryHookEnabled = false;
@@ -693,7 +712,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const { createWebfetchTool } = await import('./tools/smartfetch');
       webfetch = createWebfetchTool(ctx);
     }
-    sessionLifecycle = new SessionLifecycle(log);
+    // SessionLifecycle has only fallback cleanup subscribers on this host.
+    if (!runtime.disabledHooks.has('foreground-fallback')) {
+      sessionLifecycle = new SessionLifecycle(log);
+    }
 
     if (!runtime.disabledHooks.has('phase-reminder')) {
       phaseReminder = createPhaseReminderHook();
@@ -768,6 +790,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       foregroundFallback = new fallbackModule.ForegroundFallbackManager({
         chains: foregroundFallbackChains,
         input: ctx,
+        resolveAgentName: resolveObservedAgentName,
         maxRetries: runtime.fallback.maxRetries,
         coordinator: sessionLifecycle,
         // Project confirmed model switches to the live agent state.
@@ -775,7 +798,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           if (detail?.agentName) {
             projectLiveAgentModel(
               sessionID,
-              resolveRuntimeAgentName(runtime, detail.agentName),
+              resolveObservedAgentName(detail.agentName),
               model,
               detail.variant,
             );
@@ -827,6 +850,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ]);
       councilSeatHook = seatHookModule.createCouncilSeatHook({
         resolveSeats: native.createNativeSeatResolver(ctx),
+        isCouncilAgent: (name) => {
+          const normalized = normalizeAgentName(name);
+          if (normalized === 'council') return true;
+          return resolvedAgentRegistry
+            ? resolvedAgentRegistry.identities.council === normalized
+            : resolveRuntimeAgentName(runtime, normalized) === 'council';
+        },
       });
     }
     if (runtime.interviewEnabled) {
@@ -940,22 +970,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       `INIT FAILED: ${String(err)}. Report at github.com/alvinunreal/oh-my-opencode-slim/issues/310`,
     );
     throw err;
-  }
-
-  // ── Probe jsdom (async, non-blocking) ───────────────────────────────
-  // Don't await this; we don't want to block init. The warning will
-  // appear shortly after startup if jsdom is broken. Skipped entirely when
-  // the enhanced webfetch is unavailable (disabled_tools: ["webfetch"]):
-  // a disabled feature must not pay for the JSDOM load (the probe is the only
-  // startup importer of jsdom).
-  if (webfetch) {
-    probeJSDOM().then((err) => {
-      if (err) {
-        const msg = `jsdom probe failed; webfetch tool will not work: ${err}`;
-        log(`[plugin] WARN: ${msg}`);
-        appLog(ctx, 'warn', msg).catch(() => {});
-      }
-    });
   }
 
   if (companionManager) {
@@ -1219,6 +1233,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             runtime,
             agentDefs,
             resolvedAgentRegistry.modelCandidates,
+            resolvedAgentRegistry.managedAgentConfig,
           ),
           runtime,
           (name) => runtime.hasModelSwitched(name),
@@ -1420,14 +1435,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
       // Keep the finalized roster (including marketplace agents), but resolve
       // only inference overrides. No package/resource activation occurs here.
+      const registered = resolvedAgentRegistry?.managedAgentConfig;
       const marketplaceInheritance: SessionTeamBundle['inheritance'] = {};
-      for (const [name, registered] of Object.entries(
-        resolvedAgentRegistry?.getSdkAgentProjection() ?? {},
-      )) {
+      for (const [name, registeredConfig] of Object.entries(registered ?? {})) {
         const manifestBase =
           resolvedAgentRegistry?.marketplaceInferenceBase[name];
         if (Object.hasOwn(freshAgents, name) && !manifestBase) continue;
-        const base = (manifestBase ?? registered) as Record<string, unknown>;
+        const base = (manifestBase ?? registeredConfig) as Record<
+          string,
+          unknown
+        >;
         const override = freshRuntime.agent(name);
         const inference: Record<string, unknown> = {};
         for (const field of [
@@ -1528,14 +1545,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         freshRuntime,
         freshAgentViews,
         freshCandidates,
+        registered,
       );
       const inheritance: SessionTeamBundle['inheritance'] = {};
-      const registered = resolvedAgentRegistry?.getSdkAgentProjection();
       for (const name of Object.keys(profiles)) {
         // Runtime presets cannot register new agents or expand resource policy.
         if (registered && !Object.hasOwn(registered, name)) {
           delete profiles[name];
-          delete chains[name];
           continue;
         }
         const effective = freshRuntime.agent(name);
@@ -1561,6 +1577,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       for (const [identity, canonical] of Object.entries(
         resolvedAgentRegistry?.identities ?? {},
       )) {
+        if (registered && !Object.hasOwn(registered, identity)) continue;
         if (profiles[canonical]) profiles[identity] = profiles[canonical];
         if (chains[canonical]) chains[identity] = chains[canonical];
         if (inheritance[canonical])
@@ -1704,7 +1721,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       chains?: SessionTeamBundle['chains'],
       enabled?: boolean,
     ) => {
-      foregroundFallback?.pinSessionChains(sessionID, chains, enabled);
+      const registered = resolvedAgentRegistry?.managedAgentConfig;
+      foregroundFallback?.pinSessionChains(
+        sessionID,
+        chains && registered
+          ? Object.fromEntries(
+              Object.entries(chains).filter(([name]) =>
+                Object.hasOwn(registered, name),
+              ),
+            )
+          : chains,
+        enabled,
+      );
     },
     // v2-only extension hook: release the pin when the admission that
     // captured it fails, so the retry pins the generation current then.
@@ -1801,15 +1829,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // that is exactly our injected shape is re-asserted, so a host that
       // hands the mutated object back can't out-stare a later user edit
       // (same class as the injectedMcps filter below).
-      const mergedAgentConfig = opencodeConfig.agent as Record<string, unknown>;
-      for (const name of BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE) {
-        const existing = mergedAgentConfig[name];
-        if (
-          existing !== undefined &&
-          !Bun.deepEquals(existing, { disable: true })
-        )
-          continue;
-        mergedAgentConfig[name] = { disable: true };
+      if (runtime.featureGates.replaceBuiltinSubagents) {
+        const mergedAgentConfig = opencodeConfig.agent as Record<
+          string,
+          unknown
+        >;
+        for (const name of BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE) {
+          const existing = mergedAgentConfig[name];
+          if (
+            existing !== undefined &&
+            !Bun.deepEquals(existing, { disable: true })
+          )
+            continue;
+          mergedAgentConfig[name] = { disable: true };
+        }
       }
       const currentMcpConfig =
         opencodeConfig.mcp && typeof opencodeConfig.mcp === 'object'
@@ -1862,7 +1895,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     event: (input) =>
-      withTuiSnapshotBatch(async () => {
+      batchEvent(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
           companionStartupAbort?.abort();
@@ -1998,12 +2031,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             (statusType === 'busy' || statusType === 'retry')
           ) {
             sessionMetadata.markOrchestratorActive(eventSessionID);
-            const agentName = sessionMetadata.getAgent(eventSessionID);
-            if (agentName) {
-              pendingTuiBusySessions.delete(eventSessionID);
-              markTuiAgentActive(eventSessionID, agentName, statusType);
-            } else {
-              pendingTuiBusySessions.set(eventSessionID, statusType);
+            if (runtime.sidebarEnabled || companionManager) {
+              const agentName = sessionMetadata.getAgent(eventSessionID);
+              if (agentName) {
+                pendingTuiBusySessions.delete(eventSessionID);
+                markTuiAgentActive(eventSessionID, agentName, statusType);
+              } else {
+                pendingTuiBusySessions.set(eventSessionID, statusType);
+              }
             }
           } else if (
             event.type === 'session.idle' ||
@@ -2238,9 +2273,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       const rawAgent = input.agent ?? output?.message?.agent;
-      const agent = rawAgent
-        ? resolveRuntimeAgentName(runtime, rawAgent)
-        : undefined;
+      const agent = rawAgent ? resolveObservedAgentName(rawAgent) : undefined;
 
       if (
         agent &&
@@ -2250,8 +2283,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         output.message.agent = agent;
       }
 
-      if (agent) {
-        foregroundFallback?.registerSessionAgent(input.sessionID, agent);
+      if (rawAgent && agent) {
+        foregroundFallback?.registerSessionAgent(
+          input.sessionID,
+          normalizeAgentName(rawAgent),
+        );
         if (!internalAdmission) {
           sessionMetadata.setAgent(input.sessionID, agent);
         }

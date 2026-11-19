@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createJSDOMLoader, loadJSDOM, probeJSDOM } from './jsdom';
+import { createJSDOMLoader, loadJSDOM } from './jsdom';
 
 describe('jsdom loader', () => {
   test('loads jsdom and constructs a basic document', async () => {
@@ -43,13 +43,5 @@ describe('jsdom loader', () => {
     await expect(load()).rejects.toThrow('transient jsdom failure');
     await expect(load()).resolves.toBe(jsdom);
     expect(loadCount).toBe(2);
-  });
-
-  test('reports loader failures without throwing from the probe', async () => {
-    const result = await probeJSDOM(async () => {
-      throw new Error('jsdom unavailable');
-    });
-
-    expect(result).toBe('Error: jsdom unavailable');
   });
 });

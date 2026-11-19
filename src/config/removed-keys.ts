@@ -132,7 +132,7 @@ export function stripRemovedConfigKeys(
   if (isPlainObject(jobs) && jobs.mode === 'managed') {
     jobs.mode = 'native';
     onRemoved(
-      'Config value backgroundJobs.mode "managed" was removed; "native" is applied instead. Use "off" to disable Slim task tools and session presets.',
+      'Config value backgroundJobs.mode "managed" was removed; "native" is applied instead. Use "off" to disable Slim task tools and (by default) session presets.',
       'backgroundJobs.mode',
     );
   }

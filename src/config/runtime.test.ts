@@ -252,6 +252,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.featureGates).toEqual({
       backgroundJobsMode: 'native',
       presetRouting: true,
+      replaceBuiltinSubagents: true,
       tui: true,
       sidebar: true,
       interview: true,

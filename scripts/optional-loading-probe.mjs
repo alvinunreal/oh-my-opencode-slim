@@ -2,10 +2,9 @@
  * Cold-loading probe for scripts/verify-optional-loading.ts.
  *
  * Runs in a throwaway child process owned by the runner. Imports the built
- * server artifact, calls the shared plugin factory with a fake client, waits
- * for the enabled JSDOM startup work to land in the CJS cache, records
- * code/CPU/memory/import/init/disposal numbers plus the registered tool and
- * agent rosters, then disposes the instance. Never executes a feature:
+ * server artifact, calls the shared plugin factory with a fake client,
+ * records code/CPU/memory/import/init/disposal numbers plus the registered
+ * tool and agent rosters, then disposes the instance. Never executes a feature:
  * webfetch is only registered, ACP uses a command string that is never run,
  * and the companion points at a binary that does not exist.
  *
@@ -109,15 +108,8 @@ const hasLoadedJSDOM = () =>
       : false,
   );
 
-// The enabled JSDOM startup probe is complete once Node's CJS record for
-// jsdom/lib/api.js is loaded. Bounded turns of the microtask/macrotask loop:
-// no guessed sleep duration, and no wait at all when the feature is off.
-let settleTurns = 0;
-if (tools.has('webfetch')) {
-  for (; settleTurns < 500 && !hasLoadedJSDOM(); settleTurns += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-}
+// Registration must leave JSDOM cold, even with enhanced webfetch enabled.
+const settleTurns = 0;
 await new Promise((resolve) => setImmediate(resolve));
 if (typeof globalThis.gc === 'function') globalThis.gc();
 const settledAt = performance.now();
@@ -158,7 +150,7 @@ console.log(
       code.external_script_source_size / 1048576
     ).toFixed(2),
     jsdomLoaded,
-    jsdomWaitEnabled: tools.has('webfetch'),
+    jsdomWaitEnabled: false,
     fetchCalls,
     tools: [...tools].sort(),
     agents: [...agents].sort(),

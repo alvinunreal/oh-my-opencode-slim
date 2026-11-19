@@ -26,9 +26,11 @@ The [configuration discovery rules](configuration.md#config-files) apply.
 
 Each explicit configuration layer is validated before merging. Slim converts
 `mode: "managed"` to `"native"` in its own layer and removes inert settings.
-Warnings appear in the log and in `doctor`. Positive concurrency and wall-clock
-limits are rejected because Slim no longer enforces them, even if a nearer layer
-sets `mode: "off"`. The error names the source file, key and value:
+Warnings appear in the log and in `doctor`. Invalid explicit `mode` values are
+rejected before sanitization, so a typo cannot enable native task controls.
+Positive concurrency and wall-clock limits are rejected because Slim no longer
+enforces them, even if a nearer layer sets `mode: "off"`. The error names the
+source file, key and value:
 
 ```text
 <config path>: Unsupported backgroundJobs.concurrency.providerConcurrency.openai = 2 on OpenCode v2: Slim no longer enforces this limit. Remove the key or set it to 0, then run /reload.
@@ -43,7 +45,7 @@ Open `/plugins` and select "view error" for the file and setting, or run
 
 | Existing setting | V2 behavior |
 |---|---|
-| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning. Set `"off"` to disable Slim task tools and session bindings. |
+| `backgroundJobs.mode: "managed"` | Applied as `"native"` with a warning. Set `"off"` to disable Slim task tools and (by default) session bindings; `sessionPresetRouting: true` keeps the bindings. |
 | `backgroundJobs.concurrency` | Positive default, provider or model limits are rejected; empty, zero or malformed values are removed with a warning. |
 | `backgroundJobs.wallClockTimeoutMs` | A positive deadline is rejected; zero, negative or malformed values are removed with a warning. |
 | `backgroundJobs.maxSessionsPerAgent`, `backgroundJobs.stopConfirmationMs` | Removed with a warning. |

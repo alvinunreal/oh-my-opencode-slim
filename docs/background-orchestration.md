@@ -21,8 +21,10 @@ Check your version with `opencode --version`.
 
 ## Lifecycle modes
 
-`backgroundJobs.mode` selects Slim’s task controls and preset binding.
-See the [upgrade guide](v2-native-upgrade.md) for retired settings.
+`backgroundJobs.mode` selects Slim’s task controls. Session preset binding
+follows it by default and can be set independently with
+`sessionPresetRouting`. See the [upgrade guide](v2-native-upgrade.md) for
+retired settings.
 
 ### native (default)
 
@@ -70,10 +72,12 @@ continuations outside the subagent tool. Slim adds no completion watcher.
 ### off
 
 `backgroundJobs.mode: "off"` leaves delegation fully native and registers no
-OMOS task tool. It also skips session-preset routing and its executor wrapper,
-so no OMOS child read or model injection precedes native dispatch or
-continuation. Agent inference settings selected by the configured global preset
-still register at startup. See [Configuration](configuration.md).
+OMOS task tool. It also disables session-preset routing and its executor
+wrapper by default, so no OMOS child read or model injection precedes native
+dispatch or continuation. Set `sessionPresetRouting: true` to enable routing
+independently. Agent inference settings
+selected by the configured global preset still register at startup. See
+[Configuration](configuration.md).
 
 ## Core Principle
 

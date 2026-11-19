@@ -150,6 +150,7 @@ async function runHook(
 ): Promise<Record<string, unknown>> {
   const input = fakeInput(fixture, { hostFlavor: options.hostFlavor });
   const hook = createCouncilSeatHook({
+    isCouncilAgent: (name) => name === 'council',
     resolveSeats: createNativeSeatResolver(input, {
       ...(options.timeoutMs !== undefined
         ? { timeoutMs: options.timeoutMs }

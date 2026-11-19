@@ -3504,6 +3504,33 @@ describe('ForegroundFallbackManager chain generation pins', () => {
       }),
     );
 
+  test.each([true, false])(
+    'a native agent switch stops using the old agent chain (retry hint: %p)',
+    async (hinted) => {
+      createMockClient();
+      const manager = makeGenerationManager({ explorer: ['test/a', 'test/b'] });
+      const switchModel = mock(async () => {});
+      const sessionID = 'switched-child';
+      try {
+        manager.registerSessionAgent(sessionID, 'explorer');
+        if (!hinted) manager.registerSessionAgent(sessionID, 'explore');
+        const decision = { retry: true, delay: 123 };
+        const event = {
+          sessionID,
+          ...(hinted ? { agent: 'explore' } : {}),
+          model: { providerID: 'test', id: 'a' },
+          error: { message: 'Rate limit exceeded' },
+          decision,
+        };
+        await manager.handleV2Retry(event, switchModel);
+        expect(switchModel).not.toHaveBeenCalled();
+        expect(event.decision).toBe(decision);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
   test('durable team chains override an early event pin and isolate new A/B children from global refresh', async () => {
     createMockClient();
     const chains = {
@@ -4304,7 +4331,10 @@ describe('fallback restoration', () => {
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     chain?: string[];
     retryDelayMs?: number;
+    agent?: string;
+    resolveAgentName?: ForegroundFallbackOptions['resolveAgentName'];
   }) {
+    const agent = options?.agent ?? 'orchestrator';
     const info: {
       model:
         | typeof origin
@@ -4313,7 +4343,7 @@ describe('fallback restoration', () => {
       parentID?: string;
     } = {
       model: { ...origin },
-      agent: 'orchestrator',
+      agent,
       parentID: options?.parentID,
     };
     const { client, session, mocks } = createMockClient({
@@ -4328,11 +4358,12 @@ describe('fallback restoration', () => {
     const changed = mock();
     const manager = timedManager({
       chains: {
-        orchestrator: options?.chain ?? ['primary/a', 'backup/b', 'third/c'],
+        [agent]: options?.chain ?? ['primary/a', 'backup/b', 'third/c'],
       },
       v2RetryEnabled: true,
       maxRetries: 0,
       retryDelayMs: options?.retryDelayMs ?? 0,
+      resolveAgentName: options?.resolveAgentName,
       input: {
         directory: '/test',
         hostFlavor: 'v2',
@@ -4343,7 +4374,7 @@ describe('fallback restoration', () => {
     });
     const retry = (model = origin, error: unknown = rejection) =>
       manager.handleV2Retry(
-        { sessionID: sid, agent: 'orchestrator', model, error },
+        { sessionID: sid, agent, model, error },
         switchModel,
       );
     const refuse = async (
@@ -4355,7 +4386,7 @@ describe('fallback restoration', () => {
         data: {
           sessionID: sid,
           assistantMessageID: id,
-          agent: 'orchestrator',
+          agent,
           model,
         },
       });
@@ -4970,6 +5001,50 @@ describe('fallback restoration', () => {
     await clock.advance(1);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
+
+  test.each(['context', 'retry', 'restore lookup', 'display name'] as const)(
+    'fallback restoration respects the current agent (%s)',
+    async (observation) => {
+      const f = fixture({
+        agent: 'explorer',
+        parentID: 'parent',
+        resolveAgentName: (name) => (name === 'Scout' ? 'explorer' : name),
+      });
+      try {
+        await f.retry(origin, outage);
+        expect(f.info.model).toEqual(backup);
+        await f.manager.handleEvent(idle());
+        expect(clock.pending()).toBe(1);
+
+        const sameAgent = observation === 'display name';
+        const agent = sameAgent ? 'Scout' : 'explore';
+        // The host can change the agent without changing the model pin.
+        f.info.agent = agent;
+        if (observation === 'context') {
+          f.manager.registerSessionAgent(sid, agent);
+        } else if (observation === 'retry' || sameAgent) {
+          await f.manager.handleV2Retry(
+            {
+              sessionID: sid,
+              agent,
+              model: backup,
+              error: { status: 400, message: 'bad request' },
+            },
+            f.switchModel,
+          );
+        }
+        expect(clock.pending()).toBe(
+          sameAgent || observation === 'restore lookup' ? 1 : 0,
+        );
+        await clock.advance(ttl);
+        expect(f.info.model).toEqual(sameAgent ? origin : backup);
+        expect(f.switchModel).toHaveBeenCalledTimes(sameAgent ? 2 : 1);
+        expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+      } finally {
+        f.manager.dispose();
+      }
+    },
+  );
 
   test('T6: v2 preserves a manually changed fallback variant', async () => {
     const f = fixture();

@@ -204,7 +204,7 @@ const CASES: readonly Case[] = [
       ...baseConfig,
       disabled_tools: without(BASE_DISABLED_TOOLS, ['webfetch']),
     },
-    note: 'enhanced webfetch and its JSDOM startup probe',
+    note: 'enhanced webfetch registered without loading JSDOM',
   },
 ];
 
@@ -595,8 +595,8 @@ function caseChecks(
     case 'webfetch':
       expectTools(checks, 'webfetch', ['webfetch'], [], registration);
       checks.push({
-        name: 'webfetch startup probe loads JSDOM',
-        ok: result.timing.jsdomLoaded,
+        name: 'webfetch registration leaves JSDOM unloaded',
+        ok: !result.timing.jsdomLoaded,
         detail: `jsdomLoaded=${result.timing.jsdomLoaded}, settleTurns=${result.timing.settleTurns}`,
       });
       break;

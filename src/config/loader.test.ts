@@ -734,7 +734,7 @@ describe('loadPluginConfig', () => {
     expect(resolveFeatureGates(config).webfetch).toBe(false);
   });
 
-  test('a project-layer backgroundJobs bad key sanitizes away without overriding a valid user value (#1291)', () => {
+  test('a v2 project-layer invalid mode is reported even above a valid user off mode', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -753,9 +753,9 @@ describe('loadPluginConfig', () => {
       }),
     );
 
-    const config = loadPluginConfig(projectDir, { silent: true });
-
-    expect(config.backgroundJobs?.mode).toBe('off');
+    expect(() =>
+      loadPluginConfig(projectDir, { silent: true, hostFlavor: 'v2' }),
+    ).toThrow('Invalid backgroundJobs.mode');
   });
 
   test('a project backgroundJobs layer without mode keeps the user mode off', () => {

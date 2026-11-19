@@ -43,6 +43,7 @@ type Message = {
 };
 type ModelRequest = {
   model: string;
+  temperature?: number;
   messages: Array<{ role: string; content?: unknown }>;
   tools?: Array<{ function?: { name?: string; parameters?: unknown } }>;
 };
@@ -65,6 +66,9 @@ type PackEntry = { filename?: string };
 const ROOT = '/tmp/opencode/v2-native-lifecycle';
 const HOST_VERSION = '2.3.2';
 const HOST = process.env.V2_LIFECYCLE_HOST ?? 'opencode';
+const PLUGIN_KV_NAMESPACE = `plugin:${[...'oh-my-opencode-slim']
+  .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+  .join('')}:`;
 const REPO = path.resolve(import.meta.dir, '..');
 const args = process.argv.slice(2);
 const options = {
@@ -1264,14 +1268,9 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
         .map((row) => String(row.key));
       // The host namespaces plugin KV by character code; scope the lifecycle
       // check to this plugin so unrelated host/plugin keys are not miscounted.
-      const namespace = `plugin:${[...'oh-my-opencode-slim']
-        .map((character) =>
-          character.charCodeAt(0).toString(16).padStart(4, '0'),
-        )
-        .join('')}:`;
       const pluginKeys = keys
-        .filter((key) => key.startsWith(namespace))
-        .map((key) => key.slice(namespace.length));
+        .filter((key) => key.startsWith(PLUGIN_KV_NAMESPACE))
+        .map((key) => key.slice(PLUGIN_KV_NAMESPACE.length));
       const presetKeys = pluginKeys.filter((key) =>
         key.startsWith('session-preset/'),
       );
@@ -1293,7 +1292,11 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
         );
       await writeFile(
         path.join(host.root, 'kv-keys.json'),
-        JSON.stringify({ pluginNamespace: namespace, pluginKeys }, null, 2),
+        JSON.stringify(
+          { pluginNamespace: PLUGIN_KV_NAMESPACE, pluginKeys },
+          null,
+          2,
+        ),
       );
       return {
         pluginKeys,
@@ -1622,6 +1625,374 @@ async function nativeControls(
       };
     },
   );
+}
+
+async function councilAndObserver(
+  root: string,
+  installed: string,
+  model: Model,
+  results: Evidence[],
+) {
+  const host = new Host(root, model);
+  const config: RecordValue = {
+    ...pluginConfig('off'),
+    disabled_agents: ['explorer', 'oracle', 'designer', 'fixer'],
+    disabled_hooks: pluginConfig('off').disabled_hooks.filter(
+      (name) => name !== 'council-inject',
+    ),
+    image_routing: 'auto',
+    agents: {
+      orchestrator: { skills: [] },
+      observer: { skills: [] },
+      council: { displayName: 'judge', skills: [] },
+      councillor: { skills: [] },
+    },
+    council: {
+      presets: {
+        default: {
+          alpha: { model: 'capture/child' },
+          beta: { model: 'capture/child' },
+        },
+      },
+    },
+  };
+  await host.configure(installed, 'off', config);
+  const nativeConfig = hostConfig(installed, model);
+  const models = nativeConfig.providers.capture.models as Record<
+    string,
+    { capabilities: Record<string, unknown> }
+  >;
+  models.parent.capabilities.input = ['text'];
+  models.child.capabilities.input = ['text', 'image'];
+  await writeFile(
+    path.join(host.env.OPENCODE_CONFIG_DIR as string, 'opencode.json'),
+    JSON.stringify(nativeConfig),
+  );
+  try {
+    await host.start();
+    await checkCase(
+      results,
+      'off: renamed Council receives both native seat bodies',
+      async () => {
+        const parent = await host.create('Council without task tools');
+        const alpha = model.plan('child', [{ text: 'COUNCIL_ALPHA_EVIDENCE' }]);
+        const beta = model.plan('child', [{ text: 'COUNCIL_BETA_EVIDENCE' }]);
+        await host.runTools(
+          parent.id,
+          [
+            subagent(alpha, { agent: 'councillor-alpha' }),
+            subagent(beta, { agent: 'councillor-beta' }),
+          ],
+          'COUNCIL_SEATS_LAUNCHED',
+        );
+        await host.contains(parent.id, 'COUNCIL_ALPHA_EVIDENCE');
+        await host.contains(parent.id, 'COUNCIL_BETA_EVIDENCE');
+        await host.idle(parent.id);
+        const seats = host.children(parent.id);
+        assert.deepEqual(seats.map((seat) => seat.agent).sort(), [
+          'councillor-alpha',
+          'councillor-beta',
+        ]);
+        for (const seat of seats)
+          assert.equal(host.notices(parent.id, String(seat.id)).length, 1);
+        const synthesis = model.plan('child', [
+          { text: 'COUNCIL_SYNTHESIS_EVIDENCE' },
+        ]);
+        const offset = model.requests.length;
+        await host.runTools(
+          parent.id,
+          [
+            subagent(
+              `${synthesis}\nQuestion?\nSeats: ${seats.map((seat) => seat.id).join(', ')}`,
+              { agent: 'judge' },
+            ),
+          ],
+          'COUNCIL_SYNTHESIS_LAUNCHED',
+        );
+        await host.contains(parent.id, 'COUNCIL_SYNTHESIS_EVIDENCE');
+        await host.idle(parent.id);
+        const request = model.requests
+          .slice(offset)
+          .find((entry) => entry.body.model === 'child')?.body;
+        assert(request, 'No synthesis request');
+        const text = JSON.stringify(request.messages);
+        for (const value of [
+          '## Seat: councillor-alpha',
+          'COUNCIL_ALPHA_EVIDENCE',
+          '## Seat: councillor-beta',
+          'COUNCIL_BETA_EVIDENCE',
+        ])
+          assert(text.includes(value), `Missing synthesis context: ${value}`);
+        assert.doesNotMatch(text, /Seats: ses_/);
+        assert.equal(request.tools?.length ?? 0, 0);
+        const judge = host
+          .children(parent.id)
+          .find((child) => child.agent === 'judge');
+        assert(judge);
+        assert.equal(host.notices(parent.id, String(judge.id)).length, 1);
+        return {
+          seats: seats.length,
+          alias: 'judge',
+          synthesisHasBothBodies: true,
+        };
+      },
+    );
+    await checkCase(
+      results,
+      'off: auto attachment relay and Observer native image read',
+      async () => {
+        const parent = await host.create('Observer without task tools');
+        // Valid 64x64 PNG, independent of any cloned source checkout.
+        const image =
+          'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATUlEQVR42u3PQQkAAAgAseuf0TBG8C0MVmBNvZaAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwGUBYffAxH86nSMAAAAASUVORK5CYII=';
+        const marker = model.plan('parent', [
+          { text: 'OBSERVER_ATTACHMENT_ADMITTED' },
+        ]);
+        const offset = model.requests.length;
+        await host.prompt(parent.id, marker, {
+          files: [{ name: 'relay.png', uri: `data:image/png;base64,${image}` }],
+        });
+        await host.contains(parent.id, 'OBSERVER_ATTACHMENT_ADMITTED');
+        await host.idle(parent.id);
+        const parentRequest = model.requests
+          .slice(offset)
+          .find((entry) => entry.body.model === 'parent')?.body;
+        assert(parentRequest);
+        const text = JSON.stringify(parentRequest.messages);
+        assert(text.includes('Delegate to @observer'));
+        assert(!text.includes('data:image/'));
+        assert(
+          !(parentRequest.tools ?? []).some((tool) =>
+            tool.function?.name?.startsWith('task_'),
+          ),
+        );
+        const directory = path.join(
+          host.workspace,
+          '.opencode',
+          'images',
+          parent.id,
+        );
+        const files = await readdir(directory);
+        assert.equal(files.length, 1);
+        const file = path.join(directory, files[0]);
+        const observe = model.plan('child', [
+          { tool: 'read', input: { path: file } },
+          { text: 'OBSERVER_IMAGE_READ_EVIDENCE' },
+        ]);
+        const childOffset = model.requests.length;
+        await host.runTools(
+          parent.id,
+          [subagent(`${observe}\nRead ${file}`, { agent: 'observer' })],
+          'OBSERVER_LAUNCHED',
+        );
+        await host.contains(parent.id, 'OBSERVER_IMAGE_READ_EVIDENCE');
+        await host.idle(parent.id);
+        const requests = model.requests
+          .slice(childOffset)
+          .filter((entry) => entry.body.model === 'child');
+        assert(requests.length >= 2);
+        const tools = (requests[0].body.tools ?? []).map(
+          (tool) => tool.function?.name,
+        );
+        assert(tools.includes('read'));
+        assert(
+          !tools.some(
+            (name) =>
+              ['edit', 'write', 'shell', 'execute'].includes(name ?? '') ||
+              name?.startsWith('task_'),
+          ),
+        );
+        assert.match(
+          JSON.stringify(requests[1].body.messages),
+          /data:image\/png;base64,/,
+        );
+        const child = host
+          .children(parent.id)
+          .find((entry) => entry.agent === 'observer');
+        assert(child);
+        assert.equal(host.notices(parent.id, String(child.id)).length, 1);
+        return { attachmentRelayed: true, imageInObserverRequest: true, tools };
+      },
+    );
+  } finally {
+    await host.stop();
+  }
+}
+
+async function retainedNativeExplore(
+  root: string,
+  installed: string,
+  model: Model,
+  results: Evidence[],
+) {
+  const host = new Host(root, model);
+  const base = pluginConfig('off');
+  const slimModels = ['capture/child', 'capture/backup'];
+  const slimTemperature = 0.37;
+  await host.configure(installed, 'off', {
+    ...base,
+    replaceBuiltinSubagents: false,
+    sessionPresetRouting: true,
+    fallback: { enabled: true },
+    disabled_hooks: base.disabled_hooks.filter(
+      (name) => name !== 'foreground-fallback',
+    ),
+    agents: {
+      explorer: {
+        ...base.agents.explorer,
+        model: slimModels,
+        temperature: slimTemperature,
+      },
+    },
+  });
+  await writeFile(
+    path.join(host.env.OPENCODE_CONFIG_DIR as string, 'opencode.json'),
+    JSON.stringify({
+      ...hostConfig(installed, model),
+      agents: { explore: { model: 'capture/parent' } },
+    }),
+  );
+  try {
+    await host.start();
+    await checkCase(
+      results,
+      'off with preset routing: retained native Explore is isolated from Slim explorer',
+      async () => {
+        const agents = await poll('finalized mixed agent catalog', async () => {
+          const list = await host.request<Array<{ id: string }>>('/api/agent');
+          return list.some((entry) => entry.id === 'explorer')
+            ? list
+            : undefined;
+        });
+        // Explore has a host config entry; undeclared General makes the
+        // replacement opt-out observable independently of that declaration.
+        for (const id of ['explore', 'general'])
+          assert(
+            agents.some((entry) => entry.id === id),
+            `Missing native ${id}`,
+          );
+
+        const parent = await host.create('Native Explore and Slim explorer');
+        const run = async (
+          round: string,
+          target: { agent: 'explore' | 'explorer'; sessionID?: string },
+          expectedModel: string,
+        ) => {
+          const text = `EXPLORE_ISOLATION_${round}_DONE`;
+          // The existing DSL keys plans by model family. Accept either prefix
+          // here so a misrouted request fails on its actual model, not a timeout.
+          const markers = (['parent', 'child'] as const).map((role) =>
+            model.plan(role, [{ text }]),
+          );
+          const planIDs = markers.map((marker) => marker.slice(9, -1));
+          const messages = await host.runTools(
+            parent.id,
+            [subagent(markers.join('\n'), target)],
+            `EXPLORE_ISOLATION_${round}_LAUNCHED`,
+          );
+          const launch = toolParts(messages, 'subagent').at(-1)?.state;
+          assert.equal(
+            launch?.status,
+            'completed',
+            `${round}: ${JSON.stringify(launch)}`,
+          );
+          const childID = launch?.metadata?.sessionID;
+          assert(typeof childID === 'string', `${round}: missing child ID`);
+          if (target.sessionID) assert.equal(childID, target.sessionID, round);
+          await host.contains(childID, text);
+          await host.contains(parent.id, text);
+          await host.idle(childID);
+          await host.idle(parent.id);
+
+          const requests = model.requests.filter(
+            (entry) => entry.plan && planIDs.includes(entry.plan),
+          );
+          const temperature =
+            target.agent === 'explorer' ? slimTemperature : undefined;
+          assert.deepEqual(
+            requests.map(({ body }) => ({
+              model: body.model,
+              temperature: body.temperature,
+            })),
+            [{ model: expectedModel, temperature }],
+            `${round}: wrong request model or temperature`,
+          );
+          const persisted = host
+            .children(parent.id)
+            .find((row) => row.id === childID);
+          assert.equal(
+            persisted?.agent,
+            target.agent,
+            `${round}: wrong stored agent`,
+          );
+          const stored = await host.request<Session>(`/api/session/${childID}`);
+          assert.equal(stored.model?.providerID, 'capture', round);
+          assert.equal(stored.model?.id, expectedModel, round);
+          return {
+            childID,
+            agent: target.agent,
+            model: requests[0].body.model,
+            temperature: requests[0].body.temperature ?? null,
+          };
+        };
+
+        const native = await run('NATIVE', { agent: 'explore' }, 'parent');
+        // A same-agent continuation keeps the current native pin, even when
+        // it differs from the agent's configured capture/parent model.
+        await host.request(`/api/session/${native.childID}/model`, {
+          model: { providerID: 'capture', id: 'backup2' },
+        });
+        const resumed = await run(
+          'RESUMED',
+          { agent: 'explore', sessionID: native.childID },
+          'backup2',
+        );
+        const slim = await run('SLIM', { agent: 'explorer' }, 'child');
+        assert.notEqual(slim.childID, native.childID);
+        const presetRows = (id: string) =>
+          host.rows(
+            'select value from kv where key = ?',
+            `${PLUGIN_KV_NAMESPACE}session-preset/v1/${id}`,
+          );
+        assert.equal(
+          presetRows(native.childID).length,
+          0,
+          'Native Explore acquired a Slim preset bundle',
+        );
+        const [slimBinding] = presetRows(slim.childID);
+        assert(slimBinding, 'Slim explorer lost its preset binding');
+        const slimRecord =
+          typeof slimBinding.value === 'string'
+            ? object(JSON.parse(slimBinding.value))
+            : object(slimBinding.value);
+        const bundle = object(slimRecord.bundle);
+        assert.equal(bundle.fallbackEnabled, true);
+        const slimChain = object(bundle.chains).explorer;
+        assert.deepEqual(
+          slimChain,
+          slimModels.map((id) => ({ id })),
+        );
+
+        // A different target on the same ID takes its native configured model.
+        const switched = await run(
+          'SWITCHED',
+          { agent: 'explore', sessionID: slim.childID },
+          'parent',
+        );
+        assert.equal(host.children(parent.id).length, 2);
+        return {
+          native,
+          resumed,
+          slim,
+          switched,
+          nativePresetBinding: false,
+          slimChain,
+        };
+      },
+    );
+  } finally {
+    await host.stop();
+  }
 }
 
 async function restartRunning(host: Host, results: Evidence[]) {
@@ -2140,6 +2511,20 @@ async function main() {
         await restartRunning(host, results);
       await host.stop();
     }
+    if (options.modes.includes('off')) {
+      await councilAndObserver(
+        path.join(root, 'council-observer'),
+        installed,
+        model,
+        results,
+      );
+      await retainedNativeExplore(
+        path.join(root, 'retained-native-explore'),
+        installed,
+        model,
+        results,
+      );
+    }
     await refusalFallback(
       path.join(root, 'refusal-fallback'),
       installed,
@@ -2175,7 +2560,8 @@ async function main() {
     const limitations = [
       'No external provider or user session; deterministic loopback OpenAI-compatible mock only.',
       'The harness assumes dist is already built; it packs with npm --ignore-scripts and installs the tarball into a throwaway Bun app.',
-      'Module cold-loading, cancel transport timeout, stop-versus-prompt races, council resolution, native continuation while permission/form-waiting, and preset/cache projections require parent focused source/unit validation; this HTTP harness does not claim them.',
+      'Module cold-loading, cancel transport timeout, stop-versus-prompt races, native continuation while permission/form-waiting, and preset/cache projections require focused source/unit validation. Off mode additionally covers aliased Council assembly and Observer attachment relay with a real PNG request.',
+      'Off mode with preset routing enabled also covers native Explore versus Slim explorer selection, settings and preset binding, including same-ID continuation and an agent switch. Foreign model errors are not induced in this case.',
       'Rendered catalogs cover orchestrator/explorer with this local test preset, across requested default/native/off modes. Other caller roles/presets, disabled-tool matrices, and before/after prompt byte comparisons require parent focused validation.',
       'Omitted background, explicit same-ID follow-ups, and direct child prompts are exercised in every requested mode; the host always returns a running background child.',
       'Direct-prompt later-period coverage holds the parent model call and asserts no host Job outbox row exists while the direct prompt runs, then checks the host subagent metadata on the single completion admission.',
