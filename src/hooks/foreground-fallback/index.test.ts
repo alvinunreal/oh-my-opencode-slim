@@ -2452,6 +2452,28 @@ describe('isFailoverError', () => {
     ).toBe(false);
   });
 
+  test('returns true for account-credit exhaustion (issue #1935)', () => {
+    // The adapter reports exhausted account credit as provider.invalid-request
+    // with HTTP 400, which would otherwise read as a malformed request.
+    const error = {
+      type: 'provider.invalid-request',
+      status: 400,
+      message:
+        'You have insufficient credits to make this request. Please purchase more credits to continue using the service.',
+    };
+    expect(isFailoverError(error)).toBe(true);
+    // Permanent billing: immediate failover, no initial delay.
+    expect(isPermanentQuotaBillingError(error)).toBe(true);
+    // Narrow by design: a plain 400 without billing wording stays a hard error.
+    expect(
+      isFailoverError({
+        type: 'provider.invalid-request',
+        status: 400,
+        message: 'invalid request: missing field',
+      }),
+    ).toBe(false);
+  });
+
   test('returns true for content-policy moderation rejections (cyber_policy)', () => {
     // OpenAI moderation surfaces as HTTP 400 invalid_request with the
     // provider-specific policy code; deterministic per provider, so the next
@@ -3968,6 +3990,68 @@ describe('ForegroundFallbackManager failover classification', () => {
     ).toBe(false);
     // 429 is transient backpressure, not a deterministic rejection.
     expect(isFailoverError('request queue is full (429)')).toBe(true);
+  });
+
+  test('v2 account-credit exhaustion switches with provider scope (issue #1935)', async () => {
+    const { manager } = makeManager({
+      chain: ['p1/a', 'p2/b'],
+      hostFlavor: 'v2',
+    });
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'v2-credit-exhaustion',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error: {
+        type: 'provider.invalid-request',
+        status: 400,
+        message:
+          'You have insufficient credits to make this request. Please purchase more credits to continue using the service.',
+      },
+      decision: { retry: true, delay: 2_000 },
+    };
+
+    await manager.handleV2Retry(event, switchModel);
+
+    expect(switchModel).toHaveBeenCalledWith('v2-credit-exhaustion', {
+      providerID: 'p2',
+      id: 'b',
+    });
+    // Permanent billing skips the host-retry wait, and provider scope marks
+    // the failing provider for the descent.
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(
+      manager.getActiveFallback('v2-credit-exhaustion')?.downProviders,
+    ).toEqual(new Set(['p1']));
+  });
+
+  test('v2 plain 400 invalid request stays a hard error (issue #1935)', async () => {
+    const { manager } = makeManager({
+      chain: ['p1/a', 'p2/b'],
+      hostFlavor: 'v2',
+    });
+    const switchModel = mock(async () => {});
+    const error = {
+      type: 'provider.invalid-request',
+      status: 400,
+      message: 'invalid request: missing field',
+    };
+    expect(isFailoverError(error)).toBe(false);
+    const event = {
+      sessionID: 'v2-plain-invalid-request',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error,
+      decision: { retry: false },
+    };
+
+    await manager.handleV2Retry(event, switchModel);
+
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(event.decision).toEqual({ retry: false });
+    expect(
+      manager.getActiveFallback('v2-plain-invalid-request'),
+    ).toBeUndefined();
   });
 });
 
