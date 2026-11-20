@@ -51,125 +51,119 @@ describe('loadPluginConfig', () => {
   });
 
   describe('host-aware background jobs retirement matrix', () => {
-    test('v2 rejects explicit managed mode with clear error before construction', () => {
+    test('migrates managed mode in every reader without discarding the layer', () => {
       const projectDir = path.join(tempDir, 'project');
-      writeProjectConfig(projectDir, {
+      const file = writeProjectConfig(projectDir, {
         backgroundJobs: { mode: 'managed' },
+        agents: { oracle: { model: 'test/model' } },
       });
-
-      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
-        UnsupportedHostConfigError,
-      );
-      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
-        /Unsupported backgroundJobs\.mode "managed" on OpenCode v2/,
-      );
-
-      // v1 loads managed normally
-      const v1Config = loadPluginConfig(projectDir, { hostFlavor: 'v1' });
-      expect(v1Config.backgroundJobs?.mode).toBe('managed');
+      for (const hostFlavor of [undefined, 'v1', 'v2']) {
+        const warnings: ConfigLoadWarning[] = [];
+        const config = loadPluginConfig(projectDir, {
+          hostFlavor,
+          silent: true,
+          onWarning: (w) => warnings.push(w),
+        });
+        expect(config.backgroundJobs?.mode).toBe('native');
+        expect(config.agents?.oracle?.model).toBe('test/model');
+        expect(warnings).toContainEqual(
+          expect.objectContaining({
+            path: file,
+            kind: 'removed-key',
+            message: expect.stringContaining('backgroundJobs.mode'),
+          }),
+        );
+      }
     });
 
-    test('v2 rejects explicit retired keys before defaults or sanitization', () => {
+    test('strips inert and malformed managed values with warnings', () => {
       const projectDir = path.join(tempDir, 'project');
-      const forbiddenCases = [
-        { concurrency: { defaultConcurrency: 0 } },
+      for (const backgroundJobs of [
+        { concurrency: {} },
         {
           concurrency: {
             defaultConcurrency: 0,
-            providerConcurrency: { provider: 0 },
-            modelConcurrency: { 'provider/model': 0 },
+            providerConcurrency: { openai: 0 },
+            modelConcurrency: { 'openai/model': 0 },
           },
         },
-        { concurrency: {} },
+        { concurrency: null },
+        { concurrency: { defaultConcurrency: 'bad', providerConcurrency: [] } },
         { wallClockTimeoutMs: 0 },
+        { wallClockTimeoutMs: -1 },
+        { wallClockTimeoutMs: 'invalid' },
         { maxSessionsPerAgent: 2 },
-        { stopConfirmationMs: 5_000 },
-      ];
-
-      for (const backgroundJobs of forbiddenCases) {
-        writeProjectConfig(projectDir, { backgroundJobs });
-        expect(() =>
-          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
-        ).toThrow(UnsupportedHostConfigError);
-        for (const hostFlavor of [undefined, 'v1']) {
-          const v1 = loadPluginConfig(projectDir, { hostFlavor });
-          expect(v1.backgroundJobs).toMatchObject(backgroundJobs);
+        { stopConfirmationMs: 5000 },
+        {
+          sameProviderPolicy: { openai: 'foreground' },
+          waitForUserGuard: false,
+          childInputWake: false,
+          childInputWakeKinds: {},
+          pruneEvictedSessions: true,
+        },
+      ]) {
+        writeProjectConfig(projectDir, {
+          backgroundJobs,
+          agents: { oracle: { model: 'test/model' } },
+        });
+        const warnings: ConfigLoadWarning[] = [];
+        const config = loadPluginConfig(projectDir, {
+          hostFlavor: 'v2',
+          silent: true,
+          onWarning: (w) => warnings.push(w),
+        });
+        expect(config.agents?.oracle?.model).toBe('test/model');
+        for (const key of Object.keys(backgroundJobs)) {
+          expect(config.backgroundJobs).not.toHaveProperty(key);
+          expect(warnings).toContainEqual(
+            expect.objectContaining({
+              kind: 'removed-key',
+              message: expect.stringContaining(`backgroundJobs.${key}`),
+            }),
+          );
         }
       }
+    });
 
-      // Invalid retired values must not disappear through the sanitizer.
-      for (const backgroundJobs of [
-        { concurrency: null },
-        { wallClockTimeoutMs: -1 },
-        { maxSessionsPerAgent: 100 },
-        { stopConfirmationMs: 'invalid' },
-      ]) {
-        writeProjectConfig(projectDir, { backgroundJobs });
+    test('rejects positive limits even if mode is off', () => {
+      const projectDir = path.join(tempDir, 'project');
+      for (const [key, value] of [
+        ['concurrency', { defaultConcurrency: 1 }],
+        ['concurrency', { providerConcurrency: { openai: 2 } }],
+        ['concurrency', { modelConcurrency: { 'openai/model': 3 } }],
+        ['wallClockTimeoutMs', 900000],
+      ] as const) {
+        const file = writeProjectConfig(projectDir, {
+          backgroundJobs: { mode: 'off', [key]: value },
+        });
         expect(() =>
           loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
         ).toThrow(UnsupportedHostConfigError);
+        expect(() =>
+          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+        ).toThrow(file);
       }
     });
 
-    test('v2 allows absence of backgroundJobs and allows sameProviderPolicy', () => {
-      const projectDir = path.join(tempDir, 'project');
-      writeProjectConfig(projectDir, {
-        backgroundJobs: {
-          sameProviderPolicy: { anthropic: 'foreground' },
-        },
-      });
-
-      const v2Config = loadPluginConfig(projectDir, { hostFlavor: 'v2' });
-      expect(v2Config.backgroundJobs?.sameProviderPolicy).toEqual({
-        anthropic: 'foreground',
-      });
-      // Mode was not explicit, so it is undefined in raw loaded config and
-      // resolveFeatureGates defaults to native
-      expect(v2Config.backgroundJobs?.mode).toBeUndefined();
-      const gates = resolveFeatureGates(v2Config, 'v2');
-      expect(gates.backgroundJobsMode).toBe('native');
-      expect(gates.managedJobs).toBe(false);
-      expect(gates.presetRouting).toBe(true);
-    });
-
-    test('v2 detects explicit forbidden keys across user and project layers', () => {
-      const projectDir = path.join(tempDir, 'project');
-      const globalDir = path.join(userConfigDir, 'opencode');
-      fs.mkdirSync(globalDir, { recursive: true });
-
-      // User config sets wallClockTimeoutMs
-      fs.writeFileSync(
-        path.join(globalDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ backgroundJobs: { wallClockTimeoutMs: 60_000 } }),
-      );
-      // Project config sets only harmless agent
-      writeProjectConfig(projectDir, { agents: { oracle: { model: 'm1' } } });
-
-      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
-        UnsupportedHostConfigError,
-      );
-
-      // Clean up global config
-      fs.unlinkSync(path.join(globalDir, 'oh-my-opencode-slim.json'));
-    });
-
-    test('a project native mode does not hide an unsupported user-layer managed mode', () => {
+    test('a project mode cannot hide a positive user-layer limit', () => {
       const projectDir = path.join(tempDir, 'project');
       const globalDir = path.join(userConfigDir, 'opencode');
       fs.mkdirSync(globalDir, { recursive: true });
       const userPath = path.join(globalDir, 'oh-my-opencode-slim.json');
       fs.writeFileSync(
         userPath,
-        JSON.stringify({ backgroundJobs: { mode: 'managed' } }),
+        JSON.stringify({ backgroundJobs: { wallClockTimeoutMs: 60000 } }),
       );
-      writeProjectConfig(projectDir, { backgroundJobs: { mode: 'native' } });
-
+      writeProjectConfig(projectDir, { backgroundJobs: { mode: 'off' } });
       expect(() =>
         loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
       ).toThrow(userPath);
+      expect(
+        loadPluginConfig(projectDir, { silent: true }).backgroundJobs?.mode,
+      ).toBe('off');
     });
 
-    test('retains existing disable switches and layered precedence on both hosts', () => {
+    test('retains other disable switches and layered precedence', () => {
       const projectDir = path.join(tempDir, 'project');
       const globalDir = path.join(userConfigDir, 'opencode');
       fs.mkdirSync(globalDir, { recursive: true });
@@ -177,103 +171,40 @@ describe('loadPluginConfig', () => {
         path.join(globalDir, 'oh-my-opencode-slim.json'),
         JSON.stringify({
           autoUpdate: false,
-          webfetch: { enabled: false },
+          disabled_tools: ['webfetch'],
           backgroundJobs: { childInputWake: false },
         }),
       );
       writeProjectConfig(projectDir, {
-        webfetch: {},
         backgroundJobs: { childInputWakeKinds: { question: true } },
       });
-
       for (const hostFlavor of ['v1', 'v2']) {
         const config = loadPluginConfig(projectDir, {
           hostFlavor,
           silent: true,
         });
-        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+        expect(resolveFeatureGates(config)).toMatchObject({
           updateChecker: false,
           webfetch: false,
         });
-        expect(config.backgroundJobs?.childInputWake).toBe(false);
+        expect(config.backgroundJobs).not.toHaveProperty('childInputWake');
       }
-
+      // A nearer empty disabled_tools list replaces the whole family and
+      // re-enables webfetch; a nearer autoUpdate: true re-enables updates.
       writeProjectConfig(projectDir, {
         autoUpdate: true,
-        webfetch: { enabled: true },
-        backgroundJobs: { childInputWake: true },
+        disabled_tools: [],
       });
       for (const hostFlavor of ['v1', 'v2']) {
         const config = loadPluginConfig(projectDir, {
           hostFlavor,
           silent: true,
         });
-        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+        expect(resolveFeatureGates(config)).toMatchObject({
           updateChecker: true,
           webfetch: true,
         });
-        expect(config.backgroundJobs?.childInputWake).toBe(true);
       }
-    });
-
-    test('v2 emits unsupported warnings for v1-only wake and pruning knobs without throwing', () => {
-      const projectDir = path.join(tempDir, 'project');
-      writeProjectConfig(projectDir, {
-        backgroundJobs: {
-          childInputWake: false,
-          childInputWakeKinds: { question: false },
-          waitForUserGuard: false,
-          pruneEvictedSessions: true,
-          sameProviderPolicy: { openai: 'foreground' },
-        },
-      });
-
-      const warnings: ConfigLoadWarning[] = [];
-      const config = loadPluginConfig(projectDir, {
-        hostFlavor: 'v2',
-        silent: true,
-        onWarning: (w) => warnings.push(w),
-      });
-
-      expect(config).toBeDefined();
-      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
-      expect(unsupported).toHaveLength(5);
-      expect(
-        unsupported.some((w) => w.message.includes('childInputWake is')),
-      ).toBe(true);
-      expect(
-        unsupported.some((w) => w.message.includes('childInputWakeKinds')),
-      ).toBe(true);
-      expect(
-        unsupported.some((w) => w.message.includes('waitForUserGuard')),
-      ).toBe(true);
-      expect(
-        unsupported.some((w) => w.message.includes('pruneEvictedSessions')),
-      ).toBe(true);
-      expect(
-        unsupported.some((w) => w.message.includes('sameProviderPolicy')),
-      ).toBe(true);
-    });
-
-    test('v1 emits no unsupported-host warnings for sameProviderPolicy', () => {
-      const projectDir = path.join(tempDir, 'project');
-      writeProjectConfig(projectDir, {
-        backgroundJobs: {
-          sameProviderPolicy: { openai: 'foreground' },
-          childInputWake: false,
-        },
-      });
-
-      const warnings: ConfigLoadWarning[] = [];
-      const config = loadPluginConfig(projectDir, {
-        hostFlavor: 'v1',
-        silent: true,
-        onWarning: (w) => warnings.push(w),
-      });
-
-      expect(config).toBeDefined();
-      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
-      expect(unsupported).toHaveLength(0);
     });
   });
 
@@ -625,7 +556,7 @@ describe('loadPluginConfig', () => {
     expect(config.agents?.oracle?.temperature).toBe(0.9);
   });
 
-  test('deep-merges webfetch settings across user and project configs', () => {
+  test('project disabled_tools replaces the user list wholesale', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -634,21 +565,22 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: { enabled: false },
+        disabled_tools: ['webfetch'],
       }),
     );
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: { enabled: true },
+        disabled_tools: ['ast_grep_search'],
       }),
     );
 
     const config = loadPluginConfig(projectDir, { silent: true });
 
-    expect(config.webfetch).toEqual({
-      enabled: true,
-    });
+    // Top-level arrays are replaced entirely: the project list does not
+    // carry `webfetch` over, so the enhanced webfetch turns back on.
+    expect(config.disabled_tools).toEqual(['ast_grep_search']);
+    expect(resolveFeatureGates(config).webfetch).toBe(true);
   });
 
   test('retains user interview settings when project partially overrides them', () => {
@@ -752,7 +684,7 @@ describe('loadPluginConfig', () => {
     expect(config.marketplace).toEqual({ enabled: false });
   });
 
-  test('does not let a defaulted project webfetch enabled override user false', () => {
+  test('nearer empty disabled_tools re-enables webfetch', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -761,24 +693,23 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: { enabled: false },
+        disabled_tools: ['webfetch'],
       }),
     );
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: {},
+        disabled_tools: [],
       }),
     );
 
     const config = loadPluginConfig(projectDir, { silent: true });
 
-    expect(config.webfetch).toEqual({
-      enabled: false,
-    });
+    expect(config.disabled_tools).toEqual([]);
+    expect(resolveFeatureGates(config).webfetch).toBe(true);
   });
 
-  test('a project-layer backgroundJobs bad key sanitizes away without overriding a valid user value (#1291)', () => {
+  test('nearer disabled_tools keeps webfetch cold when listed again', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -787,32 +718,44 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        backgroundJobs: {
-          maxSessionsPerAgent: 8,
-          orchestratorWake: { intervalMs: 120_000 },
-        },
+        disabled_tools: [],
       }),
     );
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        backgroundJobs: {
-          // Above the schema max: dropped, and must not be resurrected as an
-          // explicit default that overrides the valid user value.
-          maxSessionsPerAgent: 16,
-          // A removed key sanitizes away like any other bad key.
-          strategy: 'checkpoint-compatible',
-          // A bad nested key drops only itself; valid wake siblings still
-          // override the user layer.
-          orchestratorWake: { intervalMs: 1_000, enabled: false },
-        },
+        disabled_tools: ['webfetch', 'ast_grep_search'],
       }),
     );
 
     const config = loadPluginConfig(projectDir, { silent: true });
 
-    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
-    expect('strategy' in (config.backgroundJobs ?? {})).toBe(false);
+    expect(config.disabled_tools).toEqual(['webfetch', 'ast_grep_search']);
+    expect(resolveFeatureGates(config).webfetch).toBe(false);
+  });
+
+  test('a v2 project-layer invalid mode is reported even above a valid user off mode', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: { mode: 'off' },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: { mode: 'bogus' },
+      }),
+    );
+
+    expect(() =>
+      loadPluginConfig(projectDir, { silent: true, hostFlavor: 'v2' }),
+    ).toThrow('Invalid backgroundJobs.mode');
   });
 
   test('a project backgroundJobs layer without mode keeps the user mode off', () => {
@@ -824,7 +767,7 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        backgroundJobs: { mode: 'off', maxSessionsPerAgent: 8 },
+        backgroundJobs: { mode: 'off' },
       }),
     );
     fs.writeFileSync(
@@ -839,8 +782,7 @@ describe('loadPluginConfig', () => {
     // The project layer configures only concurrency: its absent mode must
     // not reset the user's explicit lifecycle switch.
     expect(config.backgroundJobs?.mode).toBe('off');
-    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
-    expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
+    expect(config.backgroundJobs).not.toHaveProperty('concurrency');
   });
 
   test('validates auto image routing after project enables Observer', () => {
@@ -1384,7 +1326,7 @@ describe('onWarning callback', () => {
           strategy: 'checkpoint-compatible',
           maxRetainedSnapshots: 5,
           boardInjection: false,
-          maxSessionsPerAgent: 4,
+          mode: 'off',
           orchestratorWake: { periodicWakeEnabled: true },
         },
       }),
@@ -1431,7 +1373,7 @@ describe('onWarning callback', () => {
       ).toHaveLength(1);
       expect('boardInjection' in bj).toBe(false);
       // Valid siblings still load.
-      expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
+      expect(config.backgroundJobs?.mode).toBe('off');
     } finally {
       console.warn = originalWarn;
     }
@@ -1750,7 +1692,6 @@ describe('onWarning callback', () => {
         disabled_hooks: [
           'chat-headers',
           'cache-monitor',
-          'json-error-recovery',
           'tool-loop-guard',
           'search-path-guard',
           'absolute-path-rescue',
@@ -1767,7 +1708,6 @@ describe('onWarning callback', () => {
     expect(config.disabled_hooks).toEqual([
       'chat-headers',
       'cache-monitor',
-      'json-error-recovery',
       'tool-loop-guard',
       'search-path-guard',
       'absolute-path-rescue',
@@ -1776,14 +1716,16 @@ describe('onWarning callback', () => {
     expect(warnings).toHaveLength(0);
   });
 
-  test('accepts the auto-update-checker hook value without stripping', () => {
+  test('strips the retired auto-update-checker hook with a removed diagnostic', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
     fs.mkdirSync(projectConfigDir, { recursive: true });
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        disabled_hooks: ['auto-update-checker'],
+        disabled_hooks: ['auto-update-checker', 'phase-reminder'],
+        disabled_tools: ['webfetch'],
+        agents: { oracle: { model: 'test/model' } },
       }),
     );
 
@@ -1792,8 +1734,124 @@ describe('onWarning callback', () => {
       onWarning: (warning) => warnings.push(warning),
     });
 
-    expect(config.disabled_hooks).toEqual(['auto-update-checker']);
-    expect(warnings).toHaveLength(0);
+    // The retired value never reaches the value enum or the gate; valid
+    // siblings and unrelated settings in the same file still load.
+    expect(config.disabled_hooks).toEqual(['phase-reminder']);
+    expect(config.disabled_tools).toEqual(['webfetch']);
+    expect(config.agents?.oracle?.model).toBe('test/model');
+    expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain('use autoUpdate: false');
+    expect(resolveFeatureGates(config).updateChecker).toBe(true);
+  });
+
+  test.each([
+    ['array', ['auto-update-checker']],
+    ['string', 'auto-update-checker'],
+  ] as const)(
+    'a disabled_hooks %s holding only the retired update alias is unset',
+    (shape, disabledHooks) => {
+      const projectDir = path.join(tempDir, `project-${shape}`);
+      const projectConfigDir = path.join(projectDir, '.opencode');
+      fs.mkdirSync(projectConfigDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          disabled_hooks: disabledHooks,
+          disabled_tools: ['webfetch'],
+          agents: { oracle: { model: 'test/model' } },
+        }),
+      );
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        onWarning: (warning) => warnings.push(warning),
+      });
+
+      // The retired value is dropped, not translated: no canonical off
+      // switch appears and updates stay on. Unrelated settings survive.
+      expect(config.disabled_hooks).toBeUndefined();
+      expect(Object.hasOwn(config, 'disabled_hooks')).toBe(false);
+      expect(config.autoUpdate).toBeUndefined();
+      expect(resolveFeatureGates(config).updateChecker).toBe(true);
+      expect(config.disabled_tools).toEqual(['webfetch']);
+      expect(config.agents?.oracle?.model).toBe('test/model');
+      expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+      expect(warnings[0]?.message).toContain('was removed');
+      expect(warnings[0]?.message).toContain('use autoUpdate: false');
+    },
+  );
+
+  test('a retired-only project disabled_hooks value leaves the user list in place', () => {
+    const userConfigPath = path.join(tempDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project-retired-string');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ disabled_hooks: ['phase-reminder'] }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ disabled_hooks: 'auto-update-checker' }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    // Deleting the retired-only key treats it as unset, so the lower
+    // layer's valid list survives the merge instead of being replaced.
+    expect(config.disabled_hooks).toEqual(['phase-reminder']);
+    expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain('use autoUpdate: false');
+  });
+
+  test('an explicit autoUpdate: false still disables updates', () => {
+    const projectDir = path.join(tempDir, 'project-canonical-off');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.disabled_hooks).toBeUndefined();
+    expect(config.autoUpdate).toBe(false);
+    expect(resolveFeatureGates(config).updateChecker).toBe(false);
+    expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+  });
+
+  test('normalizes a valid string disabled_hooks value without a removal warning', () => {
+    const projectDir = path.join(tempDir, 'project-valid-string-hook');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_hooks: 'phase-reminder',
+        agents: { oracle: { model: 'test/model' } },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.disabled_hooks).toEqual(['phase-reminder']);
+    expect(config.agents?.oracle?.model).toBe('test/model');
+    expect(warnings.map((warning) => warning.kind)).toEqual(['normalized']);
+    expect(warnings[0]?.message).toContain('should be an array; normalized');
   });
 
   test('retains an explicit interview.enabled across the layer pass', () => {
@@ -3487,13 +3545,19 @@ describe('removed config keys', () => {
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
     // A stale opt-out must not silently re-enable the managed lifecycle.
     expect(config.backgroundJobs?.mode).toBe('off');
-    // Only the alias is dropped; every sibling keeps its configured value.
-    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-    expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
+    // Retired managed siblings are dropped too.
+    expect(config.backgroundJobs).not.toHaveProperty('maxSessionsPerAgent');
+    expect(config.backgroundJobs).not.toHaveProperty('concurrency');
     expect(Object.hasOwn(config.backgroundJobs ?? {}, 'enabled')).toBe(false);
-    expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
-    expect(warnings[0]?.message).toContain('"backgroundJobs.enabled"');
-    expect(warnings[0]?.message).toContain('backgroundJobs.mode');
+    expect(warnings.map((w) => w.kind)).toEqual([
+      'removed-key',
+      'removed-key',
+      'removed-key',
+    ]);
+    expect(
+      warnings.find((w) => w.message.includes('"backgroundJobs.enabled"'))
+        ?.message,
+    ).toContain('backgroundJobs.mode');
     expect(resolveFeatureGates(config).backgroundJobsMode).toBe('off');
   });
 
@@ -3504,17 +3568,22 @@ describe('removed config keys', () => {
     expect(config.backgroundJobs?.mode).toBe('native');
   });
 
-  test('SF-01: drops webfetch.model without losing the other file settings', () => {
+  test('SF-01: drops the retired webfetch block without losing the other file settings', () => {
     const { config, warnings } = load({
       webfetch: { model: 'test/retired-model', enabled: false },
+      disabled_tools: ['webfetch'],
       sidebar: false,
     });
 
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
-    expect(config.webfetch).toEqual({ enabled: false });
+    expect('webfetch' in config).toBe(false);
+    expect(config.disabled_tools).toEqual(['webfetch']);
     expect(config.sidebar).toBe(false);
+    expect(resolveFeatureGates(config).webfetch).toBe(false);
     expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
-    expect(warnings[0]?.message).toContain('"webfetch.model" was removed');
+    expect(warnings[0]?.message).toBe(
+      'webfetch config was removed; use disabled_tools: ["webfetch"] to use the native host tool',
+    );
   });
 
   test('reports every removed key in one file', () => {
@@ -3557,6 +3626,18 @@ describe('removed config keys', () => {
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
     expect(config.disabled_hooks).toBeUndefined();
     expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+  });
+
+  test('a stale json-error-recovery member is dropped with a removal warning', () => {
+    const { config, warnings } = load({
+      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+    });
+
+    expect(config.disabled_hooks).toEqual(['tool-loop-guard']);
+    expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain(
+      'json-error-recovery is no longer a hook',
+    );
   });
 
   test('unknown invalid keys still reject the file', () => {

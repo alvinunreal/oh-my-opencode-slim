@@ -25,11 +25,7 @@ import {
 } from '../utils/agent-variant';
 import { parseModelRef } from '../v2/adapters';
 
-import {
-  createCouncilAgent,
-  ensureCouncilCompactionException,
-  ensureCouncilSynthesisReinforcement,
-} from './council';
+import { createCouncilAgent, ensureCouncilPrompt } from './council';
 import { buildCouncillorAgents, councillorSeatNames } from './council-agents';
 import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
@@ -65,11 +61,6 @@ const ORCHESTRATOR_DEFAULT_TOOL_NAMES = [
   'task_reply',
   'task_status',
   'acp_run',
-] as const;
-/** V1-only controls; v2 continues and steers with native subagent. */
-const ORCHESTRATOR_V1_ONLY_TOOL_NAMES = [
-  'task_revive',
-  'task_message',
 ] as const;
 const MARKETPLACE_TOOL_NAMES = [
   'marketplace_inspect',
@@ -751,7 +742,6 @@ function resolveSkillRules(
  * follow this set — generated denies are always retained. */
 function registeredDefaultToolNames(
   runtime: RuntimeConfig,
-  hostFlavor?: string,
 ): ReadonlySet<string> {
   const disabledTools = new Set(runtime.disabledTools);
   const registered = new Set<string>();
@@ -759,22 +749,9 @@ function registeredDefaultToolNames(
     if (!disabledTools.has(toolName)) registered.add(toolName);
   };
   const taskControls =
-    runtime.backgroundJobsMode === 'managed'
-      ? [
-          'task_cancel',
-          'task_reply',
-          'task_status',
-          ...(hostFlavor === 'v2'
-            ? []
-            : (['task_revive', 'task_message', 'wait_for_user'] as const)),
-        ]
-      : runtime.backgroundJobsMode === 'native'
-        ? [
-            'task_cancel',
-            'task_status',
-            ...(hostFlavor === 'v2' ? ['task_reply', 'task_report'] : []),
-          ]
-        : [];
+    runtime.backgroundJobsMode === 'native'
+      ? ['task_cancel', 'task_status', 'task_reply', 'task_report']
+      : [];
   for (const toolName of taskControls) register(toolName);
   if (runtime.interviewEnabled && !runtime.disabledCommands.has('interview')) {
     register('interview_submit_state');
@@ -819,7 +796,6 @@ function applyDefaultPermissions(
   registeredTools: ReadonlySet<string>,
   configuredSkills: readonly string[] | undefined,
   runtime: RuntimeConfig,
-  hostFlavor?: string,
   isPrimary = false,
   subagentScope?: readonly string[],
 ): void {
@@ -842,7 +818,6 @@ function applyDefaultPermissions(
     : (existing.question ?? 'deny');
   const pluginDefaultToolNames = [
     ...ORCHESTRATOR_DEFAULT_TOOL_NAMES,
-    ...(hostFlavor === 'v2' ? [] : ORCHESTRATOR_V1_ONLY_TOOL_NAMES),
     'interview_submit_state',
     'wait_for_user',
     ...MARKETPLACE_TOOL_NAMES,
@@ -885,7 +860,7 @@ function applyDefaultPermissions(
             subagentScope.map((name) => [name, 'allow'] as const),
           ),
         }
-      : hostFlavor === 'v2' && !isPrimary
+      : !isPrimary
         ? { ...TASK_NO_NESTED_DISPATCH }
         : undefined);
 
@@ -897,16 +872,14 @@ function applyDefaultPermissions(
       existing.task_report ??
       (isPrimary ||
       existing['*'] === 'deny' ||
-      (hostFlavor === 'v2' && !registeredTools.has('task_report'))
+      !registeredTools.has('task_report')
         ? 'deny'
         : 'allow'),
     // Stance defaults above: an explicit `task` entry wins, then the
     // compiled scope, then the nested-dispatch deny for non-primaries —
     // the compiled v2 permission base allows every unmatched action, so an
     // absent entry would let any child spawn once the host depth limit is
-    // raised. The nested-dispatch deny applies to v2 non-primaries only
-    // (v1 stays untouched); the compiled scope is emitted on every host
-    // flavor (v1 and v2 both evaluate per-name `task` maps).
+    // raised.
     ...(taskStance !== undefined ? { task: taskStance } : {}),
     question: questionPerm,
     ...pluginDefaultPermissions,
@@ -1004,7 +977,7 @@ function createAgentViews(
   // build no permissions at all, matching their skipped factory prompts).
   const registeredTools = inferenceOnly
     ? EMPTY_REGISTERED_TOOLS
-    : registeredDefaultToolNames(runtime, options?.hostFlavor);
+    : registeredDefaultToolNames(runtime);
   // Skill grants as the routing block shows them: same resolver as the
   // enforced permissions, so the orchestrator never briefs a skill the
   // delegate cannot load. String-shorthand permissions bypass the resolver.
@@ -1027,12 +1000,7 @@ function createAgentViews(
     // The bare councillor is only meaningful as part of configured Council Mode.
     disabled.add('councillor');
   }
-  // Observer dispatch requires a v2 host and an enabled observer. The v1 host
-  // enables a child's task tool whenever its permission carries ANY task rule — with
-  // no depth limit — so emitting stances there would change every advisor's
-  // toolset for nothing.
-  const nestedDispatchEnabled =
-    options?.hostFlavor === 'v2' && !disabled.has('observer');
+  const nestedDispatchEnabled = !disabled.has('observer');
   // Explicitly disabling the council agent disables the whole chain: the
   // injected procedure dispatches seats and then delegates synthesis to
   // the council agent, so seats/pointer/hook without it would dangle.
@@ -1102,7 +1070,7 @@ function createAgentViews(
         );
       }
       if (!inferenceOnly && !nestedDispatchEnabled) {
-        // v1 omits object stances; v2 denies dispatch without an observer.
+        // Deny nested dispatch without an observer.
         const permission = agent.config.permission as
           | Record<string, unknown>
           | undefined;
@@ -1112,11 +1080,7 @@ function createAgentViews(
           typeof permission.task === 'object'
         ) {
           const rest = { ...permission };
-          if (options?.hostFlavor === 'v2') {
-            rest.task = { ...TASK_NO_NESTED_DISPATCH };
-          } else {
-            delete rest.task;
-          }
+          rest.task = { ...TASK_NO_NESTED_DISPATCH };
           agent.config.permission = rest as typeof agent.config.permission;
         }
       }
@@ -1151,13 +1115,7 @@ function createAgentViews(
         customPrompts.appendPrompt,
       );
       if (name === 'council') {
-        // resolvePrompt above may have replaced the generated prompt with
-        // an inline or council.md override; re-apply the idempotent
-        // fallback reinforcement so the required report structure and the
-        // compaction exception survive the override.
-        agent.config.prompt = ensureCouncilCompactionException(
-          ensureCouncilSynthesisReinforcement(agent.config.prompt ?? ''),
-        );
+        agent.config.prompt = ensureCouncilPrompt(agent.config.prompt);
       }
 
       return agent;
@@ -1284,7 +1242,6 @@ function createAgentViews(
         registeredTools,
         override?.skills,
         runtime,
-        options?.hostFlavor,
       );
     }
     return agent;
@@ -1302,7 +1259,6 @@ function createAgentViews(
         registeredTools,
         override?.skills,
         runtime,
-        options?.hostFlavor,
       );
     }
     return agent;
@@ -1310,26 +1266,24 @@ function createAgentViews(
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
     if (!inferenceOnly) {
-      applyDefaultPermissions(
-        agent,
-        registeredTools,
-        undefined,
-        runtime,
-        options?.hostFlavor,
-      );
+      applyDefaultPermissions(agent, registeredTools, undefined, runtime);
     }
     return agent;
   });
 
   // Build dynamic councillor agents from council config (flatten mode).
   // Each councillor becomes a dispatchable subagent with its own model,
-  // so the orchestrator can delegate to them with the host delegation tool
-  // (`task()` on v1, `subagent()` on v2) with native panes at depth 1.
-  // Only a *configured* color is inherited: councillor override first, then
-  // council override. No default fallback — unconfigured councillors stay
-  // colorless so the host TUI palette keeps assigning distinct colors.
+  // so the orchestrator can delegate to them via `subagent()` with native
+  // panes at depth 1.
+  const councillorOverride = getOverrideFromAgents(mergedAgents, 'councillor');
+  // Shared inference settings do not replace seat models or variants.
+  const seatInference = {
+    temperature: councillorOverride?.temperature,
+    options: councillorOverride?.options,
+  };
+  // No default color: unconfigured seats keep the host's distinct palette.
   const councillorColor =
-    getOverrideFromAgents(mergedAgents, 'councillor')?.color ??
+    councillorOverride?.color ??
     getOverrideFromAgents(mergedAgents, 'council')?.color;
   const councillorAgents = buildCouncillorAgents(
     runtime,
@@ -1337,6 +1291,7 @@ function createAgentViews(
     nestedDispatchEnabled,
     inferenceOnly,
   ).map((agent) => {
+    applyOverrides(agent, seatInference, inferenceOnly);
     if (!inferenceOnly) {
       if (councillorColor) agent.config.color ??= councillorColor;
       // Councillor factory maps grant the Slim AST search tool by default;
@@ -1349,9 +1304,8 @@ function createAgentViews(
       applyDefaultPermissions(
         agent,
         registeredTools,
-        undefined,
+        councillorOverride?.skills,
         runtime,
-        options?.hostFlavor,
       );
     }
     return agent;
@@ -1462,7 +1416,6 @@ function createAgentViews(
       registeredTools,
       orchestratorOverride?.skills,
       runtime,
-      options?.hostFlavor,
       true,
       orchestratorScope,
     );
@@ -1578,12 +1531,9 @@ function createAgentViews(
   }
 
   // Static pointer = roster only. The seat list lives here because v2's
-  // native subagent roster filters hidden agents out — on v2 this line is
-  // the orchestrator's only always-present source of seat IDs. v1 applies no
-  // hidden filter (as of opencode 1.18.35, `agents.list()` and the task
-  // tool's describeTask carry no hidden check), so hidden councillors do
-  // surface in the v1 task roster — a host-side gap outside omos's control.
-  // v2 compounds this with agent-param guidance ('name not in available
+  // native subagent roster filters hidden agents out, so this line is the
+  // orchestrator's only always-present source of seat IDs. The host adds
+  // agent-param guidance ('name not in available
   // subagents → pass through model parameter', subagent.ts:31-33) that
   // actively steers away from exact-name dispatch; a roster-visible-but-@-hidden
   // agent flag upstream would let the Council Mode block's dispatch clause be

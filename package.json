@@ -2,6 +2,9 @@
   "name": "oh-my-opencode-slim",
   "version": "3.0.7",
   "packageManager": "bun@1.3.14",
+  "engines": {
+    "opencode": ">=2.3.0"
+  },
   "description": "Lightweight agent orchestration plugin for OpenCode - a slimmed-down fork of oh-my-opencode",
   "main": "dist/index.js",
   "types": "dist/plugin.d.ts",
@@ -46,6 +49,10 @@
     "url": "https://github.com/alvinunreal/oh-my-opencode-slim/issues"
   },
   "homepage": "https://github.com/alvinunreal/oh-my-opencode-slim#readme",
+  "funding": {
+    "type": "individual",
+    "url": "https://ohmyopencodeslim.com/animals"
+  },
   "files": [
     "dist",
     "src/companion/companion-manifest.json",
@@ -122,15 +129,16 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
-    "@opencode/client": "2.3.0",
-    "@opencode/plugin": "2.3.0",
-    "@opencode/util": "2.3.0",
+    "@opencode/client": "2.3.2",
+    "@opencode/plugin": "2.3.2",
+    "@opencode/util": "2.3.2",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.7.1",
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",
+    "effect": "4.1.0",
     "fast-check": "^4.10.2",
     "knip": "^6.44.0",
     "typescript": "7.0"

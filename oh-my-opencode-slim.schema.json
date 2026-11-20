@@ -8,6 +8,14 @@
     "setDefaultAgent": {
       "type": "boolean"
     },
+    "sessionPresetRouting": {
+      "description": "Enable per-session preset binding and inference routing independently of Slim task controls. When absent, follows backgroundJobs.mode (native enables routing, off disables it). The static preset still applies at startup.",
+      "type": "boolean"
+    },
+    "replaceBuiltinSubagents": {
+      "description": "Hide undeclared OpenCode general and explore subagents in favor of Slim specialists. Set false to leave the host roster untouched. Default true.",
+      "type": "boolean"
+    },
     "questionTimeoutMs": {
       "description": "Opt-in question auto-answer timeout in milliseconds. Unset or 0 disables it; otherwise 60,000–2,147,483,647. Permission and closed-choice requests are never answered. On v2, requires an attached OMOS TUI with tui enabled.",
       "anyOf": [
@@ -39,7 +47,7 @@
       "type": "boolean"
     },
     "liveConfigRefresh": {
-      "description": "v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when oh-my-opencode-slim.json(c) changes on disk. When false, v2 does not watch config files and file edits apply only after a restart; explicit /preset writes still refresh the current generation where applicable. Defaults to true.",
+      "description": "Master switch for the config-file watcher that reloads model/preset profiles. With no session-preset, sidebar, or retry consumer, no watcher or profile seed is constructed. Set false to apply file edits only after restart; explicit preset applications remain available.",
       "type": "boolean"
     },
     "stripOrchestratorModel": {
@@ -51,7 +59,7 @@
       "type": "boolean"
     },
     "autoUpdate": {
-      "description": "Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Listing \"auto-update-checker\" in disabled_hooks independently disables the same update hook — neither setting strengthens or weakens the other. Defaults to true.",
+      "description": "Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Defaults to true.",
       "type": "boolean"
     },
     "presets": {
@@ -1312,7 +1320,7 @@
       }
     },
     "disabled_hooks": {
-      "description": "Hook names to disable completely. Valid values: phase-reminder, foreground-fallback, deepwork-goal, chat-headers, cache-monitor, json-error-recovery, tool-loop-guard, search-path-guard, absolute-path-rescue, apply-patch, council-inject, auto-update-checker. \"phase-reminder\" is not registered, so orchestrator phase reminders are never injected; \"foreground-fallback\" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); \"chat-headers\" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); \"cache-monitor\" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards (\"json-error-recovery\", \"tool-loop-guard\", \"search-path-guard\", \"absolute-path-rescue\", \"apply-patch\" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; \"council-inject\" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; \"auto-update-checker\" stops the same OMOS update hook that autoUpdate: false covers — all update checks, update notices, and automatic installation — so either switch alone turns it off. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
+      "description": "Hook names to disable completely. Valid values: phase-reminder, foreground-fallback, deepwork-goal, chat-headers, cache-monitor, tool-loop-guard, search-path-guard, absolute-path-rescue, apply-patch, council-inject. \"phase-reminder\" is not registered, so orchestrator phase reminders are never injected; \"foreground-fallback\" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); \"chat-headers\" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); \"cache-monitor\" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards (\"tool-loop-guard\", \"search-path-guard\", \"absolute-path-rescue\", \"apply-patch\" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so repeated identical calls and invalid or guessed paths surface raw to the model; \"council-inject\" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
       "type": "array",
       "items": {
         "type": "string",
@@ -1322,13 +1330,11 @@
           "deepwork-goal",
           "chat-headers",
           "cache-monitor",
-          "json-error-recovery",
           "tool-loop-guard",
           "search-path-guard",
           "absolute-path-rescue",
           "apply-patch",
-          "council-inject",
-          "auto-update-checker"
+          "council-inject"
         ]
       }
     },
@@ -1455,10 +1461,9 @@
           "not": {}
         },
         "mode": {
-          "description": "Background-task lifecycle mode. \"managed\" (default on V1 hosts) runs the OMOS managed lifecycle; it is unsupported and rejected on OpenCode v2. \"native\" (default on OpenCode v2 hosts) skips every board-shaped component and relies on host delegation, with four OMOS tools: task_status and task_cancel for host reads and stop requests, plus independent task_reply for the orchestrator and task_report for child subagents. Cancellation reports request acceptance, not confirmed interruption. \"off\" registers no OMOS task tools; on v2 it also disables session-preset routing and leaves the host delegation executor untouched. Agent inference settings still register normally.",
+          "description": "Slim task controls: \"native\" (default) exposes task_status, task_cancel, task_reply and task_report; \"off\" registers none. Both use the native OpenCode lifecycle. Session preset routing defaults to on in native and off in off; sessionPresetRouting overrides that default.",
           "type": "string",
           "enum": [
-            "managed",
             "native",
             "off"
           ]
@@ -1467,11 +1472,7 @@
           "not": {}
         },
         "maxSessionsPerAgent": {
-          "default": 2,
-          "description": "Per-parent retention cap for reusable or retained-stopped background sessions of each agent (1–10), not a running-task concurrency limit. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 2.",
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10
+          "not": {}
         },
         "maxContextLines": {
           "not": {}
@@ -1492,119 +1493,28 @@
           "not": {}
         },
         "wallClockTimeoutMs": {
-          "default": 0,
-          "description": "Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. On expiry the plugin asks the host to stop the child and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.",
-          "anyOf": [
-            {
-              "type": "number",
-              "const": 0
-            },
-            {
-              "type": "integer",
-              "minimum": 60000,
-              "maximum": 2147483647
-            }
-          ]
+          "not": {}
         },
         "stopConfirmationMs": {
-          "default": 5000,
-          "description": "Terminal-gate grace period for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 5,000 (5 seconds).",
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 60000
+          "not": {}
         },
         "concurrency": {
-          "default": {
-            "defaultConcurrency": 0,
-            "providerConcurrency": {},
-            "modelConcurrency": {}
-          },
-          "description": "Plugin concurrency admission limits. V1 managed lifecycle only; unsupported and rejected on OpenCode v2, even when every limit is zero. Configure delegation limits through the native host instead.",
-          "type": "object",
-          "properties": {
-            "defaultConcurrency": {
-              "default": 0,
-              "description": "Maximum concurrently running native background tasks. 0 disables the default cap.",
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 1000
-            },
-            "providerConcurrency": {
-              "default": {},
-              "description": "Per-provider concurrency caps keyed by provider ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that provider.",
-              "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "minLength": 1
-              },
-              "additionalProperties": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 1000
-              }
-            },
-            "modelConcurrency": {
-              "default": {},
-              "description": "Per-model concurrency caps keyed by provider/model ID. The most specific configured cap wins: model > provider > default. 0 means unlimited for that model.",
-              "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "minLength": 1
-              },
-              "additionalProperties": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 1000
-              }
-            }
-          },
-          "additionalProperties": false
+          "not": {}
         },
         "sameProviderPolicy": {
-          "default": {},
-          "description": "Opt-in per-provider policy for native background tasks on the V1 managed lifecycle (inert when backgroundJobs.mode is \"off\"): when the parent session and child agent resolve to a provider listed here as \"foreground\", the background task request is converted to foreground execution. Unlisted providers keep background behavior. OpenCode v2 subagents always run in the background, so this key is v1-only; an explicit value on v2 emits an unsupported-host warning and is ignored. Default {} (no conversion).",
-          "type": "object",
-          "propertyNames": {
-            "type": "string",
-            "minLength": 1
-          },
-          "additionalProperties": {
-            "type": "string",
-            "const": "foreground"
-          }
+          "not": {}
         },
         "waitForUserGuard": {
-          "default": true,
-          "description": "Intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Default enabled.",
-          "type": "boolean"
+          "not": {}
         },
         "childInputWake": {
-          "default": true,
-          "description": "When true, a background child ask wakes its parent with the ask content. V1 managed only; ignored with a warning on OpenCode v2 hosts. Default enabled.",
-          "type": "boolean"
+          "not": {}
         },
         "childInputWakeKinds": {
-          "default": {
-            "permission": false,
-            "question": true
-          },
-          "description": "Which background child ask kinds may wake the parent (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Permission asks default off (#1504): their replies carry no host wake and are resolved by the UI or an external responder, so a parent turn is wasted. Question asks default on.",
-          "type": "object",
-          "properties": {
-            "permission": {
-              "default": false,
-              "type": "boolean"
-            },
-            "question": {
-              "default": true,
-              "type": "boolean"
-            }
-          }
+          "not": {}
         },
         "pruneEvictedSessions": {
-          "default": false,
-          "description": "When true, removes the host child session when a retention trim evicts its terminal or retained-stopped record, only for background children this plugin launched itself (never foreground, unattributed placeholder, adopted, or restored sessions) and only after a host read confirms the session still belongs to the record parent. Never fires for parent deletion or explicit drops. v1 hosts only for now (v2 has no live session-status map, so every prune is skipped). Default disabled.",
-          "type": "boolean"
+          "not": {}
         },
         "continueOnIdle": {
           "not": {}
@@ -1759,15 +1669,7 @@
       }
     },
     "webfetch": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "description": "When false, skip loading this enhanced webfetch and its JSDOM probe so OpenCode uses its built-in version. disabled_tools: [\"webfetch\"] has the same cold behavior.",
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
+      "not": {}
     },
     "acpAgents": {
       "type": "object",

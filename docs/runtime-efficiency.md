@@ -2,8 +2,8 @@
 
 Slim keeps the same features and enabled defaults while avoiding repeated work.
 Feature switches stay independent: disabling the sidebar does not remove pane
-management, and disabling managed jobs does not remove native subagents, council
-or observer.
+management, and disabling background task controls does not remove native
+subagents, council or observer.
 
 ## Configuration reads
 
@@ -17,10 +17,11 @@ project reads.
 The sidebar keeps its 1s render poll. With `sidebar: false`, the 5s config poll
 still detects external multiplexer edits, but unchanged files are not parsed
 again. `tui: false` also stops the server-side sidebar recorder: no state-file
-writes and no parent-hydration `session.get` reads. `webfetch.enabled: false` or
-`disabled_tools: ["webfetch"]` skips the enhanced implementation and its JSDOM
-startup probe. Companion request detection keeps its 250ms interval; its
-config refresh is a separate once-per-second duty.
+writes and no parent-hydration `session.get` reads.
+`disabled_tools: ["webfetch"]` skips the enhanced implementation. Even when
+enabled, its JSDOM parser stays unloaded until HTML extraction is requested.
+Companion request detection keeps its 250ms interval; its config refresh is a
+separate once-per-second duty.
 
 ## Pass-local facts
 
@@ -31,10 +32,15 @@ derivations. Health accounting comes from completed registrations.
 On v2 with session preset routing enabled, one prompt admission reuses its
 validated session identity and preset binding for profile capture; the next
 admission rechecks host identity and storage. `backgroundJobs.mode: "off"`
-constructs neither the preset store nor the child profile bridge, registers no
-session-preset RPC or server command, and leaves the native executor unchanged.
-Preset delegation, prompt and event paths perform no session reads or KV work
-in that mode; static agent inference settings still register with the host.
+defaults session-preset routing off; set `sessionPresetRouting: true` to keep
+it. With routing off, `off` constructs neither the preset store nor the child
+profile bridge, registers no session-preset RPC or server command, and leaves
+the native executor unchanged. When neither session presets, the sidebar, nor
+the native retry path consumes runtime profiles, v2 also skips the startup
+profile seed and automatic refresh; every agent keeps its startup model,
+variant, request options, and `inheritModelFrom`. Preset delegation, prompt and
+event paths perform no session reads or KV work in that mode; static agent
+inference settings still register with the host.
 Stored history is read for agent attribution only when a message lacks
 an agent. Message transforms use a request-local view of valid/user messages,
 rebuilt after structural edits, preserving phase/council anchors and the
@@ -46,15 +52,10 @@ The server entry keeps shared coordination in small leaf modules. Optional
 implementations load inside their existing activation gates instead of through
 hook, tool or utility barrels:
 
-- `backgroundJobs.mode: "managed"` (V1 only) loads the board, supervisor,
-  admission state, recovery and managed tools. `"native"` (the V2 default) loads
-  only the thin host-read controls and, on V2, the queue-only report; `"off"`
-  loads neither implementation. On V2 the managed gates are structurally false,
-  so the board, persistence, recovery, adoption and wake modules are never
-  resolved, independent of configuration. The v1 wake scheduler is separate from
-  the pure message helpers used on both hosts.
-- `autoUpdate: false` or the disabled `auto-update-checker` hook skips loading
-  the v1 update implementation. On v2 the v1 server updater is never loaded
+- `backgroundJobs.mode: "native"` loads thin host-read controls and the child
+  report; `"off"` loads neither implementation.
+- `autoUpdate: false` skips loading the v1 update implementation. On v2 the
+  v1 server updater is never loaded
   (it cannot install there and its toast is a shim no-op); the host owns
   package management and the TUI notice. Tool guards follow their existing
   hook switches. When every post-tool consumer is off, the shared v1
@@ -71,8 +72,9 @@ hook, tool or utility barrels:
   uses the original manager's locking and pruning path.
 
 Fallback retains the manager required by explicit preset applications and saved
-session bindings on v2, even with the file watcher off. Disabling the
-`foreground-fallback` hook removes that implementation entirely.
+session bindings on v2, even with the file watcher off. When no preset routing,
+sidebar, or retry consumer exists, the runtime-profile seed is skipped too.
+Disabling the `foreground-fallback` hook removes that implementation entirely.
 
 Both contracts on the thin TUI entry check the environment and `tui` gate before
 loading the render stack. Public entry paths are unchanged and ESM chunks ship
@@ -92,14 +94,16 @@ usage advice advertising it. User-authored prompt overrides remain untouched.
 
 ## State and events
 
-Board lookup and boolean predicates do not sort; ordered history still does.
-TUI projection reads one board view, and native event batches coalesce recorder
-writes and projection work into one locked commit. Cross-process locks, atomic
+Native event batches coalesce recorder writes and projection work into one
+locked commit. Cross-process locks, atomic
 publication, retries and per-owner disposal remain in place.
 
 The v2 event subscription freezes the union required by enabled consumers.
-Native lifecycle, usage, forms and permissions remain observed; Interview text
-streams are added only when Interview is enabled.
+Identity, move and deletion events always serve permissions and cleanup.
+Lifecycle events follow status consumers; step events follow fallback or cache
+telemetry. Forms and permission wait events follow Companion, and Interview
+adds its text streams. With the sidebar off, event fan-out also skips TUI
+snapshot batches.
 
 ## Verification
 

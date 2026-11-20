@@ -14,12 +14,7 @@ the built-in `/models`, so it triggers no LLM turn.
 | 2. Agent arrangement | Choose a Base preset, add / remove / edit local agents, then Save (or Save & Apply) |
 | 3. Edit agent | Pick model → variant (thinking strength) → temperature → options (JSON) |
 
-> `/preset` is a TUI-only slash command (like `/models`). On v1 hosts invoke
-> it via autocomplete selection or a keybind — typing `/preset` + Enter does
-> not open the manager (same design as `/models`), and it takes no name
-> argument.
->
-> On v2 hosts, typing `/preset` + Enter opens the same three-level manager,
+> Typing `/preset` + Enter opens the three-level manager,
 > and the sidebar's preset row opens it on click. Applying a preset from the
 > manager asks you to choose **Current session** or **Global default**.
 > `/preset <name>` is the fast path for the first choice: it binds the preset
@@ -28,8 +23,9 @@ the built-in `/models`, so it triggers no LLM turn.
 >
 > Non-TUI clients (OpenChamber, SDK consumers, ACP hosts) get a server-side
 > `/preset <name>` command with the same meaning. No argument lists the
-> available presets; a name binds the invoking session; an unknown name reports
-> the valid options. It is apply-only — create, edit and delete stay in the TUI
+> available presets, the current session binding, and the global and effective
+> defaults. A name binds the invoking session; an unknown name reports the
+> valid options. It is apply-only — create, edit and delete stay in the TUI
 > manager — and the client reports the result without a model turn, so no turn
 > or context is spent and the binding applies to that session's next
 > delegation. Listing `preset` in `disabled_commands` removes both the TUI
@@ -38,11 +34,12 @@ the built-in `/models`, so it triggers no LLM turn.
 To choose a preset for new work, open a new session and run
 `/preset <name>` in it.
 
-> **`backgroundJobs.mode: "off"` disables session bindings.** Session bindings
-> remain available in the V2 `native` default; `off` leaves
-> native delegation untouched: no session `/preset` command, RPC, or child
-> snapshot. Children use the registered agent configuration, and the `preset`
-> global default still selects those settings at startup.
+> **`backgroundJobs.mode: "off"` disables session bindings by default.** Session
+> bindings remain available in the V2 `native` default; set
+> `sessionPresetRouting: true` to keep them with task controls off. Otherwise
+> `off` leaves native delegation untouched: no session `/preset` command, RPC,
+> or child snapshot. Children use the registered agent configuration, and the
+> `preset` global default still selects those settings at startup.
 
 ## Reading the current team
 
@@ -72,10 +69,16 @@ command restores the picker and the binding read.
 ## Scope and when changes take effect
 
 On v2, a root work session captures its subagent inference configuration before
-its first prompt is admitted. Its new native subagents inherit their
-direct parent's snapshot, including model variants, inference options and fallback
-chains. Default-bound roots refresh their snapshot on their next admission;
+its first prompt is admitted. New Slim subagents inherit their direct parent's
+snapshot, including model variants, inference options and fallback chains.
+Default-bound roots refresh their snapshot on their next admission;
 named-preset bindings stay pinned until explicitly reapplied.
+
+Routing applies to Slim's registered agents and their registered display names.
+With `replaceBuiltinSubagents: false`, retained native `general` and `explore`
+keep host inference settings on launch and continuation. Legacy `agents.explore`
+configuration still configures Slim `explorer`; it does not configure the native
+`explore` agent.
 
 | Action | What is saved | Who uses the change |
 |--------|---------------|---------------------|
@@ -175,9 +178,6 @@ watcher's completion. Invalid configuration preserves the last-known-good
 defaults. Fix the configuration before retrying the refresh or applying it
 to a session.
 
-On v1, `/preset` retains its configuration-writing behavior. **Reload
-OpenCode** after applying a preset.
-
 ## Editing inherited presets
 
 At Level 2, select **Base preset** to choose one parent preset or **(none)**.
@@ -190,7 +190,6 @@ local agent overrides; it does not flatten or copy inherited agents into the
 child. Editing the base preset updates derived definitions for future v2
 session bindings and refreshes default-bound roots on their next admission;
 named-preset bindings retain their saved snapshots until explicitly reapplied.
-On v1, reload to apply the edited definition.
 A base preset with dependents cannot be deleted until those presets choose
 another base or clear inheritance.
 

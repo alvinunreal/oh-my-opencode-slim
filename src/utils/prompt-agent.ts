@@ -66,7 +66,7 @@ export const SYSTEM_AGENTS: ReadonlySet<string> = new Set([
 export interface ResolveSessionAgentOptions {
   /**
    * Agent the plugin already recorded for this session (e.g. from
-   * `SessionMetadataStore`, `message.updated`, or the job board record).
+   * `SessionMetadataStore` or `message.updated`).
    * Trusted first because it needs no round trip, but still filtered through
    * {@link normalizeAgentHint} so an observed {@link SYSTEM_AGENTS} name can
    * never be prompted with.

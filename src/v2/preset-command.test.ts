@@ -120,7 +120,7 @@ describe('presetListFeedback', () => {
     });
 
     expect(message).toBe(
-      'Available presets: deep, fast. Session team: deep. Global default: fast. Run /preset <name> to apply one to this session.',
+      'Session team: deep (explicit). Global default: fast. Effective default: fast (user config). Available presets: deep, fast. Run /preset <name> to apply one to this session.',
     );
   });
 
@@ -141,7 +141,7 @@ describe('presetListFeedback', () => {
     expect(message).toContain('Global default: fast.');
   });
 
-  test('an unreadable binding reports the default only', async () => {
+  test('an unreadable binding reports unknown alongside the defaults', async () => {
     writeUserConfig({
       preset: 'fast',
       presets: { fast: { fixer: { model: 'test/fast' } } },
@@ -156,8 +156,59 @@ describe('presetListFeedback', () => {
       applyToSession: async () => boundState('ses_caller', 'fast'),
     });
 
-    expect(message).not.toContain('Session team');
+    expect(message).toContain('Session team: unknown.');
     expect(message).toContain('Global default: fast.');
+  });
+
+  test('shows default provenance without changing a saved binding or config', async () => {
+    writeUserConfig({
+      preset: 'fast',
+      presets: { fast: { fixer: { model: 'test/fast' } } },
+    });
+    const configFile = path.join(
+      tempDir,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    const config = JSON.stringify({
+      preset: 'deep',
+      presets: { deep: { fixer: { model: 'test/deep' } } },
+    });
+    fs.writeFileSync(configFile, config);
+
+    const options = {
+      directory: tempDir,
+      sessionID: 'ses_caller',
+      readSessionPreset: async () => ({
+        ...boundState('ses_caller', 'fast'),
+        presetName: null,
+        selection: 'default' as const,
+      }),
+    };
+    const message = await presetListFeedback(options);
+    expect(message).toContain('Session team: (unnamed) (default-derived).');
+    expect(message).toContain('Global default: fast.');
+    expect(message).toContain('Effective default: deep (project config).');
+    process.env.OH_MY_OPENCODE_SLIM_PRESET = 'fast';
+    expect(await presetListFeedback(options)).toContain(
+      'Effective default: fast (environment).',
+    );
+    expect(readUserConfig().preset).toBe('fast');
+    expect(fs.readFileSync(configFile, 'utf-8')).toBe(config);
+  });
+
+  test('shows a saved binding when the config is unreadable', async () => {
+    fs.writeFileSync(userConfigPath(), '{ broken');
+    const message = await presetListFeedback({
+      directory: tempDir,
+      sessionID: 'ses_caller',
+      readSessionPreset: readBound('saved'),
+    });
+    expect(message).toContain('Session team: saved (explicit).');
+    expect(message).toContain(
+      'Preset defaults and available presets: unknown.',
+    );
   });
 
   test('no presets configured points at the config file', async () => {
@@ -169,7 +220,7 @@ describe('presetListFeedback', () => {
         applyToSession: async () => boundState('ses_caller', 'fast'),
       }),
     ).toBe(
-      'No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
+      'Session team: not bound yet. Global default: (none). Effective default: (none). No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
     );
   });
 });
@@ -275,7 +326,7 @@ describe('createPresetCommand', () => {
         prompt: { text: '  ' },
       }),
     ).rejects.toThrow(
-      'Available presets: fast. Session team: not bound yet. Run /preset <name> to apply one to this session.',
+      'Session team: not bound yet. Global default: (none). Effective default: (none). Available presets: fast. Run /preset <name> to apply one to this session.',
     );
   });
 

@@ -35,6 +35,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
+import { withTuiAttachment } from '../companion/attachment-test-helper';
 import { stateFilePath } from '../companion/manager';
 import { RuntimeConfig } from '../config/runtime';
 import { acquireMarketplaceLease } from '../marketplace/lease';
@@ -1067,6 +1068,25 @@ describe('createV2Setup e2e', () => {
         temperature: 0.35,
         native: true,
       });
+      // Resume a bound child with a model but no agent. The public tool
+      // bridge must preserve the override through admission and retry.
+      const agentlessChild = await launch('agentless-child', 'root', {});
+      expect(
+        stored.get(`session-preset/v1/${agentlessChild}`).explicitModel,
+      ).toBe(false);
+      await launch('agentless-resume', 'root', {
+        agent: undefined,
+        sessionID: agentlessChild,
+        model: 'manual/agentless#low',
+      });
+      expect(
+        stored.get(`session-preset/v1/${agentlessChild}`).explicitModel,
+      ).toBe(true);
+      expect(nativeInputs.at(-1)?.model).toBe('manual/agentless#low');
+      const beforeAgentlessRetry = switches.length;
+      await retry(agentlessChild, 'manual', 'agentless');
+      expect(switches).toHaveLength(beforeAgentlessRetry);
+
       const explicitChild = await launch('explicit-call', 'root', {
         model: 'manual/chosen#low',
       });
@@ -1356,6 +1376,9 @@ describe('createV2Setup e2e', () => {
       });
       afterNativePrompt = undefined;
       expect(nativeInputs.at(-1)?.model).toBe('manual/resumed#low');
+      expect(stored.get('session-preset/v1/ses_child-1').explicitModel).toBe(
+        true,
+      );
       expect(
         stored.get('session-preset/v1/ses_child-1').bundle.presetName,
       ).toBe('A');
@@ -2173,10 +2196,11 @@ describe('createV2Setup e2e', () => {
     await cleanup();
   }, 20_000);
 
-  test('v2 context bridge preserves live model variant into Companion state', async () => {
+  test('v2 context bridge preserves Companion attribution and variant with sidebar disabled', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({
+        sidebar: false,
         companion: {
           enabled: true,
           binaryPath: path.join(fixtureRoot, 'missing-companion-bin'),
@@ -2184,57 +2208,59 @@ describe('createV2Setup e2e', () => {
       }),
     );
 
-    const { ctx, calls, events } = makeMockV2Context(projectDir);
-    const cleanup = await createV2Setup()(ctx);
+    await withTuiAttachment(projectDir, async () => {
+      const { ctx, calls, events } = makeMockV2Context(projectDir);
+      const cleanup = await createV2Setup()(ctx);
 
-    try {
-      expect(calls.contextHookCb).toBeFunction();
-      events.push({
-        type: 'session.execution.started',
-        data: { sessionID: 'ses_companion_variant' },
-      });
-      await settlePump();
-      await calls.contextHookCb?.({
-        sessionID: 'ses_companion_variant',
-        agent: 'fixer',
-        model: {
-          providerID: 'openai',
-          id: 'gpt-live',
-          variant: 'reasoning-high',
-        },
-        system: [],
-        tools: {},
-        messages: [
-          {
-            info: { id: 'user-live-variant', role: 'user' },
-            parts: [{ type: 'text', text: 'hello' }],
+      try {
+        expect(calls.contextHookCb).toBeFunction();
+        events.push({
+          type: 'session.execution.started',
+          data: { sessionID: 'ses_companion_variant' },
+        });
+        await settlePump();
+        await calls.contextHookCb?.({
+          sessionID: 'ses_companion_variant',
+          agent: 'fixer',
+          model: {
+            providerID: 'openai',
+            id: 'gpt-live',
+            variant: 'reasoning-high',
           },
-        ],
-      });
+          system: [],
+          tools: {},
+          messages: [
+            {
+              info: { id: 'user-live-variant', role: 'user' },
+              parts: [{ type: 'text', text: 'hello' }],
+            },
+          ],
+        });
 
-      const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
-        sessions: Array<{
-          active_agent_details?: Array<{
-            session_id: string;
-            agent: string;
-            model?: string;
-            variant?: string;
+        const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
+          sessions: Array<{
+            active_agent_details?: Array<{
+              session_id: string;
+              agent: string;
+              model?: string;
+              variant?: string;
+            }>;
           }>;
-        }>;
-      };
-      const details = state.sessions.flatMap(
-        (session) => session.active_agent_details ?? [],
-      );
+        };
+        const details = state.sessions.flatMap(
+          (session) => session.active_agent_details ?? [],
+        );
 
-      expect(details).toContainEqual({
-        session_id: 'ses_companion_variant',
-        agent: 'fixer',
-        model: 'openai/gpt-live',
-        variant: 'reasoning-high',
-      });
-    } finally {
-      await cleanup();
-    }
+        expect(details).toContainEqual({
+          session_id: 'ses_companion_variant',
+          agent: 'fixer',
+          model: 'openai/gpt-live',
+          variant: 'reasoning-high',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
   }, 20_000);
 
   test('v2 permission raw + synthesized delivery advances Companion attention once per request', async () => {
@@ -2248,50 +2274,52 @@ describe('createV2Setup e2e', () => {
       }),
     );
 
-    const { ctx, events } = makeMockV2Context(projectDir);
-    const cleanup = await createV2Setup()(ctx);
+    await withTuiAttachment(projectDir, async () => {
+      const { ctx, events } = makeMockV2Context(projectDir);
+      const cleanup = await createV2Setup()(ctx);
 
-    try {
-      events.push({
-        type: 'permission.asked',
-        // Supported envelopes can carry an unrelated properties object while
-        // the canonical request identity remains in data.
-        properties: { transport: 'v2' },
-        data: {
-          id: 'permission-attention-1',
-          sessionID: 'ses_permission_attention',
-          action: 'bash',
-          resources: ['*'],
-        },
-      });
-      await settlePump();
+      try {
+        events.push({
+          type: 'permission.asked',
+          // Supported envelopes can carry an unrelated properties object while
+          // the canonical request identity remains in data.
+          properties: { transport: 'v2' },
+          data: {
+            id: 'permission-attention-1',
+            sessionID: 'ses_permission_attention',
+            action: 'bash',
+            resources: ['*'],
+          },
+        });
+        await settlePump();
 
-      const readAttentionSeq = () => {
-        const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
-          sessions: Array<{ attention_seq?: number }>;
+        const readAttentionSeq = () => {
+          const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
+            sessions: Array<{ attention_seq?: number }>;
+          };
+          return state.sessions[0]?.attention_seq;
         };
-        return state.sessions[0]?.attention_seq;
-      };
 
-      // mapV2EventToV1 delivers permission.asked raw + synthesized. The raw
-      // copy has unrelated properties while its ID remains in data; both must
-      // still collapse to one attention generation.
-      expect(readAttentionSeq()).toBe(1);
+        // mapV2EventToV1 delivers permission.asked raw + synthesized. The raw
+        // copy has unrelated properties while its ID remains in data; both must
+        // still collapse to one attention generation.
+        expect(readAttentionSeq()).toBe(1);
 
-      events.push({
-        type: 'permission.asked',
-        data: {
-          id: 'permission-attention-2',
-          sessionID: 'ses_permission_attention',
-          action: 'read',
-          resources: ['*'],
-        },
-      });
-      await settlePump();
-      expect(readAttentionSeq()).toBe(2);
-    } finally {
-      await cleanup();
-    }
+        events.push({
+          type: 'permission.asked',
+          data: {
+            id: 'permission-attention-2',
+            sessionID: 'ses_permission_attention',
+            action: 'read',
+            resources: ['*'],
+          },
+        });
+        await settlePump();
+        expect(readAttentionSeq()).toBe(2);
+      } finally {
+        await cleanup();
+      }
+    });
   }, 20_000);
 
   test('disabled_commands interview gates both registration and execution', async () => {
@@ -4651,23 +4679,6 @@ describe('createV2Setup e2e', () => {
     expect(calls.disposed).toContain('mcp.transform');
   }, 20_000);
 
-  test('missing MCP transform degrades gracefully (v1 host embedded v2 core)', async () => {
-    const { ctx } = makeMockV2Context(projectDir);
-    const mcp = ctx.mcp as unknown as { transform?: unknown };
-    mcp.transform = undefined;
-
-    // Should succeed with degraded MCP snapshot instead of failing
-    const cleanup = await createV2Setup()(ctx);
-    await flushLoggerForTesting();
-    const logText = readPluginLog();
-    expect(logText).toContain(
-      '[v2] ctx.mcp.transform unavailable; skipping MCP snapshot (v1 host embedded v2 core)',
-    );
-    expect(logText).toContain('[v2] agents registered');
-
-    await cleanup();
-  }, 20_000);
-
   test('backgroundJobs.mode off still applies configured agent options to requests', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
@@ -5372,5 +5383,178 @@ describe('createV2Setup e2e', () => {
       } catch {}
       await cleanup();
     }
+  });
+
+  describe('inherited subagent parent model (ARGUS-1902-01)', () => {
+    const PARENT = 'ses_inherit_parent';
+    const CHILD = 'ses_inherit_child';
+    const TURN = { providerID: 'turn', id: 'parent-turn', variant: 'high' };
+
+    const setupInherit = async (pinned?: Record<string, unknown>) => {
+      await Bun.write(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          companion: { enabled: false },
+          agents: { explorer: { inheritModelFrom: 'session' } },
+        }),
+      );
+      const { ctx, calls } = makeMockV2Context(projectDir);
+      // Native Session.Info has no model unless the creator selected one.
+      (ctx.session as unknown as Record<string, unknown>).get = async ({
+        sessionID,
+      }: {
+        sessionID: string;
+      }) =>
+        sessionID === CHILD
+          ? {
+              id: CHILD,
+              parentID: PARENT,
+              directory: projectDir,
+              agent: 'explorer',
+            }
+          : {
+              id: sessionID,
+              directory: projectDir,
+              agent: 'orchestrator',
+              ...(sessionID === PARENT && pinned ? { model: pinned } : {}),
+            };
+      const childRecord = async () =>
+        (await ctx.storage.get(`session-preset/v1/${CHILD}`)) as
+          | Record<string, unknown>
+          | undefined;
+      const nativeInputs: Array<Record<string, unknown>> = [];
+      const native = {
+        description: 'native subagent',
+        execute: async (input: unknown, context: unknown): Promise<unknown> => {
+          nativeInputs.push({ ...(input as Record<string, unknown>) });
+          await (
+            context as {
+              progress: (update: Record<string, unknown>) => Promise<void>;
+            }
+          ).progress({ sessionID: CHILD, status: 'running' });
+          return { sessionID: CHILD, status: 'running', output: 'running' };
+        },
+      };
+      (ctx.tool as unknown as Record<string, unknown>).transform = async (
+        cb: (draft: unknown) => void,
+      ) => {
+        cb({
+          add: () => {},
+          update: (id: string, update: (candidate: unknown) => void) => {
+            if (id === 'subagent') update(native);
+          },
+          get: (id: string) => (id === 'subagent' ? native : undefined),
+        });
+        return { dispose() {} };
+      };
+      const cleanup = await createV2Setup()(ctx);
+      const observe = async (
+        sessionID: string,
+        model: Record<string, unknown> = TURN,
+      ) =>
+        calls.contextHookCb?.({
+          sessionID,
+          agent: 'orchestrator',
+          model,
+          options: {},
+          system: [],
+          tools: {},
+          messages: [],
+        });
+      const launch = async (input: Record<string, unknown> = {}) => {
+        const event = {
+          tool: 'subagent',
+          sessionID: PARENT,
+          agent: 'orchestrator',
+          messageID: 'msg_inherit_assistant',
+          id: 'call_inherit',
+          input: {
+            agent: 'explorer',
+            description: 'inherit probe',
+            prompt: 'Work',
+            ...input,
+          } as Record<string, unknown>,
+        };
+        const before = calls.toolBeforeCb;
+        if (!before) throw new Error('tool:execute.before not captured');
+        await before(event);
+        return event;
+      };
+      const execute = (event: { id: string; input: unknown }) =>
+        native.execute(event.input, {
+          sessionID: PARENT,
+          id: event.id,
+          signal: new AbortController().signal,
+          progress: async () => {},
+        });
+      return {
+        cleanup,
+        observe,
+        launch,
+        execute,
+        childRecord,
+        nativeInputs,
+      };
+    };
+
+    test('an unpinned parent delegates on the model its current turn runs', async () => {
+      const t = await setupInherit();
+      try {
+        await t.observe(PARENT);
+        await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
+        const event = await t.launch();
+        expect(event.input.model).toBe('turn/parent-turn#high');
+        await t.execute(event);
+        expect(t.nativeInputs.at(-1)?.model).toBe('turn/parent-turn#high');
+        expect((await t.childRecord())?.inheritedProviderID).toBe('turn');
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
+
+    test('a persisted parent model keeps precedence over the observed turn', async () => {
+      const t = await setupInherit({
+        providerID: 'pinned',
+        id: 'parent-pin',
+        variant: 'default',
+      });
+      try {
+        await t.observe(PARENT);
+        const event = await t.launch();
+        expect(event.input.model).toBe('pinned/parent-pin');
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
+
+    test('an explicit per-call model wins and keeps the inherited origin', async () => {
+      const t = await setupInherit();
+      try {
+        await t.observe(PARENT);
+        const event = await t.launch({ model: 'explicit/choice' });
+        expect(event.input.model).toBe('explicit/choice');
+        await t.execute(event);
+        expect(await t.childRecord()).toMatchObject({
+          explicitModel: true,
+          preserveModel: true,
+          inheritedProviderID: 'turn',
+        });
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
+
+    test('an unresolvable parent model still refuses before the executor', async () => {
+      const t = await setupInherit();
+      try {
+        // Another session's observed model must not stand in for the parent's.
+        await t.observe('ses_inherit_other', { providerID: 'other', id: 'x' });
+        await expect(t.launch()).rejects.toThrow(
+          'Inherited subagent parent model unavailable',
+        );
+      } finally {
+        await t.cleanup();
+      }
+    }, 20_000);
   });
 });

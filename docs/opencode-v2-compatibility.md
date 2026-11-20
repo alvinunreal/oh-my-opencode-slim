@@ -7,7 +7,7 @@ Bundled skills and MCPs register through OpenCode’s plugin APIs.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
-2.3.0. Typecheck covers the consumed listing filters, nullable continuation
+2.3.2. Typecheck covers the consumed listing filters, nullable continuation
 cursors, native execution event envelope, compaction result names and
 hook/permission contracts. The official hook set also includes `fork`,
 `experimental.model.resolve`, and `experimental.idle`; Slim does not register
@@ -20,7 +20,7 @@ event-type union at setup and subscribes to Interview text streams only when
 Interview is enabled. It consumes none of the GUI surface and retains the
 existing promise-adapter bridges. The native patch tool is
 still named `patch` with a `{ patchText }` input, and the apply-patch preflight
-now serves both that name and v1's `apply_patch`. Native schema input repair
+serves that tool. Native schema input repair
 and Slim's invalid-JSON failure reminder have different triggers: one repairs
 arguments before execution, the other only reminds after a malformed call.
 Likewise, `/goal` owns its idle judge loop while `deepwork-goal` only restores
@@ -61,8 +61,8 @@ v2.0.18 and v2.0.32; they do not represent a new live-host certification.
 
 Plugin tools that ask at runtime (`webfetch` per URL, `acp_run` on spawn and
 on ACP agent requests) are authorized through the host's
-`permission.assert`, so per-call `ask` and resource-level `deny` rules apply
-as on v1. `permission.assert` exists from OpenCode v2.0.29; on older v2 hosts
+`permission.assert`, so per-call `ask` and resource-level `deny` rules apply.
+`permission.assert` exists from OpenCode v2.0.29; on older v2 hosts
 those asks are logged and not enforced (whole-tool `deny` still hides the
 tool).
 
@@ -78,7 +78,7 @@ plugin API does not expose question replies. See the
 
 ## The v2 adapter (`src/v2/setup.ts`)
 
-`setup(ctx)` wraps the existing v1 factory rather than reimplementing it:
+`setup(ctx)` wraps the shared factory rather than reimplementing it:
 
 1. Builds a v1-shaped `PluginInput` from the v2 context
    (`src/v2/client-shim.ts`): the project directory from `ctx.location`,
@@ -88,38 +88,23 @@ plugin API does not expose question replies. See the
    (mapped entries preserve the v2 terminal metadata — `time.completed`,
    `finish`, `error` — and the 2.0.8 trailing `idle` lifecycle marker maps
    to the skippable v1 `system` role, so transcript classification works
-   natively on v2). After completed compaction, terminal-evidence reads
-   restore persisted history through paginated `session.messages` when
-   available, stopping once the pre-revive baseline or queued prompt is
-   found. This preserves child completion identity without reading older
-   history unnecessarily. Recovery scans stop after 10 pages of 100 messages
-   or four seconds total; exhausting either budget leaves completion
-   unconfirmed rather than trusting a partial result. Bounded tail reads
-   still fetch only the requested page;
-   ordinary context reads remain unchanged.
-   Hosts without persisted-message reads retain incomplete context and do
-   not bypass missing-baseline checks. `session.prompt` (default `delivery: "steer"`;
+    natively on v2). `session.prompt` (default `delivery: "steer"`;
    `noReply: true` maps to `delivery: "queue", resume: false` — queue-only, never steering),
    `session.update`→
    `session.update` (`{sessionID, title}`), `session.delete`→`remove` (same
    `DELETE /api/session/:id`), and `session.list` (v2 `Session.Info` page → the v1
    `{data}` envelope with `directory` derived from `location` and `outcome`
-   mapped, used by V1-shaped consumers such as the interview dashboard and the
-   V1 orchestrator-wake children enumeration). OpenCode 2.1 exposes `list`:
+    mapped, used by V1-shaped consumers such as the interview dashboard).
+    The host exposes `list`:
     the shim drains its cursor pages, sends root-only filters as real `null`,
     and refuses incomplete enumeration after 1000 sessions or four seconds.
-    The final empty page is included in the read budget. Older cursorless
-    extensions still work; v2.0.x hosts without `list` retain the degraded
-    path. These adapter checks do not establish live 2.1 compatibility (see
-   [Not exposed to plugins: `session.list` / `session.remove`](#not-exposed-to-plugins-sessionlist-sessionremove)).
+     The final empty page is included in the read budget.
    The shim marks the input `hostFlavor: 'v2'` and never fakes success
    shapes: methods the host lacks degrade with an honest log (or are
    omitted entirely, as with `session.get`, so capability probes see the
    truth).
 2. Invokes `OhMyOpenCodeLite(pluginInput)` to reuse **all** existing build
-   logic (config, agents, tools, hooks, multiplexer, companion). The V1
-   managed lifecycle (job board, recovery, wake scheduler, persistence) is not
-   constructed on V2.
+    logic (config, agents, tools, hooks, multiplexer, companion).
 3. Runs the v1 `config()` hook against a synthesized config to resolve agent
    models and the slash commands.
 4. Bridges the returned v1 `Hooks` into v2 registrations:
@@ -164,16 +149,14 @@ plugin API does not expose question replies. See the
       sessions only.
     - a native `ctx.session.hook("prompt")` registration (capability-
       guarded): the v2 prompt hook fires **once per admitted input** with
-      the eventual inbox User `messageID`, giving the v1 `chat.message`
-      consumers (task-session-manager / orchestrator-wake
-      `observeChatMessage`, `toolLoopGuard.observeNewUserMessage`) true
+      the eventual inbox User `messageID`, giving the shared `chat.message`
+      consumers, including `toolLoopGuard.observeNewUserMessage`,
       once-per-admission fidelity with prompt parts. The FIRST admitted
       prompt per session is deferred until the first agent-bearing
       context event arrives, then delivered once with parts + agent
       together — the v1 `chat.message` handler only registers the session
       agent when a delivery carries one, and its consumers gate on that
-      registration, so an agent-less first forward would be dropped (lost
-      input-wait latch clearing / wake-progress rearm). Bounded fallbacks
+      registration, so an agent-less first forward would be dropped. Bounded fallbacks
       (next admission, or a context event whose trailing user message has
       moved past the pending one) flush a still-pending prompt best-known
       when no agent is ever learned. When the prompt hook registers, the
@@ -222,8 +205,7 @@ plugin API does not expose question replies. See the
       tool is normalized to v1 `task` semantics (name mapping, `agent`→
       `subagent_type`, `sessionID`→`task_id`, and back after the hook so
       v2 executes the repaired input). A throwing `execute.before`
-      **rethrows** — v2 rejects the tool call, which is how the v1
-      anti-duplicate / relaunch-lease guards enforce on v2. The after
+      **rethrows**, so v2 rejects the tool call. The after
       bridge honors v2's status discrimination: `error` events synthesize
       the v1 after-hook output from the error text (so v1 after-hooks such
       as tool-loop-guard can append warnings, written back where the host
@@ -266,14 +248,9 @@ plugin API does not expose question replies. See the
       events (`started` → busy `session.status`; terminal subtypes → idle
       `session.status` + `session.idle`; `failed` → a v1 `session.error`
       with the host error payload before the idle pair), and no
-      `session.status`-based fallback remains. The execution-event
-      synthesis keeps orchestrator-wake suppression/arm scheduling.
-      Automatic foreground replay fallback remains disabled on v2: the host
-      has no atomic turn-conditional model switch, so a replay started for a
-      failed turn could commit after a newer user turn takes over. The
-      retry-hook steering path still runs and switches the model in place. The Form and permission bridges above feed
-      the companion's waiting-input
-      indicator and the task-session-manager input-wait gate. Form questions
+       `session.status`-based fallback remains. Retry-hook steering switches
+       fallback models in place. The Form and permission bridges feed the
+       companion's waiting-input indicator. Form questions
       are observation-only for plugin code on the pinned v2 host: the promise
       plugin context exposes `permission.reply`, but not a supported
       `form.reply`/`question.reply` API, so `task_reply` can answer v2
@@ -287,7 +264,7 @@ different: it first snapshots the configured host namespace inventory from
 `ctx.mcp.transform`, which is required for finalized-registry permission
 policy. A missing transform or unavailable inventory fails setup and
 unwinds registrations already acquired. The session hooks
-(`prompt`, `context`, `model.request`, `compaction`) register
+(`prompt`, `context`, `generate`, `model.request`, `compaction`) register
 **unconditionally** on full v2 contexts: a registration failure fails
 setup loudly instead of degrading — hook-name rejection is treated as a
 host contract violation, not a degrade path. Separately, `session.update`
@@ -301,7 +278,8 @@ check against the child's host `parentID`, and no board row, alias, adoption,
 lease, or terminal publication. `task_status` reads the child transcript and
 pending permissions on demand; `task_cancel` forwards the host interrupt and
 reports its answer; `task_reply` revalidates the pending request with the host
-before replying; `task_report` queues to the parent inbox with `resume: false`.
+before replying; `task_report` steers the parent inbox with `resume: true`
+unless the parent's outcome is `interrupted`.
 See [Tools](tools.md#background-task-control) and
 [Background Orchestration](background-orchestration.md).
 
@@ -336,7 +314,7 @@ currently break this plugin:
   goal plugin registers `/goal <objective>` and drives continuation from the
   `experimental.idle` hook with its own reviewer, round/stall limits,
   background-work awareness, and compaction reminder. This plugin ships no
-  loop command: use `/goal` on v2, or a plain prompt on v1.
+  loop command: use `/goal`.
 
 - **The `subagent` tool description grows a native roster.** On every
   context/compaction/generate build the host appends `Available subagents:`
@@ -404,12 +382,6 @@ currently break this plugin:
   synthetic wakes, the bridge also replaces the first text part with a
   copy restoring its internal flag and metadata. Both are idempotent;
   the provider-bound text bytes remain unchanged.
-- **Runtime status reconciliation is v1-only.** v2 has no
-  equivalent of the v1 live session-status map (`client.session.status`
-  is not a function on v2 hosts; `session.status` is not exposed to
-  plugins), and the native V2 lifecycle does not construct the
-  task-session-manager poll. v1 hosts expose the method and keep the exact
-  historical polling behavior.
 - **Plugin API surface and adoption status.** The v2 plugin API exposes
   session hooks `compaction`, `generate`, and `title` (the title and
   compaction hooks may set `result` to skip the model call entirely)
@@ -420,11 +392,7 @@ currently break this plugin:
   mutates only system/messages; its single cache hint rides
   `ContentPart.cache`. Adoption status: the **compaction hook is
   adopted** — the plugin strips phase reminders from the compaction input;
-  the V2 native lifecycle has no job board to preserve. On v1, the
-  `experimental.session.compacting` hook instead marks the next message
-  transform for that session; it strips only phase reminders after the
-  transform, leaving the job board untouched. The v2 adapter does not forward
-  this v1 hook; **child-session permission rules are applied** —
+  **child-session permission rules are applied** —
   plugin-managed child sessions receive exact-match task-policy rules
   once at creation via `ctx.session.update({sessionID, permissions})`
   (`createPermissionRulesBridge` in `src/v2/setup.ts`; exact-match
@@ -436,8 +404,14 @@ currently break this plugin:
   ruleset instead of keeping the parent's inherited session rules;
   triggered on plugin-managed child
   `session.created` and fail-soft with a one-time warning on reduced
-  hosts without the method); the `generate` session hook, the `title`
-  hook, and the `tabs` methods are not used. On the client SDK,
+  hosts without the method); the `generate` session hook is adopted as a
+  request-shaping bridge — auxiliary warm-up requests get the same
+  orchestrator system prompt, system collapse, and session-frozen runtime
+  profile options as the primary loop, so their prompt prefix stays
+  cacheable (issue #1934; only those idempotent steps replay, messages
+  shaping is turn-state dependent and is not replayed, and `title` requests
+  stay unshaped so orchestrator instructions never enter them); the `title`
+  hook and the `tabs` methods are not used. On the client SDK,
   `server.status` is named `server.info` (the plugin never calls it),
   and the `location.reload` / `fs.write` endpoints and the Form
   `hidden` field are likewise not adopted. The applied child-session
@@ -489,24 +463,14 @@ currently break this plugin:
   survives the reload (the module instance is reused); a
   local-directory plugin is forced onto a fresh module instance
   whenever its files change. The plugin handles the in-process re-entry
-  explicitly: the v1 `dispose` hook cancels pending foreground-fallback
-  initial-delay timers and fences off in-flight fallback chains at
-  their suspension points (`foregroundFallback.dispose()` — no replay,
-  abort, or transcript read continues through the destroyed client),
-  clears the process-global wake-gate
-  progress so the next generation does not inherit the previous
-  generation's two-wake no-progress caps (`clearAllWakeSessions()`),
-  and explicitly releases companion ownership
+  explicitly: the shared `dispose` hook disposes foreground fallback
+  and releases companion ownership
   (`companionManager.onExit()` — idempotent). The v2 `setup` entry
   calls `resetV2GenerationWarnings()`, rearming the one-time
   degradation latches (model.request ordering drift, permission-rules
   unavailable, session.list/remove unavailable) so every generation
   warns once. The event adapter passes
-  `location.shutdown` events through raw with no synthesis. The v1
-  user-wait-gate (`wait_for_user` HITL latch) stays armed across a
-  reload by design, and the v1 admission runtime defers its final
-  scheduler teardown by one macrotask so an immediate re-init
-  can retain active and queued calls.
+  `location.shutdown` events through raw with no synthesis.
 - **Config permission policies are kernel-enforced and deny-final.**
   `experimental.policies` supports `action: "permission"` entries
   (`effect: "allow"`/`"deny"`, resource wildcards) enforced by the host
@@ -582,7 +546,7 @@ form — including the single-slash npm protocol
 not watched.
 
 Do **not** register `dist/` or `dist/server` directly: `dist/` has no
-`tui` file for the v2 TUI role (its `tui.js` is the v1 bundle), and the
+`tui` file for the v2 TUI role, and the
 server-only `dist/server` directory has no TUI side. An external shim
 directory whose root files re-export this repo's built bundles also works
 when you prefer to keep the checkout out of the config:
@@ -591,8 +555,8 @@ Build first:
 
 ```bash
 bun install
-bun run build   # produces dist/index.js (v1), dist/server/index.js (v2
-                # server bundle, also served via the ./server subpath),
+bun run build   # produces dist/index.js and dist/server/index.js (v2
+                # server bundles, including the ./server subpath),
                 # dist/tui2.js (v2 TUI), dist/cli/
 ```
 
@@ -647,16 +611,10 @@ Agent models are resolved the same way as v1 (per-agent `model` in
 v2, set a working provider+model in your config or the plugin's config file
 so delegated subagents can run.
 
-The automatic replay path of foreground fallback is disabled on v2, even when
-configured: the current host API cannot atomically switch a session model only
-if the failed turn is still current, and an in-flight non-atomic
-`session.switchModel` replay could commit after a newer user turn takes over.
-The retry-hook steering path still runs: host retry events are absorbed up to
+The retry-hook steering path absorbs host retry events up to
 `fallback.maxRetries`, then the model is switched in place and the host retries
 the current turn on it. `fallback.initialRetryDelayMs` has no steering form and
-is ignored there. Other prompt callers, like the orchestration scheduler (v1
-only), merely pin the current model and keep steering; this is not foreground
-fallback.
+is ignored there.
 
 ## Native child lifecycle on v2
 
@@ -679,8 +637,8 @@ uncertain admission.
 
 On V2, `task_status` reads the exact child's latest round and trailing result
 from the host transcript. Missing or ambiguous evidence is reported as unknown
-or uncertain, never guessed. `diagnostic: true` is a V1 managed feature; native
-V2 status exposes the trailing result and pending permission request IDs
+or uncertain, never guessed. Native status exposes the trailing result and
+pending permission request IDs
 instead. There is no board, no startup re-adoption, and no completion
 re-delivery by the plugin. See [Tools](tools.md#background-task-control).
 
@@ -699,13 +657,6 @@ reports that it is no longer pending. The plugin keeps no request mirror, wait
 map, or lease, and OpenCode cancels pending permissions on reload.
 ### Diagnostics
 
-Two log lines aid drift diagnosis (both hosts): the task tool's terminal
-output that carries no parsable task id is logged with a ~140-char
-preview (`task output without a task id` — the host-output-drift
-detector), and an idle observation for a *tracked v1 managed child* with no
-running board record logs with a `[task-session-manager] WARN:` prefix
-instead of the routine idle line.
-
 **Secret redaction at the logger.** Every plugin log line — file sink,
 stderr fallback, and the append-failure path — passes through
 shape-based secret redaction at the logger's single compose point
@@ -718,14 +669,7 @@ against *accidental* leaks in short previews, not an adversarial
 guarantee: unprefixed short secrets, secrets containing run-breaking
 characters, and chunked or obfuscated content remain residual gaps,
 while long opaque non-secrets (UUIDs, hashes, long paths) are masked as
-accepted false positives. The parse-miss preview (`task output without
-a task id`) is stricter still: it is **structure-only** — tag and field
-names survive for drift diagnosis, but every value (XML attribute
-values, `key:`/`key=` prose values) is fully replaced with `[masked]`
-before slicing, because parse-miss content is untrusted-by-format and
-values (description fields in particular) carry user-authored text.
-All other log sites rely on the shape-based redaction at the logger
-choke point.
+accepted false positives.
 
 ## Limitations
 
@@ -738,9 +682,8 @@ methods for prompts, notifications, and renames. Interview notifications
 admit the synthetic input with `resume: false` — the interview URL lands in
 the session without waking an agent turn (the v1 `noReply` prompt
 equivalent). The markdown document
-remains the durable source of truth; completion responses without
-`<interview_state>` rewrite the current spec while retaining frontmatter and
-Q&A history.
+remains the durable source of truth; interview turns submit updates through
+`interview_submit_state` or a fallback text block.
 
 ### Multiplexer panes on v2
 
@@ -759,51 +702,12 @@ environment; no extra setup is needed for panes. See
 [Secret handling](multiplexer-integration.md#known-limitations).
 See [Deployment Modes](multiplexer-integration.md#deployment-modes).
 
-### Not exposed to plugins: `session.list` / `session.remove`
+### Session listing and removal
 
-This limitation applies to v2.0.x. OpenCode 2.1 exposes both methods to
-plugins. Its `list` is paginated: the adapter follows `cursor.next` through
-the empty terminal page, with a 1000-session and four-second total budget.
-Exceeding either budget fails the read instead of returning a partial list.
-This is source-contract and fixture coverage, not a live-host verification.
-
-The v2.0.x plugin session domain (`packages/plugin/src/promise/session.ts`,
-`SessionDomain`, mirrored by the runtime object the promise adapter
-builds) exposes exactly `create`/`get`/`switchAgent`/`switchModel`/
-`prompt`/`generate`/`command`/`synthetic`/`interrupt`/`update`/`move`/
-`wait`/`context` — **`list` and `remove` are not handed to plugins**.
-Both endpoints exist on the host's HTTP API, but the
-plugin context never receives them. `session.status`, `session.todo`, and
-`session.children` are likewise not exposed to plugins; the delete no-op
-below and the V1-only wake and runtime-status paths follow from these
-gaps. The client shim capability-probes both at runtime
-(`typeof s.list === 'function'`, `s.remove`), so hosts exposing them use
-real delegation; on all
-v2.0.x stable hosts both probes fail and the shims degrade:
-
-- **Children enumeration (V1 wake scheduler).** The shim's
-  `client.session.list` returns the v1-parity empty page `{data: []}`,
-  so `session.list({parentID})`-based enumeration never yields children
-  and the V1 event-tracked fallback is effectively the only path. The V2
-  native lifecycle does not enumerate children at all.
-  The interview dashboard's session scan likewise sees no sessions from
-  `list` on v2.
-- **Session delete.** `client.session.delete` is a **no-op** on hosts without
-  `session.remove`. Smartfetch does not create temporary sessions or call a
-  secondary model.
-
-Both degradations announce themselves in the plugin log with a single
-deterministic, **one-time-per-process** warning instead of degrading
-silently (`list`) or logging on every call (`remove`):
-
-```
-[v2][shim] session.list unavailable on this host build; children enumeration falls back to event tracking
-[v2][shim] session.remove unavailable on this host build; session delete is a no-op
-```
-
-The guards are module-level booleans with fixed text — no timestamps,
-session ids, or per-call payloads — so repeated wake polls and cleanup
-calls do not flood the log.
+OpenCode 2.3.0 exposes `session.list` and `session.remove` to plugins.
+The adapter follows listing cursors through the empty terminal page, with a
+1000-session and four-second total budget. Exceeding either budget fails the
+read instead of returning a partial list.
 
 ### Retired V2 managed lifecycle
 
@@ -814,13 +718,12 @@ emulated. Slim constructs no V2 job board, alias authority, reusable-session
 admission, terminal gate, wall-clock watchdog, concurrency queue,
 orchestrator-wake scheduler, child-input wake, persistence/tombstone/delivery
 ledger, or structured-launch executor wrapper. `backgroundJobs.mode: "managed"`
-is rejected during V2 configuration; an unset mode resolves to `native`. The
-V1-only `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
-`stopConfirmationMs` settings are rejected when explicitly set on V2;
-`sameProviderPolicy` warns and is ignored because V2 subagents always run in
-background. The remaining native controls are exact-ID host reads:
+is applied as `native` with a warning. Inert managed settings are removed with
+warnings in the log and `doctor`. Positive `concurrency` and
+`wallClockTimeoutMs` limits are rejected with the file and full key because
+Slim cannot enforce them. The remaining native controls are exact-ID host reads:
 `task_status`, `task_cancel`,
-permission-only `task_reply`, and queue-only `task_report`. OpenCode reports
+permission-only `task_reply`, and child `task_report`. OpenCode reports
 every settled child busy period — native `subagent(sessionID, prompt)` and
 direct `session.prompt` continuations included — so Slim keeps no completion
 watcher.
@@ -840,10 +743,8 @@ Answer permissions with `task_reply` and questions in the host UI.
   with a reduced, TUI-side context that lacks `agent.transform` (and other
   domains). The adapter capability-guards `setup` and skips registration
   gracefully for those hosts instead of crashing or retry-storming. The
-  embedded V2 pass on V1 has `agent.transform` but no tool, session or event
-  domains. The adapter skips that registration-only context before reading
-  V2 configuration, so V1 managed settings remain valid. The classic
-  `server()` path carries the full V1 functionality.
+  adapter skips a registration-only context that lacks the tool, session, and
+  event domains.
 - **TUI-side plugin logs are not captured.** The plugin logger initializes
   in the server process only, so TUI-side registration failures write no
   `[v2][tui]` lines anywhere. Verify TUI behavior through the host (command

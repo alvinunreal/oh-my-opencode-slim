@@ -111,6 +111,25 @@ export interface V2SessionContextEvent {
   tools: Record<string, unknown>;
 }
 /**
+ * v2 `session.generate` hook payload (official `SessionGenerate`): an
+ * auxiliary `session.generate` request with the SAME shape as the context
+ * event — readonly `sessionID`/`agent`/`model` and mutable `system`,
+ * `messages`, `options`, `tools` — plus no `result` (unlike compaction and
+ * title, the generate hook cannot supply the answer). Upstream builds the
+ * request system from the same base transcript as the primary loop, so the
+ * plugin shapes it with the identical system/profile steps to keep the
+ * prompt prefix cacheable.
+ */
+export interface V2SessionGenerateEvent {
+  readonly sessionID: string;
+  readonly agent: string;
+  readonly model: Record<string, unknown>;
+  options?: V2SessionContextEvent['options'];
+  system: V2SessionContextEvent['system'];
+  messages: V2SessionContextEvent['messages'];
+  tools: Record<string, unknown>;
+}
+/**
  * v2 `session.prompt` hook payload: fires ONCE per admitted input (endpoint
  * prompts AND subagent-tool child prompts; synthetic/shell/compaction
  * inputs skip it). `messageID` is the eventual inbox User id — the v1
@@ -196,7 +215,7 @@ export interface V2PermissionRule {
   readonly effect: 'allow' | 'deny' | 'ask';
 }
 /** Pending native permission request fields consumed by the thin controls. */
-export interface V2PermissionRequest {
+interface V2PermissionRequest {
   readonly id: string;
   readonly sessionID: string;
   readonly action: string;
@@ -306,6 +325,12 @@ export interface V2Context {
     hook(
       name: 'compaction',
       cb: (event: V2SessionCompactionEvent) => Promise<void>,
+    ): Promise<V2Registration>;
+    /** v2 session.generate hook — auxiliary `session.generate` request with
+     * the context payload (see V2SessionGenerateEvent). */
+    hook(
+      name: 'generate',
+      cb: (event: V2SessionGenerateEvent) => Promise<void>,
     ): Promise<V2Registration>;
     /** v2 session.get — SessionInfo by id (runtime-probed). */
     get?(input: { sessionID: string }): Promise<unknown>;

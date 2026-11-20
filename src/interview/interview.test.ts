@@ -1142,49 +1142,6 @@ describe('interview service', () => {
       // Cleanup
       await fs.rm(tempDir, { recursive: true, force: true });
     });
-
-    test('message.updated stores current session model for interview follow-ups', async () => {
-      const tempDir = await makeTempDir();
-      const ctx = createMockContext({ directory: tempDir });
-
-      const service = createInterviewService(ctx);
-      service.setBaseUrlResolver(async () => 'http://localhost:9999');
-      const sessionID = 'session-model-track';
-
-      const output = { parts: [] as Array<{ type: string; text?: string }> };
-      await service.handleCommandExecuteBefore(
-        { command: 'interview', sessionID, arguments: 'Model Track Test' },
-        output,
-      );
-
-      const interviewId = requireInterviewId(
-        extractInterviewIdFromLastPrompt(ctx.client.session.prompt),
-      );
-
-      await service.handleEvent({
-        event: {
-          type: 'message.updated',
-          properties: {
-            info: {
-              sessionID,
-              providerID: 'openai',
-              modelID: 'gpt-6-luna',
-            },
-          },
-        },
-      });
-
-      ctx.client.session.promptAsync.mock.calls.length = 0;
-      await service.handleNudgeAction(interviewId, 'more-questions');
-
-      const call = ctx.client.session.promptAsync.mock.calls[0]?.[0];
-      expect(call.body.model).toEqual({
-        providerID: 'openai',
-        modelID: 'gpt-6-luna',
-      });
-
-      await fs.rm(tempDir, { recursive: true, force: true });
-    });
   });
 
   describe('configurable output folder', () => {
@@ -1623,74 +1580,6 @@ describe('interview service', () => {
       expect(lastPromptText).toContain('Return 0 to 4 questions');
 
       // Cleanup
-      await fs.rm(tempDir, { recursive: true, force: true });
-    });
-
-    test('reuses observed session model when submitting interview answers', async () => {
-      const tempDir = await makeTempDir();
-
-      const messagesData: Array<{
-        info?: { role: string };
-        parts?: Array<{ type: string; text?: string }>;
-      }> = [];
-
-      const ctx = createMockContext({
-        directory: tempDir,
-        messagesData,
-      });
-
-      const service = createInterviewService(ctx);
-      service.setBaseUrlResolver(async () => 'http://localhost:9999');
-      const sessionID = 'session-answer-model';
-      const output = { parts: [] as Array<{ type: string; text?: string }> };
-
-      await service.handleCommandExecuteBefore(
-        {
-          command: 'interview',
-          sessionID,
-          arguments: 'Answer Model Test',
-        },
-        output,
-      );
-
-      const interviewId = requireInterviewId(
-        extractInterviewIdFromLastPrompt(ctx.client.session.prompt),
-      );
-
-      messagesData.push({
-        info: { role: 'assistant' },
-        parts: [
-          {
-            type: 'text',
-            text: 'Question.\n<interview_state>\n{\n  "summary": "Test",\n  "questions": [{"id": "q-1", "question": "What?", "options": ["A", "B"]}]\n}\n</interview_state>',
-          },
-        ],
-      });
-
-      await service.handleEvent({
-        event: {
-          type: 'message.updated',
-          properties: {
-            info: {
-              sessionID,
-              providerID: 'anthropic',
-              modelID: 'claude-sonnet-4-6',
-            },
-          },
-        },
-      });
-
-      ctx.client.session.promptAsync.mock.calls.length = 0;
-      await service.submitAnswers(interviewId, [
-        { questionId: 'q-1', answer: 'A' },
-      ]);
-
-      const call = ctx.client.session.promptAsync.mock.calls[0]?.[0];
-      expect(call.body.model).toEqual({
-        providerID: 'anthropic',
-        modelID: 'claude-sonnet-4-6',
-      });
-
       await fs.rm(tempDir, { recursive: true, force: true });
     });
   });

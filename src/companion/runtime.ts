@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -30,12 +30,21 @@ export function stateFilePath(): string {
   );
 }
 
+export function normalizeCompanionDirectory(directory: string): string {
+  let resolved: string;
+  try {
+    resolved = realpathSync(directory);
+  } catch {
+    resolved = path.resolve(directory);
+  }
+  const normalized =
+    resolved.replace(/[\\/]+$/, '') || path.parse(resolved).root;
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 export function companionSessionIdForDirectory(directory: string): string {
-  const normalized = path.resolve(directory).replace(/[\\/]+$/, '');
-  const identity =
-    process.platform === 'win32' ? normalized.toLowerCase() : normalized;
   const digest = createHash('sha256')
-    .update(identity)
+    .update(normalizeCompanionDirectory(directory))
     .digest('hex')
     .slice(0, 12);
   return `proc_${process.pid}_${digest}`;

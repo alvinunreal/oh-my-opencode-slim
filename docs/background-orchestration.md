@@ -21,8 +21,10 @@ Check your version with `opencode --version`.
 
 ## Lifecycle modes
 
-`backgroundJobs.mode` selects Slim’s task controls and preset binding.
-See the [upgrade guide](v2-native-upgrade.md) for retired settings.
+`backgroundJobs.mode` selects Slim’s task controls. Session preset binding
+follows it by default and can be set independently with
+`sessionPresetRouting`. See the [upgrade guide](v2-native-upgrade.md) for
+retired settings.
 
 ### native (default)
 
@@ -53,8 +55,8 @@ Slim registers only the gaps the native model surface leaves open:
   The V2 plugin session domain does not expose Form replies, so questions are
   answered in the host UI.
 - `task_report` lets a child add a bounded progress or escalation update to the
-  parent's host inbox. It is queue-only (`resume: false`): acceptance means the
-  host queued the update, not that the parent read it or started a turn.
+  parent's host inbox using `delivery: "steer"`. It requests a wake unless the
+  parent's outcome is `interrupted`; acceptance does not confirm processing.
 
 Use exact session IDs for every task control.
 
@@ -70,10 +72,12 @@ continuations outside the subagent tool. Slim adds no completion watcher.
 ### off
 
 `backgroundJobs.mode: "off"` leaves delegation fully native and registers no
-OMOS task tool. It also skips session-preset routing and its executor wrapper,
-so no OMOS child read or model injection precedes native dispatch or
-continuation. Agent inference settings selected by the configured global preset
-still register at startup. See [Configuration](configuration.md).
+OMOS task tool. It also disables session-preset routing and its executor
+wrapper by default, so no OMOS child read or model injection precedes native
+dispatch or continuation. Set `sessionPresetRouting: true` to enable routing
+independently. Agent inference settings
+selected by the configured global preset still register at startup. See
+[Configuration](configuration.md).
 
 ## Core Principle
 
@@ -178,7 +182,7 @@ poll it.
 - `task_reply` answers a pending permission request. Answer questions in the
   host UI on V2.
 - A child may call `task_report` for a material milestone or blocker. The
-  update is queued to its owning parent without starting a parent turn.
+  update steers its owning parent and requests a wake unless it was interrupted.
 
 Terminal reconciliation proves lifecycle state, not that the output was used:
 verify that the relevant result was consumed before finalizing. Native

@@ -7,9 +7,6 @@ export const SLIM_INTERNAL_INITIATOR_MARKER =
 export const INTERNAL_INITIATOR_METADATA_KEY =
   'oh-my-opencode-slim.internalInitiator';
 
-/** Host-side fence attached to queued completed-job push parts. */
-export const TERMINAL_DELTA_METADATA_KEY = 'oh-my-opencode-slim.terminalDelta';
-
 /**
  * OpenCode v1's native background-task notifier submits an untagged
  * synthetic user message when a child finishes. It is still an internal

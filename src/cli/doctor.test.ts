@@ -102,7 +102,10 @@ describe('runDoctorCheck', () => {
     );
     for (const file of [oldConfig, newConfig])
       fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(oldConfig, '{"backgroundJobs":{"concurrency":{}}}');
+    fs.writeFileSync(
+      oldConfig,
+      '{"backgroundJobs":{"concurrency":{"providerConcurrency":{"openai":2}}}}',
+    );
     fs.writeFileSync(newConfig, '{"backgroundJobs":{"mode":"native"}}');
 
     const result = runDoctorCheck(project, 'v2');
@@ -113,7 +116,9 @@ describe('runDoctorCheck', () => {
         ok: false,
         error: {
           kind: 'unsupported-host',
-          message: expect.stringContaining('backgroundJobs.concurrency'),
+          message: expect.stringContaining(
+            'backgroundJobs.concurrency.providerConcurrency.openai',
+          ),
         },
       }),
     );
@@ -171,6 +176,30 @@ describe('runDoctorCheck', () => {
     expect(runDoctorCheck(project).presetCheck?.error?.kind).toBe(
       'missing-preset',
     );
+  });
+
+  test('v2 reports an invalid explicit mode instead of silently enabling native controls', () => {
+    const bin = path.join(tempDir, 'bin');
+    const project = path.join(tempDir, 'project');
+    const configDir = path.join(project, '.opencode');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(
+      path.join(bin, 'opencode'),
+      '#!/bin/sh\necho opencode v2.3.2\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ backgroundJobs: { mode: 'of' } }),
+    );
+    const result = runDoctorCheck(project);
+    expect(result.ok).toBe(false);
+    expect(
+      result.configs.find((config) => config.scope === 'project')?.error
+        ?.message,
+    ).toContain('Invalid backgroundJobs.mode');
   });
 
   test('interpolates environment values before validating presets', () => {
@@ -252,6 +281,47 @@ describe('runDoctorCheck', () => {
       expect(result.configs[1].warnings?.[0]).toContain(
         'should be an array; normalized',
       );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('string retired disabled_hooks value reports the removal diagnostic', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_hooks: 'auto-update-checker',
+        disabled_tools: ['webfetch'],
+        agents: { oracle: { model: 'test/model' } },
+      }),
+    );
+
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = runDoctorCheck(projectDir);
+
+      // The supported string shape reaches the removal strip, so the config
+      // stays valid and gets the canonical-switch diagnostic, not a typo.
+      expect(result.ok).toBe(true);
+      expect(result.configs[1].ok).toBe(true);
+      expect(result.configs[1].error).toBeUndefined();
+      expect(formatJsonDoctorResult(result)).toContain('use autoUpdate: false');
+      expect(result.configs[1].warnings).toHaveLength(1);
+      expect(result.configs[1].warnings?.[0]).toContain('was removed');
+      expect(result.configs[1].warnings?.[0]).toContain(
+        'use autoUpdate: false',
+      );
+      expect(result.configs[1].warnings?.[0]).not.toContain('Valid values');
+
+      const config = result.configs[1].config;
+      expect(Object.hasOwn(config ?? {}, 'disabled_hooks')).toBe(false);
+      expect(Object.hasOwn(config ?? {}, 'autoUpdate')).toBe(false);
+      expect(config?.disabled_tools).toEqual(['webfetch']);
+      expect(config?.agents?.oracle?.model).toBe('test/model');
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();

@@ -1,39 +1,11 @@
-/**
- * Native seat resolver: resolves `Seats:` refs straight from the host's
- * session domain — no board, no ledger, no lifecycle. This is what makes
- * council work with native OpenCode v2 delegation and the managed
- * lifecycle OFF.
- *
- * Only exact `ses_` child IDs resolve; any other ref is missing. One
- * bounded deadline covers the whole call; there is no retry, no polling,
- * and no transcript persistence.
- *
- * The child transcript is the attribution source: the seat body is read
- * from the trailing round AFTER the child's latest input boundary, so a
- * seat that was dispatched or resumed later can only ever surface the
- * answer to that latest prompt — text from an earlier round is never
- * replayed. A child still working on that prompt is `running`.
- *
- * Synthesis-time cutoff: the resolver stamps `synthesisStartedAt`
- * synchronously, before its first await, and every transcript input
- * boundary is compared against that stamp. A seat prompt whose input
- * boundary lands at or after the stamp is `ambiguous` — its answer
- * belongs to a dispatch the synthesis never observed, so the seat fails
- * closed rather than attributing newer text to an older ref.
- *
- * Cross-parent verification is load-bearing: a child whose `parentID`
- * does not match the caller is missing, never resolved — another
- * parent's seat text must never leak into this synthesis.
- */
 import type { PluginInput } from '@opencode-ai/plugin';
-
 import {
   attributeHostRoundToTranscript,
-  classifyTerminalEvidence,
   fetchChildTranscript,
   latestInputAtOf,
   terminalTextOf,
 } from '../../utils/child-transcript';
+import { isRecord } from '../../utils/guards';
 import { SESSION_ID_PATTERN } from '../../utils/session';
 import { raceEvidenceDeadline } from '../../utils/session-info-read';
 import {
@@ -41,217 +13,104 @@ import {
   hostRoundStateOf,
 } from '../../utils/session-runtime-status';
 import type { TimerSeam } from '../../utils/timer-seam';
-import { SEAT_REASONS } from './assemble';
-import type { SeatResult, SeatResultResolver } from './types';
 
-/** Whole-call budget (parent read + every per-seat read). */
-export const DEFAULT_NATIVE_SEAT_TIMEOUT_MS = 5_000;
+const DEFAULT_SEAT_TIMEOUT_MS = 5_000;
 
-/** Scheduler seam, matching `raceEvidenceDeadline`'s timer contract. */
-export type NativeSeatTimers = TimerSeam;
-
-export interface NativeSeatResolverOptions {
-  /** Total budget for one resolver call. Default 5 s. */
+export interface SeatReadOptions {
   timeoutMs?: number;
-  /** Clock for the whole-call deadline (tests inject the timer harness). */
   now?: () => number;
-  /** Scheduler seam for bounded reads (tests inject the timer harness). */
-  timers?: NativeSeatTimers;
+  timers?: TimerSeam;
 }
 
-type SessionGet = (args: {
-  path: { id: string };
-  query?: { directory?: string };
-}) => Promise<unknown>;
+export type SeatEvidence =
+  | { text: string; label?: string }
+  | { reason: string; label?: string };
 
-/** A read that yields undefined on budget exhaustion, transport failure,
- *  or host error payload — absence of evidence, never a throw. */
 function boundedRead<T>(
   read: () => Promise<T>,
   remaining: () => number,
-  timers?: NativeSeatTimers,
+  timers?: TimerSeam,
 ): Promise<T | undefined> {
   const left = remaining();
   if (left <= 0) return Promise.resolve(undefined);
-  // Defer the invocation into the promise chain: a host method that throws
-  // synchronously degrades to absence of evidence instead of rejecting
-  // the whole resolver call.
+  // Defer the host invocation so synchronous throws also yield no evidence.
   return raceEvidenceDeadline(Promise.resolve().then(read), left, timers);
 }
 
-function missing(reason: string): SeatResult {
-  return { kind: 'missing', reason };
-}
-
-function ambiguous(reason: string, label?: string): SeatResult {
-  return { kind: 'ambiguous', reason, ...(label ? { label } : {}) };
-}
-
-/** Host session info, or undefined when unreadable/unavailable. */
-async function readHostInfo(
-  session: unknown,
-  get: SessionGet | undefined,
-  sessionID: string,
-  directory: string | undefined,
-  remaining: () => number,
-  timers?: NativeSeatTimers,
-): Promise<Record<string, unknown> | undefined> {
-  if (!get) return undefined;
-  const response = await boundedRead(
-    // SDK-generated session methods read `this._client`: invoke on the
-    // session receiver the method was read from.
-    () => get.call(session, { path: { id: sessionID }, query: { directory } }),
-    remaining,
-    timers,
-  );
-  if (!response || (response as { error?: unknown }).error) return undefined;
-  const data = (response as { data?: unknown }).data;
-  return typeof data === 'object' && data !== null
-    ? (data as Record<string, unknown>)
-    : undefined;
-}
-
-export function createNativeSeatResolver(
+/** One result per ref, in order. All reads share the synthesis deadline. */
+export async function readNativeSeats(
   input: PluginInput,
-  options: NativeSeatResolverOptions = {},
-): SeatResultResolver {
-  const budget = options.timeoutMs ?? DEFAULT_NATIVE_SEAT_TIMEOUT_MS;
-  const clock = options.now ?? Date.now;
-  const v2 =
-    (input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
-  const directory = input.directory;
+  parentSessionID: string,
+  refs: readonly string[],
+  options: SeatReadOptions = {},
+): Promise<SeatEvidence[]> {
+  const { timers } = options;
+  const now = options.now ?? Date.now;
+  const synthesisStartedAt = now();
+  const deadline =
+    synthesisStartedAt + (options.timeoutMs ?? DEFAULT_SEAT_TIMEOUT_MS);
+  const remaining = () => Math.max(0, deadline - now());
+  const { client, directory } = input;
+  const session = client?.session;
+  const get = session?.get;
 
-  return async (parentSessionID, seats) => {
-    const synthesisStartedAt = clock();
-    const deadline = synthesisStartedAt + budget;
-    const remaining = () => Math.max(0, deadline - clock());
-    const client = input.client;
+  return Promise.all(
+    refs.map(async (childID): Promise<SeatEvidence> => {
+      if (!SESSION_ID_PATTERN.test(childID))
+        return { reason: 'unresolved ref' };
+      if (typeof get !== 'function') return { reason: 'session unreadable' };
+      const response = await boundedRead<unknown>(
+        // SDK methods depend on their session receiver.
+        () =>
+          get.call(session, { path: { id: childID }, query: { directory } }),
+        remaining,
+        timers,
+      );
+      if (!isRecord(response) || response.error || !isRecord(response.data))
+        return { reason: 'session unreadable' };
+      const info = response.data;
+      const parentID = typeof info.parentID === 'string' ? info.parentID : '';
+      if (!parentID) return { reason: 'session has no parent' };
+      // Verify the parent before reading any transcript or using its label.
+      if (parentID !== parentSessionID)
+        return { reason: 'session belongs to another parent' };
+      const label =
+        typeof info.agent === 'string'
+          ? info.agent.trim() || undefined
+          : undefined;
 
-    const session = client?.session;
-    const get = session?.get as SessionGet | undefined;
+      const transcript = await boundedRead(
+        () => fetchChildTranscript(client, childID, directory),
+        remaining,
+        timers,
+      );
+      if (transcript === undefined)
+        return { reason: 'transcript unreadable', label };
+      const childInputAt = latestInputAtOf(transcript);
+      if (childInputAt === undefined)
+        return { reason: 'seat prompt boundary unknown', label };
+      // This synthesis cannot attribute a round opened at or after its start.
+      if (childInputAt >= synthesisStartedAt)
+        return {
+          reason: 'seat prompt is newer than the synthesis call',
+          label,
+        };
 
-    return Promise.all(
-      seats.map(async (seat) => {
-        const childID = seat.childID;
-        if (typeof childID !== 'string' || !SESSION_ID_PATTERN.test(childID)) {
-          return missing('unresolved ref');
-        }
-        const info = await readHostInfo(
-          session,
-          get,
-          childID,
-          directory,
-          remaining,
-          options.timers,
-        );
-        if (info === undefined) {
-          return ambiguous('session unreadable');
-        }
-        const parentID = typeof info.parentID === 'string' ? info.parentID : '';
-        if (!parentID) return ambiguous('session has no parent');
-        // Never leak another parent's seat content.
-        if (parentID !== parentSessionID) {
-          return missing('session belongs to another parent');
-        }
-        const agent =
-          typeof info.agent === 'string' ? info.agent.trim() : undefined;
-        const label = agent || undefined;
-
-        const transcript = await boundedRead(
-          () => fetchChildTranscript(client, childID, directory),
-          remaining,
-          options.timers,
-        );
-        if (transcript === undefined) {
-          return ambiguous('transcript unreadable', label);
-        }
-        const childInputAt = latestInputAtOf(transcript);
-        if (childInputAt === undefined) {
-          return ambiguous('seat prompt boundary unknown', label);
-        }
-        // Synthesis-time cutoff: a seat prompt at/after this stamp is work
-        // the synthesis call never observed — fail closed rather than
-        // attributing a newer answer to the older seat ref.
-        if (childInputAt >= synthesisStartedAt) {
-          return ambiguous(
-            'seat prompt is newer than the synthesis call',
-            label,
-          );
-        }
-
-        if (v2) {
-          const state = attributeHostRoundToTranscript(
-            hostRoundStateOf(info),
-            transcript,
-          );
-          const round = composeHostRound(state, childInputAt);
-          if (round.verdict === 'unreadable') {
-            return ambiguous(round.reason ?? 'host state unreadable', label);
-          }
-          if (round.verdict === 'incomplete') {
-            return {
-              kind: 'running',
-              reason: SEAT_REASONS.running,
-              ...(label ? { label } : {}),
-            };
-          }
-          if (round.verdict === 'error' || round.verdict === 'interrupted') {
-            return {
-              kind: 'error',
-              reason: SEAT_REASONS.error,
-              ...(label ? { label } : {}),
-            };
-          }
-          const text = terminalTextOf(transcript);
-          return text && text.trim() !== ''
-            ? { kind: 'completed', text, ...(label ? { label } : {}) }
-            : {
-                kind: 'empty',
-                reason: SEAT_REASONS.empty,
-                ...(label ? { label } : {}),
-              };
-        }
-
-        const verdict = classifyTerminalEvidence(transcript);
-        switch (verdict.verdict) {
-          case 'completed': {
-            const text = verdict.text?.trim() ?? '';
-            return text !== ''
-              ? { kind: 'completed', text, ...(label ? { label } : {}) }
-              : {
-                  kind: 'empty',
-                  reason: SEAT_REASONS.empty,
-                  ...(label ? { label } : {}),
-                };
-          }
-          case 'error':
-            return {
-              kind: 'error',
-              reason: SEAT_REASONS.error,
-              ...(label ? { label } : {}),
-            };
-          case 'retry':
-            // `textless` is a finished turn without an answer; every other
-            // retry reason is a still-open round.
-            return verdict.reason === 'textless'
-              ? {
-                  kind: 'empty',
-                  reason: SEAT_REASONS.empty,
-                  ...(label ? { label } : {}),
-                }
-              : {
-                  kind: 'running',
-                  reason: SEAT_REASONS.running,
-                  ...(label ? { label } : {}),
-                };
-          case 'absent':
-            return {
-              kind: 'running',
-              reason: SEAT_REASONS.running,
-              ...(label ? { label } : {}),
-            };
-        }
-      }),
-    );
-  };
+      const state = attributeHostRoundToTranscript(
+        hostRoundStateOf(info),
+        transcript,
+      );
+      const round = composeHostRound(state, childInputAt);
+      if (round.verdict === 'unreadable')
+        return { reason: round.reason ?? 'host state unreadable', label };
+      if (round.verdict === 'incomplete')
+        return { reason: 'still running', label };
+      if (round.verdict === 'error' || round.verdict === 'interrupted')
+        return { reason: 'failed', label };
+      const text = terminalTextOf(transcript);
+      return text && text.trim() !== ''
+        ? { text, label }
+        : { reason: 'empty result', label };
+    }),
+  );
 }

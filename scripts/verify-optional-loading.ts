@@ -52,16 +52,15 @@ const ALL_HOOKS = [
   'deepwork-goal',
   'chat-headers',
   'cache-monitor',
-  'json-error-recovery',
   'tool-loop-guard',
   'search-path-guard',
   'absolute-path-rescue',
   'apply-patch',
   'council-inject',
-  'auto-update-checker',
 ] as const;
 
 const BASE_DISABLED_TOOLS = [
+  'webfetch',
   'ast_grep_search',
   'ast_grep_replace',
   'acp_run',
@@ -101,7 +100,6 @@ const baseConfig: CaseConfig = {
   interview: { enabled: false },
   marketplace: { enabled: false },
   companion: { enabled: false },
-  webfetch: { enabled: false },
   multiplexer: { type: 'none' },
   disabled_mcps: ['context7', 'gh_grep'],
   disabled_commands: BASE_DISABLED_COMMANDS,
@@ -159,7 +157,7 @@ const CASES: readonly Case[] = [
     name: 'hooks',
     config: {
       ...baseConfig,
-      disabled_hooks: ['foreground-fallback', 'auto-update-checker'],
+      disabled_hooks: ['foreground-fallback'],
     },
     note: 'every guard hook registered',
   },
@@ -202,8 +200,11 @@ const CASES: readonly Case[] = [
   },
   {
     name: 'webfetch',
-    config: { ...baseConfig, webfetch: { enabled: true } },
-    note: 'enhanced webfetch and its JSDOM startup probe',
+    config: {
+      ...baseConfig,
+      disabled_tools: without(BASE_DISABLED_TOOLS, ['webfetch']),
+    },
+    note: 'enhanced webfetch registered without loading JSDOM',
   },
 ];
 
@@ -594,8 +595,8 @@ function caseChecks(
     case 'webfetch':
       expectTools(checks, 'webfetch', ['webfetch'], [], registration);
       checks.push({
-        name: 'webfetch startup probe loads JSDOM',
-        ok: result.timing.jsdomLoaded,
+        name: 'webfetch registration leaves JSDOM unloaded',
+        ok: !result.timing.jsdomLoaded,
         detail: `jsdomLoaded=${result.timing.jsdomLoaded}, settleTurns=${result.timing.settleTurns}`,
       });
       break;

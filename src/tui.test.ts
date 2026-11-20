@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
+import { createSignal } from 'solid-js';
 import sidebarFrameGolden from './sidebar-frame-golden.json';
 import type { ModelNamesCache } from './tui';
 import {
@@ -29,7 +30,6 @@ import {
   renderSidebar,
   resolveHoverBackground,
   resolveSelectedRootModel,
-  resolveSidebarSlotOrder,
   resolveTuiPaneDirectory,
   retainEqualModelNames,
   STATUS_DOT_GLYPH,
@@ -41,12 +41,14 @@ import {
   splitSidebarModelId,
   default as tuiPlugin,
 } from './tui';
+import type { HostSessionInfo } from './tui-host-sessions';
 import {
   getKillAllTargets,
   killAllRunningSubagents,
   killAllSummaryMessage,
 } from './tui-kill';
 import {
+  getTuiStatePath,
   readTuiSnapshot,
   recordTuiAgentActivity,
   recordTuiAgentModels,
@@ -56,7 +58,8 @@ import {
   type TuiSnapshot,
   updateSnapshot,
 } from './tui-state';
-import { createTimerHarness } from './utils/test-timers';
+import { SESSION_ABORT_TIMEOUT_MS } from './utils/session';
+import { createTimerHarness, tick } from './utils/test-timers';
 
 const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
 
@@ -595,15 +598,13 @@ describe('tui sidebar agents', () => {
     refresh();
     await clock.advance(2_000);
     expect(signals[0]?.aborted).toBe(true);
-    expect(commits).toBe(1);
-    refresh();
     await clock.tick();
     expect(signals).toHaveLength(2);
     expect(commits).toBe(2);
     expect(clock.pending()).toBe(0);
   });
 
-  test('serialized refresh skips overlap and drops a stale directory (#1133)', async () => {
+  test('serialized refresh coalesces overlap and drops a stale directory (#1133)', async () => {
     expect(isRefreshCurrent('/a', '/a')).toBe(true);
     expect(isRefreshCurrent('/a', '/b')).toBe(false);
 
@@ -611,6 +612,7 @@ describe('tui sidebar agents', () => {
     let started = 0;
     let finished = 0;
     const release: Array<() => void> = [];
+    const clock = createTimerHarness();
     const schedule = createSerializedRefresh(async () => {
       started += 1;
       running += 1;
@@ -625,16 +627,18 @@ describe('tui sidebar agents', () => {
 
     schedule();
     schedule();
+    schedule();
     expect(started).toBe(1);
     expect(running).toBe(1);
     release[0]?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await clock.tick();
     expect(finished).toBe(1);
-    schedule();
     expect(started).toBe(2);
+    expect(running).toBe(1);
     release[1]?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await clock.tick();
     expect(finished).toBe(2);
+    expect(started).toBe(2);
   });
 
   test('uses default-enabled fallback before models are persisted', () => {
@@ -1256,7 +1260,7 @@ describe('clickable sidebar sessions', () => {
       toggleOpen: () => {},
       expandedAgents: () => new Set(['explorer']),
       toggleAgent: () => {},
-      syncScope: () => {},
+      syncScope: () => false,
     };
   }
 
@@ -1368,7 +1372,7 @@ describe('clickable sidebar sessions', () => {
       toggleOpen: () => {},
       expandedAgents: () => new Set<string>(),
       toggleAgent: () => {},
-      syncScope: () => {},
+      syncScope: () => false,
     });
     const frame = await renderAttributionFrame(() =>
       renderSidebar(
@@ -1630,7 +1634,7 @@ describe('clickable sidebar sessions', () => {
       toggleOpen: () => {},
       expandedAgents: () => new Set<string>(),
       toggleAgent: () => {},
-      syncScope: () => {},
+      syncScope: () => false,
     };
 
     const setup = await testRender(
@@ -1995,12 +1999,16 @@ describe('clickable sidebar sessions', () => {
     projectDir: string;
     sessionID: string;
     navigate?: (name: string, params?: Record<string, unknown>) => void;
+    data?: ReturnType<typeof fakeHostData>;
+    client?: unknown;
+    forceSelectedModel?: boolean;
     transparentTheme?: boolean;
     sameSurfaceTheme?: boolean;
     /** Golden frames must capture settled RPC state, not race Loading… against Unavailable. */
     waitForInitialRefresh?: boolean;
   }) {
     const disposers: Array<() => void> = [];
+    const refreshWaiters: Array<() => void> = [];
     let didRefresh = () => {};
     const initialRefresh = new Promise<void>((resolve) => {
       didRefresh = resolve;
@@ -2008,10 +2016,17 @@ describe('clickable sidebar sessions', () => {
     const claim: { render: (input: { sessionID: string }) => unknown } = {
       render: () => undefined,
     };
+    const [sessionID, setSessionID] = createSignal(opts.sessionID);
     const dispose = await tuiPlugin.setup({
       location: { directory: opts.projectDir },
-      renderer: { requestRender: didRefresh },
-      client: undefined,
+      data: opts.data,
+      renderer: {
+        requestRender: () => {
+          didRefresh();
+          for (const resolve of refreshWaiters.splice(0)) resolve();
+        },
+      },
+      client: opts.client,
       theme: {
         text: { default: '#ffffff', subdued: '#aaaaaa' },
         background: opts.transparentTheme
@@ -2030,8 +2045,15 @@ describe('clickable sidebar sessions', () => {
         warning: '#ffcc00',
       },
       ui: {
+        ...(opts.forceSelectedModel
+          ? {
+              model: {
+                current: () => ({ providerID: 'local', modelID: 'selected' }),
+              },
+            }
+          : {}),
         router: {
-          current: () => ({ type: 'session', sessionID: opts.sessionID }),
+          current: () => ({ type: 'session', sessionID: sessionID() }),
           navigate:
             opts.navigate &&
             ((route) => {
@@ -2049,11 +2071,384 @@ describe('clickable sidebar sessions', () => {
     if (opts.waitForInitialRefresh) await initialRefresh;
     const slotPlugin = {
       slots: {
-        sidebar_content: () => claim.render({ sessionID: opts.sessionID }),
+        sidebar_content: () => claim.render({ sessionID: sessionID() }),
       },
     };
-    return { slotPlugin, disposers };
+    return {
+      slotPlugin,
+      disposers,
+      setSessionID,
+      nextRefresh: () =>
+        new Promise<void>((resolve) => refreshWaiters.push(resolve)),
+    };
   }
+
+  function fakeHostData(...entries: HostSessionInfo[]) {
+    const sessions = new Map(entries.map((entry) => [entry.id, entry]));
+    const running = new Set<string>();
+    const listeners = new Map<string, Set<(event: unknown) => void>>();
+    const rootOf = (id: string) => {
+      while (sessions.get(id)?.parentID) {
+        id = sessions.get(id)?.parentID as string;
+      }
+      return id;
+    };
+    return {
+      sessions,
+      running,
+      listeners,
+      session: {
+        get: (id: string) => sessions.get(id),
+        family: (id: string) =>
+          [...sessions.keys()].filter((key) => rootOf(key) === rootOf(id)),
+        status: (id: string): 'running' | 'idle' =>
+          running.has(id) ? 'running' : 'idle',
+      },
+      on: (type: string, handler: (event: unknown) => void) => {
+        const handlers = listeners.get(type) ?? new Set();
+        handlers.add(handler);
+        listeners.set(type, handlers);
+        return () => handlers.delete(handler);
+      },
+      emit: (type: string) => {
+        for (const listener of listeners.get(type) ?? []) {
+          listener({ type, data: { sessionID: 'child' } });
+        }
+      },
+    };
+  }
+
+  test('host overlay excludes stale rows before the first refresh completes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-initial-'));
+    const restore = withIsolatedDataHome(root);
+    const navigated: unknown[] = [];
+    const data = fakeHostData({
+      id: 'root',
+      agent: 'orchestrator',
+      time: { created: 1 },
+    });
+    let releaseModels = (_value: unknown[]) => {};
+    let startedModels = () => {};
+    const modelStarted = new Promise<void>((resolve) => {
+      startedModels = resolve;
+    });
+    const pendingModels = new Promise<unknown[]>((resolve) => {
+      releaseModels = resolve;
+    });
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      updateSnapshot(root, (snapshot) => {
+        snapshot.agentModels = { oracle: 'local/model' };
+        snapshot.activeSessions = { stale: 'oracle' };
+        snapshot.sessionParents = { stale: 'root' };
+        snapshot.reusableByAgent = {
+          root: {
+            oracle: [{ taskID: 'stale', alias: 'ora-1', running: true }],
+          },
+        };
+      });
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        client: {
+          model: {
+            list: () => {
+              startedModels();
+              return pendingModels;
+            },
+          },
+        },
+        navigate: (...args) => navigated.push(args),
+      });
+      await modelStarted;
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      const lines = screen.captureCharFrame().split('\n');
+      const row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).not.toMatch(ACTIVITY_FRAME_PATTERN);
+      expect(lines[row]).not.toContain('✦');
+      expect(screen.captureCharFrame()).not.toContain('ora-1');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([]);
+    } finally {
+      releaseModels([]);
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host overlay refreshes immediately when the visible root changes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-scope-'));
+    const restore = withIsolatedDataHome(root);
+    const data = fakeHostData(
+      { id: 'root-a', agent: 'orchestrator', time: { created: 1 } },
+      { id: 'root-b', agent: 'orchestrator', time: { created: 2 } },
+      {
+        id: 'child-a',
+        parentID: 'root-a',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 3, idle: 4 },
+      },
+      {
+        id: 'child-b',
+        parentID: 'root-b',
+        agent: 'explorer',
+        outcome: 'succeeded',
+        time: { created: 5, idle: 6 },
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    const stat = spyOn(fs.promises, 'stat');
+    try {
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            orchestrator: 'old',
+            oracle: 'local/model',
+            explorer: 'local/model',
+          },
+        },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root-a',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: () => {},
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      expect(
+        screen
+          .captureCharFrame()
+          .split('\n')
+          .find((line) => line.includes('oracle')),
+      ).toContain('✦');
+      stat.mockClear();
+      const refreshed = mounted.nextRefresh();
+      mounted.setSessionID('root-b');
+      await screen.renderOnce();
+      expect(
+        stat.mock.calls.some(([file]) => file === getTuiStatePath(root)),
+      ).toBe(true);
+      await refreshed;
+      await screen.renderOnce();
+      const lines = screen.captureCharFrame().split('\n');
+      expect(lines.find((line) => line.includes('explorer'))).toContain('✦');
+      expect(lines.find((line) => line.includes('oracle'))).not.toContain('✦');
+    } finally {
+      stat.mockRestore();
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host finished child shows history and its row navigates', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-finished-'));
+    const restore = withIsolatedDataHome(root);
+    const navigated: unknown[] = [];
+    const data = fakeHostData(
+      { id: 'root', agent: 'orchestrator', time: { created: 1 } },
+      {
+        id: 'child',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 2, idle: 3 },
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'old', oracle: 'local/model' } },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: (...args) => navigated.push(args),
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      const lines = screen.captureCharFrame().split('\n');
+      const row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toContain('✦');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([['session', { sessionID: 'child' }]]);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host interrupted child alone gets a coffin in expanded history', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-stopped-'));
+    const restore = withIsolatedDataHome(root);
+    const data = fakeHostData(
+      { id: 'root', agent: 'orchestrator', time: { created: 1 } },
+      {
+        id: 'older',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 2, idle: 3 },
+      },
+      {
+        id: 'ok',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 4, idle: 5 },
+      },
+      {
+        id: 'stopped',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'interrupted',
+        time: { created: 6, idle: 7 },
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'old', oracle: 'local/model' } },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: () => {},
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      let lines = screen.captureCharFrame().split('\n');
+      const row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toContain('▸2');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      await screen.renderOnce();
+      lines = screen.captureCharFrame().split('\n');
+      expect(lines.find((line) => line.includes('ora-1'))).toBeUndefined();
+      expect(lines.find((line) => line.includes('ora-2'))).toContain('• ora-2');
+      expect(lines.find((line) => line.includes('ora-3'))).toContain('⚰ ora-3');
+      expect(lines.filter((line) => line.includes('⚰'))).toHaveLength(1);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host running to idle event preserves a clickable row', async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-host-transition-'),
+    );
+    const restore = withIsolatedDataHome(root);
+    const navigated: unknown[] = [];
+    const data = fakeHostData(
+      { id: 'root', agent: 'orchestrator', time: { created: 1 } },
+      {
+        id: 'child',
+        parentID: 'root',
+        agent: 'oracle',
+        time: { created: 2, busy: 3 },
+      },
+    );
+    data.running.add('child');
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'old', oracle: 'local/model' } },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: (...args) => navigated.push(args),
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      let lines = screen.captureCharFrame().split('\n');
+      let row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toMatch(ACTIVITY_FRAME_PATTERN);
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([['session', { sessionID: 'child' }]]);
+      for (const type of [
+        'session.created',
+        'session.deleted',
+        'session.execution.started',
+        'session.execution.succeeded',
+        'session.execution.failed',
+        'session.execution.interrupted',
+      ]) {
+        expect(data.listeners.get(type)?.size).toBe(1);
+      }
+      data.running.delete('child');
+      const child = data.sessions.get('child') as HostSessionInfo;
+      expect(child.time.idle).toBeUndefined();
+      expect(child.outcome).toBeUndefined();
+      const refreshed = mounted.nextRefresh();
+      data.emit('session.execution.succeeded');
+      await refreshed;
+      await screen.renderOnce();
+      lines = screen.captureCharFrame().split('\n');
+      row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toContain('✦');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([
+        ['session', { sessionID: 'child' }],
+        ['session', { sessionID: 'child' }],
+      ]);
+      child.time.idle = 4;
+      child.outcome = 'succeeded';
+      for (const dispose of mounted.disposers.splice(0)) dispose();
+      expect(data.listeners.get('session.execution.succeeded')?.size).toBe(0);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test('hover contrasts with the sidebar on matching and transparent themes', async () => {
     const root = fs.mkdtempSync(
@@ -3143,76 +3538,6 @@ describe('sidebarTargetLabel', () => {
   });
 });
 
-describe('resolveSidebarSlotOrder', () => {
-  const NAME = 'oh-my-opencode-slim';
-
-  test('index 0 lands at 110, right after the host context section', () => {
-    expect(resolveSidebarSlotOrder([`file:///w/${NAME}`], NAME)).toBe(110);
-  });
-
-  test('later indexes map to later bands of 100', () => {
-    expect(
-      resolveSidebarSlotOrder(
-        ['@cortexkit/opencode-magic-context@0.42.4', `file:///w/${NAME}`],
-        NAME,
-      ),
-    ).toBe(210);
-  });
-
-  test('falls back to 900 when the list is missing or not an array', () => {
-    expect(resolveSidebarSlotOrder(undefined, NAME)).toBe(900);
-    expect(resolveSidebarSlotOrder(null, NAME)).toBe(900);
-    expect(resolveSidebarSlotOrder('not-a-list', NAME)).toBe(900);
-  });
-
-  test('falls back to 900 when the spec is absent from the list', () => {
-    expect(
-      resolveSidebarSlotOrder(['@cortexkit/opencode-magic-context'], NAME),
-    ).toBe(900);
-  });
-
-  test('matches npm specs with versions', () => {
-    expect(
-      resolveSidebarSlotOrder(['other-plugin', `${NAME}@2.2.20`], NAME),
-    ).toBe(210);
-  });
-
-  test('matches [spec, options] tuple entries the installer generates', () => {
-    expect(
-      resolveSidebarSlotOrder(
-        [
-          ['@cortexkit/opencode-magic-context@0.42.4', {}],
-          [`file:///home/raxxor/workspace/${NAME}`, { flag: true }],
-        ],
-        NAME,
-      ),
-    ).toBe(210);
-  });
-
-  test('does not match a scoped package sharing the basename', () => {
-    expect(resolveSidebarSlotOrder([`@other/${NAME}`, 'unrelated'], NAME)).toBe(
-      900,
-    );
-  });
-
-  test('file:// specs with a trailing slash still match', () => {
-    expect(resolveSidebarSlotOrder([`file:///w/${NAME}/`], NAME)).toBe(110);
-  });
-
-  test('plain absolute local paths match by basename', () => {
-    expect(resolveSidebarSlotOrder([`/workspace/${NAME}`], NAME)).toBe(110);
-  });
-
-  test('non-string and malformed entries are skipped without shifting index', () => {
-    expect(
-      resolveSidebarSlotOrder(
-        [{ not: 'a spec' }, 42, [''], `file:///w/${NAME}`],
-        NAME,
-      ),
-    ).toBe(410);
-  });
-});
-
 describe('kill-all running subagents', () => {
   let dataHome: string;
   let originalDataHome: string | undefined;
@@ -3279,6 +3604,125 @@ describe('kill-all running subagents', () => {
     });
 
     expect(getKillAllTargets(snapshot, 'conv-1')).toEqual(['ora-busy']);
+  });
+
+  test('from a grandchild route only the resolved root is protected', () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        'conv-1': 'orchestrator',
+        A: 'oracle',
+        B: 'oracle',
+        B1: 'observer',
+      },
+      sessionParents: { 'conv-1': 'conv-1', A: 'conv-1', B: 'conv-1', B1: 'B' },
+      sessionDetails: {
+        'conv-1': { status: 'busy' },
+        A: { status: 'busy' },
+        B: { status: 'busy' },
+        B1: { status: 'busy' },
+      },
+    });
+
+    expect(getKillAllTargets(snapshot, 'B1').sort()).toEqual(['A', 'B', 'B1']);
+  });
+
+  test('admits a stop notice to each direct parent before interrupting', async () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        A: 'oracle',
+        A2: 'oracle',
+        B: 'oracle',
+        B1: 'observer',
+      },
+      sessionParents: { A: 'conv-1', A2: 'conv-1', B: 'conv-1', B1: 'B' },
+      sessionDetails: {
+        A: { status: 'busy' },
+        A2: { status: 'busy' },
+        B1: { status: 'busy' },
+      },
+    });
+    const notices: unknown[] = [];
+    const interrupts: string[] = [];
+    const admissions = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
+    const client = {
+      session: {
+        synthetic: (args: unknown) => {
+          notices.push(args);
+          return admissions[notices.length - 1].promise;
+        },
+        interrupt: async ({ sessionID }: { sessionID: string }) => {
+          interrupts.push(sessionID);
+          return { interrupted: true };
+        },
+      },
+    };
+    const pending = killAllRunningSubagents(
+      client,
+      snapshot,
+      'conv-1',
+      '/proj',
+    );
+    try {
+      await tick();
+      expect(notices).toEqual([
+        {
+          sessionID: 'conv-1',
+          text: "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.",
+          delivery: 'steer',
+          resume: false,
+        },
+        {
+          sessionID: 'B',
+          text: "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.",
+          delivery: 'steer',
+          resume: false,
+        },
+      ]);
+      expect(interrupts).toEqual([]);
+      admissions[0].resolve();
+      await tick();
+      expect(interrupts).toEqual([]);
+    } finally {
+      admissions[0].resolve();
+      admissions[1].resolve();
+      await pending;
+    }
+    expect(interrupts.sort()).toEqual(['A', 'A2', 'B1']);
+  });
+
+  test('a stalled stop notice times out before interrupting', async () => {
+    const clock = createTimerHarness();
+    const snapshot = createSnapshot({
+      activeSessions: { A: 'oracle' },
+      sessionParents: { A: 'conv-1' },
+      sessionDetails: { A: { status: 'busy' } },
+    });
+    const interrupts: string[] = [];
+    const client = {
+      session: {
+        synthetic: () => new Promise(() => {}),
+        interrupt: async ({ sessionID }: { sessionID: string }) => {
+          interrupts.push(sessionID);
+          return { interrupted: true };
+        },
+      },
+    };
+    const pending = killAllRunningSubagents(
+      client,
+      snapshot,
+      'conv-1',
+      '/proj',
+      clock,
+    );
+    await clock.tick();
+    expect(interrupts).toEqual([]);
+    await clock.advance(SESSION_ABORT_TIMEOUT_MS);
+    await clock.tick();
+    expect(interrupts).toEqual(['A']);
+    expect(await pending).toEqual({ killed: 1, failed: 0, total: 1 });
   });
 
   test('empty targets issue no aborts', async () => {

@@ -10,13 +10,8 @@
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· Turn your notes into clean, editable SVG diagrams</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim is free.** If it's useful to you, consider supporting animal welfare.<br>
+> [Donate to a charity in your region](https://ohmyopencodeslim.com/donate) · [See all charities](https://ohmyopencodeslim.com/animals)
 
 ## What's This Plugin
 
@@ -187,7 +186,7 @@ Then:
 2. **Refresh and list the models OpenCode can see**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
    On OpenCode v2, use `opencode models` instead.
 3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
@@ -233,13 +232,17 @@ history. This is best-effort: a failed continuation can leave the native
 model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
 The sidebar shows the current session's saved team models and variants;
-`/preset` marks its bound preset separately from the global default.
+`/preset` marks its bound preset separately from the global default. In Web
+and Desktop, bare `/preset` displays the session binding and configured defaults.
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
 lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
-queue-only progress reporting. V2 rejects the V1-only `"managed"` mode.
+child progress reporting. V2 applies the old `"managed"` mode as `"native"`
+with a warning.
 With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
-bindings and all OMOS task tools are disabled, while the configured global
-preset still selects the agent settings registered at startup.
+bindings and all OMOS task tools are disabled by default, while the configured
+global preset still selects the agent settings registered at startup. Set
+`"sessionPresetRouting": true` to keep per-session bindings with task tools
+off.
 See
 [Preset Switching](docs/presets/preset-switching.md) for scope and timing, and
 [Configuration](docs/configuration.md#preset-inheritance) for the inheritance
@@ -651,7 +654,7 @@ activation, and update flow.
 > **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. Omitting `image_routing` preserves existing conditional Observer behavior. `"auto"` is capability-aware: models that accept image input keep attachments inline for native vision; non-vision chains get attachments saved under `.opencode/images/<session>/` with a delegation nudge by path. `"direct"` always keeps image parts inline. Saved workspace images are not automatically deleted. Remove the whole `.opencode/images/` directory or a single session subdirectory manually when no longer needed (references in old conversations then stop resolving); images from session-less messages are saved at the top level.
 
 > [!TIP]
-> **Subagents reading images.** Advisory subagents (explorer, oracle, designer, councillors) can dispatch `@observer` themselves for image files on disk. On OpenCode v2 hosts this needs one extra hop of nesting, which the host denies by default — set `"experimental": { "subagent_depth": 2 }` in your opencode config to enable it. Fixer, observer itself, and the council synthesizer stay non-spawning by design.
+> **Subagents reading images.** Advisory subagents (explorer, oracle, designer, councillors) read visual files directly when they can and can delegate to `@observer` when they need help. On OpenCode v2 hosts this needs one extra hop of nesting, which the host denies by default — set `"experimental": { "subagent_depth": 2 }` in your opencode config to enable it. Fixer, observer itself, and the council synthesizer stay non-spawning by design.
 
 <table>
   <tr>
@@ -755,7 +758,9 @@ bunx oh-my-opencode-slim@latest companion install
 ```
 
 This downloads the native binary for your platform and sets
-`"companion": { "enabled": true }` in your config. Restart OpenCode to launch it.
+`"companion": { "enabled": true }` in your config. Restart OpenCode in an
+interactive TUI session with the OMOS TUI plugin loaded and `tui` enabled;
+headless server, `opencode run`, and ACP/editor sessions do not launch it.
 
 See **[Companion](docs/companion.md)** for configuration, positions, sizes, and
 install details.
@@ -809,7 +814,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-150-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-152-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -1020,6 +1025,10 @@ Use this section as a map: start with installation, then jump to features, confi
       <td align="center" valign="top" width="16.66%"><a href="http://www.berthojoris.com/"><img src="https://avatars.githubusercontent.com/u/1352912?v=4?s=100" width="100px;" alt="Bertho Joris"/><br /><sub><b>Bertho Joris</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=berthojoris" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/tanishqbaweja"><img src="https://avatars.githubusercontent.com/u/74068132?v=4?s=100" width="100px;" alt="Tanishq"/><br /><sub><b>Tanishq</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=tanishqbaweja" title="Code">💻</a></td>
     </tr>
+    <tr>
+      <td align="center" valign="top" width="16.66%"><a href="https://x.com/surlymochan"><img src="https://avatars.githubusercontent.com/u/209239467?v=4?s=100" width="100px;" alt="Nick"/><br /><sub><b>Nick</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=surlymochan" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://begenchgeldyev.com/"><img src="https://avatars.githubusercontent.com/u/83501597?v=4?s=100" width="100px;" alt="Begench"/><br /><sub><b>Begench</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=begenchgeldyev" title="Code">💻</a></td>
+    </tr>
   </tbody>
 </table>
 
@@ -1027,6 +1036,16 @@ Use this section as a map: start with installation, then jump to features, confi
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## Supporting Animal Welfare
+
+Slim is free and MIT licensed, and will remain so. In place of payment, we ask users who find it useful to support animal welfare. The recommended charities work to end the most painful practices animals face on farms and at slaughter: killing without proper stunning, surgery without pain relief, and close confinement. Donations go directly to them.
+
+- **[Donate](https://ohmyopencodeslim.com/donate)**: opens the donation page of a charity active in your region.
+- **[All charities](https://ohmyopencodeslim.com/animals)**: compare the options and see why they were selected.
+- **Commercial use**: the license carries no obligation. Companies that rely on Slim are asked to make an annual donation.
 
 ---
 

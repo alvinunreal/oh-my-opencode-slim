@@ -10,13 +10,8 @@
   <p><sub>由 <b>Boring Dystopia Development</b> 打造</sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 将你的笔记变成清晰、可编辑的 SVG 图表</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim 是免费的。** 如果它对你有用，请考虑支持动物福利。<br>
+> [向你所在地区的慈善机构捐款](https://ohmyopencodeslim.com/donate) · [查看所有慈善机构](https://ohmyopencodeslim.com/animals)
 
 ## 什么是该插件？
 
@@ -131,7 +130,7 @@ bun run build
 2. **刷新并列出 OpenCode 可以调用的模型**：
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **打开您的插件配置文件**，路径为 `~/.config/opencode/oh-my-opencode-slim.json`
 
@@ -725,6 +724,16 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 支持动物福利
+
+Slim 免费并采用 MIT 许可证，今后也会保持如此。我们不收取费用，而是请觉得它有用的用户支持动物福利。推荐的慈善机构致力于终结动物在农场和屠宰过程中遭受的最痛苦的做法：未经适当致晕的宰杀、不使用止痛的手术，以及狭小的禁闭。捐款直接交给这些机构。
+
+- **[捐款](https://ohmyopencodeslim.com/donate)**：打开你所在地区一家慈善机构的捐款页面。
+- **[所有慈善机构](https://ohmyopencodeslim.com/animals)**：比较各个选项，并了解选择它们的理由。
+- **商业使用**：许可证不附带任何义务。我们请依赖 Slim 的公司每年捐款一次。
 
 ---
 

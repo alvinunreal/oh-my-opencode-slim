@@ -2,12 +2,8 @@
  * Host-resolved image-input capability and catalog existence for a model
  * reference.
  *
- * Both host flavors are read through their own resolved-model registry —
- * the same merged view (models.dev catalog ⊕ user config capabilities)
- * the host itself uses to gate unsupported media at request time:
- *
- * - v2 hosts: the `ctx.model` registry threaded through `experimental_v2`;
- * - v1 hosts: `client.config.providers()` through the plugin client.
+ * The `ctx.model` registry threaded through `experimental_v2` is the same
+ * resolved view the host uses to gate unsupported media at request time.
  *
  * omos keeps no capability table of its own. The catalog is cached in a
  * caller-owned slot — each plugin generation passes a fresh holder, so
@@ -35,12 +31,6 @@ export interface ModelImageCapabilityCache {
 }
 
 export interface ModelImageCapabilityDeps {
-  /** v1 plugin client with the `config.providers` namespace. */
-  readonly client?: {
-    readonly config?: {
-      readonly providers?: () => Promise<unknown>;
-    };
-  };
   /** v2 host model registry threaded through `experimental_v2`. */
   readonly modelDomain?: {
     readonly list?: (input?: unknown) => Promise<unknown>;
@@ -54,14 +44,15 @@ type ImageCatalog = ReadonlyMap<
   ReadonlyMap<string, boolean | undefined>
 >;
 
-/** `capabilities.input` in either host shape: the v2 modalities array
- * (`['text', 'image']`) or the v1 boolean record (`.image === true`). */
+/** `capabilities.input` is a modalities array such as `['text', 'image']`. */
 function imageInputOf(capabilities: unknown): boolean | undefined {
   if (!capabilities || typeof capabilities !== 'object') return undefined;
   const input = (capabilities as { input?: unknown }).input;
-  if (Array.isArray(input)) return input.includes('image');
-  if (input && typeof input === 'object')
-    return (input as { image?: unknown }).image === true;
+  if (Array.isArray(input))
+    return input.some(
+      (modality) =>
+        typeof modality === 'string' && modality.startsWith('image'),
+    );
   return undefined;
 }
 
@@ -71,8 +62,9 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** v2 `model.list()` payload: `{ data: ModelInfo[] }`, each entry carrying
- * `providerID`, `modelID` and the merged `capabilities`. */
+/** v2 `model.list()` payload: `{ data: Model.Info[] }`. Index by the stable
+ *  selection `id` that `provider/model` refs name, not the provider-facing
+ *  `modelID` (aliases such as `*-fast` share that with their base model). */
 function catalogFromModelList(payload: unknown): ImageCatalog {
   const catalog = new Map<string, Map<string, boolean | undefined>>();
   const data = recordOf(payload)?.data;
@@ -80,33 +72,14 @@ function catalogFromModelList(payload: unknown): ImageCatalog {
   for (const entry of data) {
     const rec = recordOf(entry);
     const providerID = rec?.providerID;
-    const modelID = rec?.modelID;
-    if (typeof providerID !== 'string' || typeof modelID !== 'string') continue;
+    const id = rec?.id;
+    if (typeof providerID !== 'string' || typeof id !== 'string') continue;
     let models = catalog.get(providerID);
     if (!models) {
       models = new Map<string, boolean | undefined>();
       catalog.set(providerID, models);
     }
-    models.set(modelID, imageInputOf(rec?.capabilities));
-  }
-  return catalog;
-}
-
-/** v1 `config.providers()` payload: `{ data: { providers: [...] } }` with
- * per-provider `models` records (the hey-api `fields` wrapper included). */
-function catalogFromV1Providers(payload: unknown): ImageCatalog {
-  const catalog = new Map<string, Map<string, boolean | undefined>>();
-  const body = recordOf(recordOf(payload)?.data) ?? recordOf(payload);
-  const providers = body?.providers;
-  if (!Array.isArray(providers)) return catalog;
-  for (const provider of providers) {
-    const rec = recordOf(provider);
-    if (!rec || typeof rec.id !== 'string') continue;
-    const models = new Map<string, boolean | undefined>();
-    for (const [modelID, model] of Object.entries(recordOf(rec.models) ?? {})) {
-      models.set(modelID, imageInputOf(recordOf(model)?.capabilities));
-    }
-    catalog.set(rec.id, models);
+    models.set(id, imageInputOf(rec?.capabilities));
   }
   return catalog;
 }
@@ -116,8 +89,6 @@ async function fetchCatalog(
 ): Promise<ImageCatalog> {
   if (deps.modelDomain?.list)
     return catalogFromModelList(await deps.modelDomain.list());
-  if (deps.client?.config?.providers)
-    return catalogFromV1Providers(await deps.client.config.providers());
   return new Map();
 }
 
@@ -125,8 +96,7 @@ export async function modelAcceptsImageInput(
   ref: ModelImageCapabilityRef,
   deps: ModelImageCapabilityDeps,
 ): Promise<boolean | undefined> {
-  if (!deps.modelDomain?.list && !deps.client?.config?.providers)
-    return undefined;
+  if (!deps.modelDomain?.list) return undefined;
   try {
     deps.cache.promise ??= fetchCatalog(deps);
     return (await deps.cache.promise)?.get(ref.providerID)?.get(ref.id);
@@ -153,8 +123,7 @@ export async function modelExistsInCatalog(
   ref: ModelImageCapabilityRef,
   deps: ModelImageCapabilityDeps,
 ): Promise<boolean | undefined> {
-  if (!deps.modelDomain?.list && !deps.client?.config?.providers)
-    return undefined;
+  if (!deps.modelDomain?.list) return undefined;
   try {
     deps.cache.promise ??= fetchCatalog(deps);
     const catalog = await withTimeout(

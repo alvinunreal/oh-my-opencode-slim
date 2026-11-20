@@ -36,7 +36,11 @@ function makeHarness(options?: {
   const get = async (input: { sessionID: string }) => {
     getCalls.push(input);
     log.push('identity');
-    return getResponse;
+    // A function response routes by sessionID (parent lookups in the
+    // session_move tests); anything else is returned as-is.
+    return typeof getResponse === 'function'
+      ? (getResponse as (input: { sessionID: string }) => unknown)(input)
+      : getResponse;
   };
   const backend = {
     get: async (key: string) => {
@@ -143,6 +147,99 @@ describe('ensureAdmission', () => {
       data: { id: 'root-2', location: { directory: '/elsewhere' } },
     });
     await expect(h.presets.ensureAdmission('root-2')).rejects.toThrow(
+      'Session preset session/location mismatch',
+    );
+  });
+
+  test('a child that moved itself (session_move) still admits via its parent directory', async () => {
+    // #1915: a background child that called session_move into a worktree
+    // directory reports a directory outside the plugin's startup
+    // directory. Its parent still lives there, so provenance is proven
+    // through the parent instead of rejecting a live child.
+    const h = makeHarness();
+    const movedDirectory =
+      '/home/user/.local/share/opencode/worktree/abc123/deep-fixer';
+    h.setGetResponse({
+      data: {
+        id: 'child-1',
+        parentID: 'root-1',
+        agent: 'deep-fixer',
+        location: { directory: DIRECTORY },
+      },
+    });
+    await h.presets.bindChild('child-1', 'root-1', BUNDLE);
+    expect(h.storage.get(storageKey('child-1'))).toMatchObject({
+      parentID: 'root-1',
+    });
+
+    // The child moved itself; the parent stayed in the plugin directory.
+    h.setGetResponse((input: { sessionID: string }) =>
+      input.sessionID === 'root-1'
+        ? { data: { id: 'root-1', location: { directory: DIRECTORY } } }
+        : {
+            data: {
+              id: 'child-1',
+              parentID: 'root-1',
+              agent: 'deep-fixer',
+              location: { directory: movedDirectory },
+            },
+          },
+    );
+    const admission = await h.presets.ensureAdmission('child-1');
+    expect(admission?.record?.parentID).toBe('root-1');
+    expect(admission?.identity.parentID).toBe('root-1');
+    expect(admission?.identity.agent).toBe('deep-fixer');
+  });
+
+  test('a moved child whose parent is not in the plugin directory still rejects', async () => {
+    const h = makeHarness();
+    h.storage.set(storageKey('child-1'), {
+      schemaVersion: 1,
+      parentID: 'root-1',
+      bundle: BUNDLE,
+    });
+    h.setGetResponse((input: { sessionID: string }) =>
+      input.sessionID === 'root-1'
+        ? { data: { id: 'root-1', location: { directory: '/elsewhere' } } }
+        : {
+            data: {
+              id: 'child-1',
+              parentID: 'root-1',
+              agent: 'deep-fixer',
+              location: { directory: '/worktree/abc123/deep-fixer' },
+            },
+          },
+    );
+    await expect(h.presets.ensureAdmission('child-1')).rejects.toThrow(
+      'Session preset session/location mismatch',
+    );
+  });
+
+  test('a moved child whose parent is gone still rejects', async () => {
+    const h = makeHarness();
+    h.storage.set(storageKey('child-1'), {
+      schemaVersion: 1,
+      parentID: 'root-1',
+      bundle: BUNDLE,
+    });
+    h.setGetResponse((input: { sessionID: string }) =>
+      input.sessionID === 'root-1'
+        ? Promise.reject(
+            Object.assign(new Error(''), {
+              _tag: 'Session.NotFoundError',
+              sessionID: 'root-1',
+            }),
+          )
+        : {
+            data: {
+              id: 'child-1',
+              parentID: 'root-1',
+              agent: 'deep-fixer',
+              location: { directory: '/worktree/abc123/deep-fixer' },
+            },
+          },
+    );
+    await expect(h.presets.ensureAdmission('child-1')).rejects.toThrow(
       'Session preset session/location mismatch',
     );
   });

@@ -10,13 +10,8 @@
   <p><sub>by <b>Boring Dystopia Development</b></sub></p>
   <p>
     <a href="https://boringdystopia.ai/"><img src="https://img.shields.io/badge/boringdystopia.ai-111111?style=for-the-badge&logo=vercel&logoColor=white" alt="boringdystopia.ai"></a>&nbsp;
-    <a href="https://x.com/alvinunreal"><img src="https://img.shields.io/badge/X-@alvinunreal-000000?style=for-the-badge&logo=x&logoColor=white" alt="X @alvinunreal"></a>&nbsp;
     <a href="https://t.me/boringdystopiadevelopment"><img src="https://img.shields.io/badge/Telegram-Join%20channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Join channel"></a>&nbsp;
-  </p>
-
-  <p>
-    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
-    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 메모를 깔끔하고 편집 가능한 SVG 다이어그램으로</sub>
+    <a href="https://ohmyopencodeslim.com/donate"><img src="https://img.shields.io/badge/Animal%20Welfare-Support-3F7D4E?style=for-the-badge" alt="Support animal welfare"></a>&nbsp;
   </p>
 
   <p>
@@ -26,6 +21,10 @@
   <p><sub>✦ ✦ ✦</sub></p>
 
 </div>
+
+> [!TIP]
+> **Slim은 무료입니다.** 유용하게 쓰셨다면 동물 복지 후원을 고려해 주세요.<br>
+> [거주 지역 단체에 기부하기](https://ohmyopencodeslim.com/donate) · [전체 단체 보기](https://ohmyopencodeslim.com/animals)
 
 ## 플러그인 소개
 
@@ -156,7 +155,7 @@ bun run build
 2. **OpenCode에서 사용할 수 있는 모델 목록을 새로고침하고 확인하세요**:
 
    ```bash
-   opencode models --refresh
+   opencode models
    ```
 3. **플러그인 설정 파일**인 `~/.config/opencode/oh-my-opencode-slim.json`을 여세요.
 
@@ -789,6 +788,16 @@ bunx oh-my-opencode-slim@latest companion install
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
+
+---
+
+## 동물 복지 후원
+
+Slim은 무료이며 MIT 라이선스이고, 앞으로도 그럴 것입니다. 비용 대신, 유용하게 쓰시는 분들께 동물 복지 후원을 부탁드립니다. 추천 단체들은 농장과 도축 과정에서 동물이 겪는 가장 고통스러운 관행, 즉 적절한 기절 처리 없는 도살, 진통 없는 시술, 좁은 공간의 감금을 없애기 위해 활동합니다. 기부금은 단체로 직접 전달됩니다.
+
+- **[기부하기](https://ohmyopencodeslim.com/donate)**: 거주 지역에서 활동하는 단체의 기부 페이지가 열립니다.
+- **[전체 단체](https://ohmyopencodeslim.com/animals)**: 선택지를 비교하고 선정 이유를 확인할 수 있습니다.
+- **상업적 사용**: 라이선스에는 어떤 의무도 없습니다. Slim을 사용하는 기업에는 연 1회 기부를 부탁드립니다.
 
 ---
 

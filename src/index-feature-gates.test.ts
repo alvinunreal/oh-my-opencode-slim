@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { withTuiAttachment } from './companion/attachment-test-helper';
 import {
   CompanionManager,
   companionSessionIdForDirectory,
@@ -80,8 +81,8 @@ describe('plugin feature gates through exported hooks', () => {
       path.join(projectDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         companion: { enabled: false },
-        webfetch: { enabled: false },
-        disabled_hooks: ['auto-update-checker'],
+        disabled_tools: ['webfetch'],
+        autoUpdate: false,
         ...overrides,
       }),
     );
@@ -97,27 +98,23 @@ describe('plugin feature gates through exported hooks', () => {
     } as never);
 
   for (const [label, options, enabled] of [
-    ['enabled', { webfetch: { enabled: true } }, true],
-    ['feature disabled', { webfetch: { enabled: false } }, false],
+    ['enabled', { disabled_tools: [] }, true],
+    ['tool disabled', {}, false],
+    ['unrelated tool disabled', { disabled_tools: ['ast_grep_search'] }, true],
     [
-      'tool disabled',
-      { webfetch: { enabled: true }, disabled_tools: ['webfetch'] },
-      false,
-    ],
-    [
-      'both disabled',
-      { webfetch: { enabled: false }, disabled_tools: ['webfetch'] },
-      false,
+      'retired webfetch block ignored',
+      { disabled_tools: [], webfetch: { enabled: false } },
+      true,
     ],
   ] as const) {
-    test(`webfetch ${label}: registration and JSDOM probe agree`, async () => {
+    test(`webfetch ${label}: registration never loads JSDOM`, async () => {
       await configure({ backgroundJobs: { mode: 'off' }, ...options });
-      const probe = spyOn(jsdom, 'probeJSDOM').mockResolvedValue(null);
+      const probe = spyOn(jsdom, 'loadJSDOM');
       let hooks: PluginHooks | undefined;
       try {
         hooks = await createHooks();
         expect(Boolean(hooks.tool?.webfetch)).toBe(enabled);
-        expect(probe).toHaveBeenCalledTimes(enabled ? 1 : 0);
+        expect(probe).not.toHaveBeenCalled();
       } finally {
         await hooks?.dispose?.();
         probe.mockRestore();
@@ -180,7 +177,7 @@ describe('plugin feature gates through exported hooks', () => {
       backgroundJobs: { mode: 'native' },
       disabled_tools: ['task_reply', 'task_report', 'webfetch'],
       marketplace: { enabled: false },
-      disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+      disabled_hooks: ['foreground-fallback'],
       disabled_commands: ['deepwork', 'reflect'],
     });
     const nativeControl = spyOn(
@@ -299,11 +296,11 @@ describe('plugin feature gates through exported hooks', () => {
         disabled_tools: [
           'task_cancel',
           'task_status',
+          'webfetch',
           ...(flavor === 'v2' ? ['task_reply', 'task_report'] : []),
         ],
-        webfetch: { enabled: false },
         marketplace: { enabled: false },
-        disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+        disabled_hooks: ['foreground-fallback'],
         disabled_commands: ['deepwork', 'reflect'],
       });
       const nativeControlSpy = spyOn(
@@ -356,7 +353,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('foreground-fallback disabled hook does not dispatch retry steering', async () => {
     await configure({
       backgroundJobs: { mode: 'off' },
-      disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+      disabled_hooks: ['foreground-fallback'],
       fallback: { enabled: true, maxRetries: 0 },
       agents: {
         orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
@@ -475,10 +472,9 @@ describe('plugin feature gates through exported hooks', () => {
     await configure({
       backgroundJobs: { mode: 'off' },
       interview: { enabled: true },
-      disabled_tools: ['interview_submit_state'],
-      webfetch: { enabled: false },
+      disabled_tools: ['interview_submit_state', 'webfetch'],
       marketplace: { enabled: false },
-      disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+      disabled_hooks: ['foreground-fallback'],
       disabled_commands: ['deepwork', 'reflect'],
     });
     let hooks: PluginHooks | undefined;
@@ -572,27 +568,25 @@ describe('plugin feature gates through exported hooks', () => {
         binaryPath: `${projectDir}/missing-companion-bin`,
       },
     });
-    const onLoadSpy = spyOn(CompanionManager.prototype, 'onLoad');
-    let hooks: PluginHooks | undefined;
-    try {
-      hooks = await createHooks('v2');
-      expect(onLoadSpy).toHaveBeenCalledTimes(1);
-      expect(existsSync(stateFilePath())).toBe(true);
-    } finally {
-      await hooks?.dispose?.();
-      onLoadSpy.mockRestore();
-    }
+    await withTuiAttachment(projectDir, async () => {
+      const onLoadSpy = spyOn(CompanionManager.prototype, 'onLoad');
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks('v2');
+        expect(onLoadSpy).toHaveBeenCalledTimes(1);
+        expect(existsSync(stateFilePath())).toBe(true);
+      } finally {
+        await hooks?.dispose?.();
+        onLoadSpy.mockRestore();
+      }
+    });
   });
 
   for (const flavor of ['v2'] as const) {
     test(`${flavor}: no post-tool consumers means no v1 after hook`, async () => {
       await configure({
         backgroundJobs: { mode: 'off' },
-        disabled_hooks: [
-          'auto-update-checker',
-          'json-error-recovery',
-          'tool-loop-guard',
-        ],
+        disabled_hooks: ['tool-loop-guard'],
       });
       const hooks = await createHooks(flavor);
       try {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Database } from 'bun:sqlite';
 /**
- * Packed-artifact, headless OpenCode 2.3.0 lifecycle verification.
+ * Packed-artifact, headless OpenCode 2.3.2 lifecycle verification.
  *
  * Build first, then run:
  *   bun scripts/verify-v2-native-lifecycle.ts
@@ -43,6 +43,7 @@ type Message = {
 };
 type ModelRequest = {
   model: string;
+  temperature?: number;
   messages: Array<{ role: string; content?: unknown }>;
   tools?: Array<{ function?: { name?: string; parameters?: unknown } }>;
 };
@@ -63,8 +64,11 @@ type Mode = 'default' | 'native' | 'off';
 type PackEntry = { filename?: string };
 
 const ROOT = '/tmp/opencode/v2-native-lifecycle';
-const HOST_VERSION = '2.3.0';
+const HOST_VERSION = '2.3.2';
 const HOST = process.env.V2_LIFECYCLE_HOST ?? 'opencode';
+const PLUGIN_KV_NAMESPACE = `plugin:${[...'oh-my-opencode-slim']
+  .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+  .join('')}:`;
 const REPO = path.resolve(import.meta.dir, '..');
 const args = process.argv.slice(2);
 const options = {
@@ -419,7 +423,7 @@ const AGENTS = [
   'observer',
   'council',
 ];
-function pluginConfig(mode: Mode | 'managed') {
+function pluginConfig(mode: Mode) {
   return {
     preset: 'local-lifecycle',
     presets: {
@@ -436,6 +440,7 @@ function pluginConfig(mode: Mode | 'managed') {
     ...(mode === 'default' ? {} : { backgroundJobs: { mode } }),
     tui: false,
     sidebar: false,
+    autoUpdate: false,
     liveConfigRefresh: false,
     interview: { enabled: false },
     marketplace: { enabled: false },
@@ -450,10 +455,8 @@ function pluginConfig(mode: Mode | 'managed') {
       'ast_grep_replace',
     ],
     disabled_hooks: [
-      'auto-update-checker',
       'foreground-fallback',
       'phase-reminder',
-      'json-error-recovery',
       'absolute-path-rescue',
       'cache-monitor',
       'apply-patch',
@@ -548,11 +551,7 @@ class Host {
       OPENCODE_DISABLE_FFF: 'true',
     };
   }
-  async configure(
-    installed: string,
-    mode: Mode | 'managed',
-    customConfig?: RecordValue,
-  ) {
+  async configure(installed: string, mode: Mode, customConfig?: RecordValue) {
     for (const directory of [
       'home',
       'tmp',
@@ -1269,14 +1268,9 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
         .map((row) => String(row.key));
       // The host namespaces plugin KV by character code; scope the lifecycle
       // check to this plugin so unrelated host/plugin keys are not miscounted.
-      const namespace = `plugin:${[...'oh-my-opencode-slim']
-        .map((character) =>
-          character.charCodeAt(0).toString(16).padStart(4, '0'),
-        )
-        .join('')}:`;
       const pluginKeys = keys
-        .filter((key) => key.startsWith(namespace))
-        .map((key) => key.slice(namespace.length));
+        .filter((key) => key.startsWith(PLUGIN_KV_NAMESPACE))
+        .map((key) => key.slice(PLUGIN_KV_NAMESPACE.length));
       const presetKeys = pluginKeys.filter((key) =>
         key.startsWith('session-preset/'),
       );
@@ -1298,7 +1292,11 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
         );
       await writeFile(
         path.join(host.root, 'kv-keys.json'),
-        JSON.stringify({ pluginNamespace: namespace, pluginKeys }, null, 2),
+        JSON.stringify(
+          { pluginNamespace: PLUGIN_KV_NAMESPACE, pluginKeys },
+          null,
+          2,
+        ),
       );
       return {
         pluginKeys,
@@ -1475,62 +1473,67 @@ async function nativeControls(
   );
   await checkCase(
     results,
-    `${mode}: progress report queues on idle parent without waking it`,
+    `${mode}: escalation wakes idle parent before child finishes`,
     async () => {
-      const parent = await host.create('Dormant progress report');
+      const parent = await host.create('Idle escalation report');
       const childMarker = model.plan('child', [
         {
           tool: 'task_report',
-          input: { kind: 'progress', message: 'REPORT_IDLE_QUEUED' },
+          input: { kind: 'escalation', message: 'REPORT_IDLE_ESCALATION' },
           hold: `${mode}:report`,
         },
         { text: 'REPORT_CHILD_TERMINAL_HELD', hold: `${mode}:report-terminal` },
       ]);
-      await host.runTools(
-        parent.id,
-        [subagent(childMarker)],
-        'REPORT_PARENT_IDLE',
-      );
+      const parentMarker = model.plan('parent', [
+        subagent(childMarker),
+        { text: 'REPORT_PARENT_IDLE' },
+        { text: 'REPORT_PARENT_WOKE' },
+      ]);
+      const parentCalls = () =>
+        model.requests.filter(
+          (request) => request.plan === parentMarker.slice(9, -1),
+        );
+      await host.prompt(parent.id, parentMarker);
+      await host.contains(parent.id, 'REPORT_PARENT_IDLE');
+      await host.idle(parent.id);
       const target = await host.child(parent.id);
       await model.wait(`${mode}:report`);
-      const before = model.requests.filter(
-        (request) => request.body.model === 'parent' && request.plan,
-      ).length;
+      const before = parentCalls().length;
       model.release(`${mode}:report`);
       await model.wait(`${mode}:report-terminal`);
-      const inbox = await host.request<
-        Array<{ id: string; delivery: string; payload: { text?: string } }>
-      >(`/api/session/${parent.id}/inbox`);
-      const reports = inbox.filter((item) =>
-        item.payload.text?.includes('REPORT_IDLE_QUEUED'),
+      await host.contains(parent.id, 'REPORT_PARENT_WOKE');
+      await host.idle(parent.id);
+      const admissions = await poll('idle report admission', async () => {
+        const items = host.inboxAdmissions(parent.id, 'REPORT_IDLE_ESCALATION');
+        return items.length === 1 ? items : undefined;
+      });
+      assert.equal(
+        object(object(admissions[0].data).item).delivery,
+        'steer',
+        'Report must use the steer lane',
       );
       assert.equal(
-        reports.length,
-        1,
-        'Report was not admitted once to the host inbox',
+        parentCalls().length,
+        before + 1,
+        'Idle escalation must cause exactly one parent model call',
       );
-      assert.equal(
-        reports[0].delivery,
-        'queue',
-        'Report must use the queue lane',
+      assert(
+        JSON.stringify(parentCalls().at(-1)?.body.messages).includes(
+          'REPORT_IDLE_ESCALATION',
+        ),
+        'Woken parent request did not contain the escalation',
       );
+      assert.equal((await host.inbox(parent.id)).length, 0);
+      assert(
+        (await host.request<RecordValue>('/api/session/active'))[target],
+        'Child finished before the parent consumed the escalation',
+      );
+      const additionalParentCalls = parentCalls().length - before;
       const output = toolText(await host.messages(target), 'task_report');
-      assert.match(output, /queued|accepted/);
+      assert.match(output, /accepted.*wake requested/);
       assert.doesNotMatch(
         output,
         /processed successfully|delivered successfully/i,
-      );
-      assert.equal(
-        (await host.request<RecordValue>('/api/session/active'))[parent.id],
-        undefined,
-        'Progress report woke idle parent',
-      );
-      assert.equal(
-        model.requests.filter(
-          (request) => request.body.model === 'parent' && request.plan,
-        ).length,
-        before,
-        'Progress report called the parent model',
       );
       model.release(`${mode}:report-terminal`);
       await host.contains(parent.id, 'REPORT_CHILD_TERMINAL_HELD');
@@ -1538,13 +1541,458 @@ async function nativeControls(
       return {
         parentID: parent.id,
         childID: target,
-        inboxID: reports[0].id,
-        delivery: 'queue',
-        resume: false,
-        parentModelCallsWhileQueued: 0,
+        delivery: 'steer',
+        parentModelCallsBeforeChildFinished: additionalParentCalls,
+        inboxAfterReport: 0,
       };
     },
   );
+  await checkCase(
+    results,
+    `${mode}: busy parent receives two reports in its next request`,
+    async () => {
+      const parent = await host.create('Busy parent reports');
+      const childMarker = model.plan('child', [
+        {
+          tool: 'task_report',
+          input: { kind: 'progress', message: 'REPORT_BUSY_PROGRESS' },
+          hold: `${mode}:busy-reports-start`,
+        },
+        {
+          tool: 'task_report',
+          input: { kind: 'escalation', message: 'REPORT_BUSY_ESCALATION' },
+        },
+        {
+          text: 'BUSY_REPORT_CHILD_TERMINAL',
+          hold: `${mode}:busy-reports-terminal`,
+        },
+      ]);
+      const parentMarker = model.plan('parent', [
+        subagent(childMarker),
+        { text: 'BUSY_REPORT_PARENT_HELD', hold: `${mode}:reports-parent` },
+        { text: 'BUSY_REPORTS_CONSUMED' },
+      ]);
+      const parentCalls = () =>
+        model.requests.filter(
+          (request) => request.plan === parentMarker.slice(9, -1),
+        );
+      await host.prompt(parent.id, parentMarker);
+      await model.wait(`${mode}:reports-parent`);
+      await model.wait(`${mode}:busy-reports-start`);
+      const target = await host.child(parent.id);
+      const before = parentCalls().length;
+      model.release(`${mode}:busy-reports-start`);
+      await model.wait(`${mode}:busy-reports-terminal`);
+      await poll('both busy report admissions', async () =>
+        host.inboxAdmissions(parent.id, 'REPORT_BUSY_PROGRESS').length === 1 &&
+        host.inboxAdmissions(parent.id, 'REPORT_BUSY_ESCALATION').length === 1
+          ? true
+          : undefined,
+      );
+      const inbox = await host.inbox(parent.id);
+      assert.equal(inbox.length, 2);
+      assert(inbox.every((item) => item.delivery === 'steer'));
+      assert(
+        (await host.request<RecordValue>('/api/session/active'))[parent.id],
+        'Parent was not held in an active turn',
+      );
+      assert.equal(parentCalls().length, before);
+      model.release(`${mode}:reports-parent`);
+      await host.contains(parent.id, 'BUSY_REPORTS_CONSUMED');
+      await host.idle(parent.id);
+      assert.equal(
+        parentCalls().length,
+        before + 1,
+        'Two reports held during the parent final step must arrive in one parent request',
+      );
+      const nextRequest = JSON.stringify(parentCalls().at(-1)?.body.messages);
+      assert(nextRequest.includes('REPORT_BUSY_PROGRESS'));
+      assert(nextRequest.includes('REPORT_BUSY_ESCALATION'));
+      assert.equal((await host.inbox(parent.id)).length, 0);
+      assert(
+        (await host.request<RecordValue>('/api/session/active'))[target],
+        'Child finished before the parent consumed both reports',
+      );
+      model.release(`${mode}:busy-reports-terminal`);
+      await host.contains(parent.id, 'BUSY_REPORT_CHILD_TERMINAL');
+      await host.idle(parent.id);
+      return {
+        parentID: parent.id,
+        childID: target,
+        reportsInNextRequest: 2,
+        additionalParentCallsBeforeChildFinished: 1,
+        inboxAfterReports: 0,
+      };
+    },
+  );
+}
+
+async function councilAndObserver(
+  root: string,
+  installed: string,
+  model: Model,
+  results: Evidence[],
+) {
+  const host = new Host(root, model);
+  const config: RecordValue = {
+    ...pluginConfig('off'),
+    disabled_agents: ['explorer', 'oracle', 'designer', 'fixer'],
+    disabled_hooks: pluginConfig('off').disabled_hooks.filter(
+      (name) => name !== 'council-inject',
+    ),
+    image_routing: 'auto',
+    agents: {
+      orchestrator: { skills: [] },
+      observer: { skills: [] },
+      council: { displayName: 'judge', skills: [] },
+      councillor: { skills: [] },
+    },
+    council: {
+      presets: {
+        default: {
+          alpha: { model: 'capture/child' },
+          beta: { model: 'capture/child' },
+        },
+      },
+    },
+  };
+  await host.configure(installed, 'off', config);
+  const nativeConfig = hostConfig(installed, model);
+  const models = nativeConfig.providers.capture.models as Record<
+    string,
+    { capabilities: Record<string, unknown> }
+  >;
+  models.parent.capabilities.input = ['text'];
+  models.child.capabilities.input = ['text', 'image'];
+  await writeFile(
+    path.join(host.env.OPENCODE_CONFIG_DIR as string, 'opencode.json'),
+    JSON.stringify(nativeConfig),
+  );
+  try {
+    await host.start();
+    await checkCase(
+      results,
+      'off: renamed Council receives both native seat bodies',
+      async () => {
+        const parent = await host.create('Council without task tools');
+        const alpha = model.plan('child', [{ text: 'COUNCIL_ALPHA_EVIDENCE' }]);
+        const beta = model.plan('child', [{ text: 'COUNCIL_BETA_EVIDENCE' }]);
+        await host.runTools(
+          parent.id,
+          [
+            subagent(alpha, { agent: 'councillor-alpha' }),
+            subagent(beta, { agent: 'councillor-beta' }),
+          ],
+          'COUNCIL_SEATS_LAUNCHED',
+        );
+        await host.contains(parent.id, 'COUNCIL_ALPHA_EVIDENCE');
+        await host.contains(parent.id, 'COUNCIL_BETA_EVIDENCE');
+        await host.idle(parent.id);
+        const seats = host.children(parent.id);
+        assert.deepEqual(seats.map((seat) => seat.agent).sort(), [
+          'councillor-alpha',
+          'councillor-beta',
+        ]);
+        for (const seat of seats)
+          assert.equal(host.notices(parent.id, String(seat.id)).length, 1);
+        const synthesis = model.plan('child', [
+          { text: 'COUNCIL_SYNTHESIS_EVIDENCE' },
+        ]);
+        const offset = model.requests.length;
+        await host.runTools(
+          parent.id,
+          [
+            subagent(
+              `${synthesis}\nQuestion?\nSeats: ${seats.map((seat) => seat.id).join(', ')}`,
+              { agent: 'judge' },
+            ),
+          ],
+          'COUNCIL_SYNTHESIS_LAUNCHED',
+        );
+        await host.contains(parent.id, 'COUNCIL_SYNTHESIS_EVIDENCE');
+        await host.idle(parent.id);
+        const request = model.requests
+          .slice(offset)
+          .find((entry) => entry.body.model === 'child')?.body;
+        assert(request, 'No synthesis request');
+        const text = JSON.stringify(request.messages);
+        for (const value of [
+          '## Seat: councillor-alpha',
+          'COUNCIL_ALPHA_EVIDENCE',
+          '## Seat: councillor-beta',
+          'COUNCIL_BETA_EVIDENCE',
+        ])
+          assert(text.includes(value), `Missing synthesis context: ${value}`);
+        assert.doesNotMatch(text, /Seats: ses_/);
+        assert.equal(request.tools?.length ?? 0, 0);
+        const judge = host
+          .children(parent.id)
+          .find((child) => child.agent === 'judge');
+        assert(judge);
+        assert.equal(host.notices(parent.id, String(judge.id)).length, 1);
+        return {
+          seats: seats.length,
+          alias: 'judge',
+          synthesisHasBothBodies: true,
+        };
+      },
+    );
+    await checkCase(
+      results,
+      'off: auto attachment relay and Observer native image read',
+      async () => {
+        const parent = await host.create('Observer without task tools');
+        // Valid 64x64 PNG, independent of any cloned source checkout.
+        const image =
+          'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATUlEQVR42u3PQQkAAAgAseuf0TBG8C0MVmBNvZaAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwGUBYffAxH86nSMAAAAASUVORK5CYII=';
+        const marker = model.plan('parent', [
+          { text: 'OBSERVER_ATTACHMENT_ADMITTED' },
+        ]);
+        const offset = model.requests.length;
+        await host.prompt(parent.id, marker, {
+          files: [{ name: 'relay.png', uri: `data:image/png;base64,${image}` }],
+        });
+        await host.contains(parent.id, 'OBSERVER_ATTACHMENT_ADMITTED');
+        await host.idle(parent.id);
+        const parentRequest = model.requests
+          .slice(offset)
+          .find((entry) => entry.body.model === 'parent')?.body;
+        assert(parentRequest);
+        const text = JSON.stringify(parentRequest.messages);
+        assert(text.includes('Delegate to @observer'));
+        assert(!text.includes('data:image/'));
+        assert(
+          !(parentRequest.tools ?? []).some((tool) =>
+            tool.function?.name?.startsWith('task_'),
+          ),
+        );
+        const directory = path.join(
+          host.workspace,
+          '.opencode',
+          'images',
+          parent.id,
+        );
+        const files = await readdir(directory);
+        assert.equal(files.length, 1);
+        const file = path.join(directory, files[0]);
+        const observe = model.plan('child', [
+          { tool: 'read', input: { path: file } },
+          { text: 'OBSERVER_IMAGE_READ_EVIDENCE' },
+        ]);
+        const childOffset = model.requests.length;
+        await host.runTools(
+          parent.id,
+          [subagent(`${observe}\nRead ${file}`, { agent: 'observer' })],
+          'OBSERVER_LAUNCHED',
+        );
+        await host.contains(parent.id, 'OBSERVER_IMAGE_READ_EVIDENCE');
+        await host.idle(parent.id);
+        const requests = model.requests
+          .slice(childOffset)
+          .filter((entry) => entry.body.model === 'child');
+        assert(requests.length >= 2);
+        const tools = (requests[0].body.tools ?? []).map(
+          (tool) => tool.function?.name,
+        );
+        assert(tools.includes('read'));
+        assert(
+          !tools.some(
+            (name) =>
+              ['edit', 'write', 'shell', 'execute'].includes(name ?? '') ||
+              name?.startsWith('task_'),
+          ),
+        );
+        assert.match(
+          JSON.stringify(requests[1].body.messages),
+          /data:image\/png;base64,/,
+        );
+        const child = host
+          .children(parent.id)
+          .find((entry) => entry.agent === 'observer');
+        assert(child);
+        assert.equal(host.notices(parent.id, String(child.id)).length, 1);
+        return { attachmentRelayed: true, imageInObserverRequest: true, tools };
+      },
+    );
+  } finally {
+    await host.stop();
+  }
+}
+
+async function retainedNativeExplore(
+  root: string,
+  installed: string,
+  model: Model,
+  results: Evidence[],
+) {
+  const host = new Host(root, model);
+  const base = pluginConfig('off');
+  const slimModels = ['capture/child', 'capture/backup'];
+  const slimTemperature = 0.37;
+  await host.configure(installed, 'off', {
+    ...base,
+    replaceBuiltinSubagents: false,
+    sessionPresetRouting: true,
+    fallback: { enabled: true },
+    disabled_hooks: base.disabled_hooks.filter(
+      (name) => name !== 'foreground-fallback',
+    ),
+    agents: {
+      explorer: {
+        ...base.agents.explorer,
+        model: slimModels,
+        temperature: slimTemperature,
+      },
+    },
+  });
+  await writeFile(
+    path.join(host.env.OPENCODE_CONFIG_DIR as string, 'opencode.json'),
+    JSON.stringify({
+      ...hostConfig(installed, model),
+      agents: { explore: { model: 'capture/parent' } },
+    }),
+  );
+  try {
+    await host.start();
+    await checkCase(
+      results,
+      'off with preset routing: retained native Explore is isolated from Slim explorer',
+      async () => {
+        const agents = await poll('finalized mixed agent catalog', async () => {
+          const list = await host.request<Array<{ id: string }>>('/api/agent');
+          return list.some((entry) => entry.id === 'explorer')
+            ? list
+            : undefined;
+        });
+        // Explore has a host config entry; undeclared General makes the
+        // replacement opt-out observable independently of that declaration.
+        for (const id of ['explore', 'general'])
+          assert(
+            agents.some((entry) => entry.id === id),
+            `Missing native ${id}`,
+          );
+
+        const parent = await host.create('Native Explore and Slim explorer');
+        const run = async (
+          round: string,
+          target: { agent: 'explore' | 'explorer'; sessionID?: string },
+          expectedModel: string,
+        ) => {
+          const text = `EXPLORE_ISOLATION_${round}_DONE`;
+          // The existing DSL keys plans by model family. Accept either prefix
+          // here so a misrouted request fails on its actual model, not a timeout.
+          const markers = (['parent', 'child'] as const).map((role) =>
+            model.plan(role, [{ text }]),
+          );
+          const planIDs = markers.map((marker) => marker.slice(9, -1));
+          const messages = await host.runTools(
+            parent.id,
+            [subagent(markers.join('\n'), target)],
+            `EXPLORE_ISOLATION_${round}_LAUNCHED`,
+          );
+          const launch = toolParts(messages, 'subagent').at(-1)?.state;
+          assert.equal(
+            launch?.status,
+            'completed',
+            `${round}: ${JSON.stringify(launch)}`,
+          );
+          const childID = launch?.metadata?.sessionID;
+          assert(typeof childID === 'string', `${round}: missing child ID`);
+          if (target.sessionID) assert.equal(childID, target.sessionID, round);
+          await host.contains(childID, text);
+          await host.contains(parent.id, text);
+          await host.idle(childID);
+          await host.idle(parent.id);
+
+          const requests = model.requests.filter(
+            (entry) => entry.plan && planIDs.includes(entry.plan),
+          );
+          const temperature =
+            target.agent === 'explorer' ? slimTemperature : undefined;
+          assert.deepEqual(
+            requests.map(({ body }) => ({
+              model: body.model,
+              temperature: body.temperature,
+            })),
+            [{ model: expectedModel, temperature }],
+            `${round}: wrong request model or temperature`,
+          );
+          const persisted = host
+            .children(parent.id)
+            .find((row) => row.id === childID);
+          assert.equal(
+            persisted?.agent,
+            target.agent,
+            `${round}: wrong stored agent`,
+          );
+          const stored = await host.request<Session>(`/api/session/${childID}`);
+          assert.equal(stored.model?.providerID, 'capture', round);
+          assert.equal(stored.model?.id, expectedModel, round);
+          return {
+            childID,
+            agent: target.agent,
+            model: requests[0].body.model,
+            temperature: requests[0].body.temperature ?? null,
+          };
+        };
+
+        const native = await run('NATIVE', { agent: 'explore' }, 'parent');
+        // A same-agent continuation keeps the current native pin, even when
+        // it differs from the agent's configured capture/parent model.
+        await host.request(`/api/session/${native.childID}/model`, {
+          model: { providerID: 'capture', id: 'backup2' },
+        });
+        const resumed = await run(
+          'RESUMED',
+          { agent: 'explore', sessionID: native.childID },
+          'backup2',
+        );
+        const slim = await run('SLIM', { agent: 'explorer' }, 'child');
+        assert.notEqual(slim.childID, native.childID);
+        const presetRows = (id: string) =>
+          host.rows(
+            'select value from kv where key = ?',
+            `${PLUGIN_KV_NAMESPACE}session-preset/v1/${id}`,
+          );
+        assert.equal(
+          presetRows(native.childID).length,
+          0,
+          'Native Explore acquired a Slim preset bundle',
+        );
+        const [slimBinding] = presetRows(slim.childID);
+        assert(slimBinding, 'Slim explorer lost its preset binding');
+        const slimRecord =
+          typeof slimBinding.value === 'string'
+            ? object(JSON.parse(slimBinding.value))
+            : object(slimBinding.value);
+        const bundle = object(slimRecord.bundle);
+        assert.equal(bundle.fallbackEnabled, true);
+        const slimChain = object(bundle.chains).explorer;
+        assert.deepEqual(
+          slimChain,
+          slimModels.map((id) => ({ id })),
+        );
+
+        // A different target on the same ID takes its native configured model.
+        const switched = await run(
+          'SWITCHED',
+          { agent: 'explore', sessionID: slim.childID },
+          'parent',
+        );
+        assert.equal(host.children(parent.id).length, 2);
+        return {
+          native,
+          resumed,
+          slim,
+          switched,
+          nativePresetBinding: false,
+          slimChain,
+        };
+      },
+    );
+  } finally {
+    await host.stop();
+  }
 }
 
 async function restartRunning(host: Host, results: Evidence[]) {
@@ -1750,11 +2198,66 @@ async function strictManaged(
   model: Model,
   results: Evidence[],
 ) {
-  const host = new Host(root, model);
-  await host.configure(installed, 'managed');
+  const migratedRoot = path.join(root, 'migrated');
+  const migrated = new Host(migratedRoot, model);
+  await migrated.configure(installed, 'native', {
+    ...pluginConfig('native'),
+    backgroundJobs: {
+      mode: 'managed',
+      wallClockTimeoutMs: 0,
+      concurrency: {
+        defaultConcurrency: 0,
+        providerConcurrency: { openai: 0 },
+      },
+    },
+  });
   await checkCase(
     results,
-    'explicit managed on v2: clear startup refusal',
+    'managed and inert settings migrate on v2',
+    async () => {
+      try {
+        await migrated.start();
+        const plugins = await poll(
+          'active migrated plugin inventory',
+          async () => {
+            const list = await migrated.request<PluginInfo[]>('/api/plugin');
+            return list.some(
+              (plugin) =>
+                plugin.id === 'oh-my-opencode-slim' &&
+                plugin.state.status === 'active',
+            )
+              ? list
+              : undefined;
+          },
+        );
+        await writeFile(
+          path.join(migratedRoot, 'plugins.json'),
+          JSON.stringify(plugins, null, 2),
+        );
+        await migrated.stop();
+        const logs = await logTexts(migratedRoot);
+        assert.match(logs, /removed-key/);
+        for (const key of ['mode', 'wallClockTimeoutMs', 'concurrency']) {
+          assert(
+            logs.includes(`backgroundJobs.${key}`),
+            `Missing migration warning for ${key}`,
+          );
+        }
+        return { status: 'active', warnings: true };
+      } finally {
+        await migrated.stop();
+      }
+    },
+  );
+  const refusedRoot = path.join(root, 'refused');
+  const host = new Host(refusedRoot, model);
+  await host.configure(installed, 'native', {
+    ...pluginConfig('native'),
+    backgroundJobs: { concurrency: { providerConcurrency: { openai: 2 } } },
+  });
+  await checkCase(
+    results,
+    'positive managed limit on v2: clear startup refusal',
     async () => {
       try {
         await host.start();
@@ -1772,23 +2275,35 @@ async function strictManaged(
               plugin.id === 'oh-my-opencode-slim' &&
               plugin.state.status === 'active',
           ),
-          'Explicit managed plugin remained active',
+          'Plugin with a positive limit remained active',
         );
         const inventoryError = plugins
           .map((plugin) => plugin.state.error)
           .filter((error): error is string => typeof error === 'string')
           .join('\n');
         await writeFile(
-          path.join(root, 'plugins.json'),
+          path.join(refusedRoot, 'plugins.json'),
           JSON.stringify(plugins, null, 2),
         );
         // Host stdout is flushed by stop(); combine it with plugin logs before
         // deciding whether the refusal names the unsupported setting.
         await host.stop();
-        const diagnostic = [inventoryError, await logTexts(root)].join('\n');
+        const diagnostic = [inventoryError, await logTexts(refusedRoot)].join(
+          '\n',
+        );
+        assert(
+          diagnostic.includes(
+            path.join(
+              refusedRoot,
+              'config',
+              'opencode',
+              'oh-my-opencode-slim.json',
+            ),
+          ),
+        );
         assert.match(
           diagnostic,
-          /Unsupported backgroundJobs\.mode "managed" on OpenCode v2/,
+          /backgroundJobs\.concurrency\.providerConcurrency\.openai = 2/,
         );
         return { status: 'failed', clearDiagnostic: true };
       } finally {
@@ -1891,7 +2406,7 @@ async function selfCheck() {
     assert.equal(pluginConfig('off').backgroundJobs?.mode, 'off');
     assert('plugins' in hostConfig('/tmp/opencode/local-only', model));
     assert(!('plugin' in hostConfig('/tmp/opencode/local-only', model)));
-    assert.equal(HOST_VERSION, '2.3.0');
+    assert.equal(HOST_VERSION, '2.3.2');
     assert.deepEqual(subagent('Local', { sessionID: 'ses_local' }).input, {
       agent: 'explorer',
       description: 'Local lifecycle verification',
@@ -1934,7 +2449,7 @@ async function main() {
       'Build candidate dist before running the harness',
     );
     const version = await command(
-      [HOST, '--version'],
+      [HOST, '--standalone', '--version'],
       REPO,
       path.join(root, 'version.log'),
       { PATH: process.env.PATH, HOME: root },
@@ -1996,6 +2511,20 @@ async function main() {
         await restartRunning(host, results);
       await host.stop();
     }
+    if (options.modes.includes('off')) {
+      await councilAndObserver(
+        path.join(root, 'council-observer'),
+        installed,
+        model,
+        results,
+      );
+      await retainedNativeExplore(
+        path.join(root, 'retained-native-explore'),
+        installed,
+        model,
+        results,
+      );
+    }
     await refusalFallback(
       path.join(root, 'refusal-fallback'),
       installed,
@@ -2031,11 +2560,12 @@ async function main() {
     const limitations = [
       'No external provider or user session; deterministic loopback OpenAI-compatible mock only.',
       'The harness assumes dist is already built; it packs with npm --ignore-scripts and installs the tarball into a throwaway Bun app.',
-      'Module cold-loading, cancel transport timeout, stop-versus-prompt races, council resolution, native continuation while permission/form-waiting, and preset/cache projections require parent focused source/unit validation; this HTTP harness does not claim them.',
+      'Module cold-loading, cancel transport timeout, stop-versus-prompt races, native continuation while permission/form-waiting, and preset/cache projections require focused source/unit validation. Off mode additionally covers aliased Council assembly and Observer attachment relay with a real PNG request.',
+      'Off mode with preset routing enabled also covers native Explore versus Slim explorer selection, settings and preset binding, including same-ID continuation and an agent switch. Foreign model errors are not induced in this case.',
       'Rendered catalogs cover orchestrator/explorer with this local test preset, across requested default/native/off modes. Other caller roles/presets, disabled-tool matrices, and before/after prompt byte comparisons require parent focused validation.',
       'Omitted background, explicit same-ID follow-ups, and direct child prompts are exercised in every requested mode; the host always returns a running background child.',
       'Direct-prompt later-period coverage holds the parent model call and asserts no host Job outbox row exists while the direct prompt runs, then checks the host subagent metadata on the single completion admission.',
-      'Progress report real-host coverage currently proves idle-parent queue/resume:false; running, interrupted, and form-waiting parents are not separately exercised.',
+      'Progress report real-host coverage proves idle-parent wake and reports held during the parent final step; interrupted and form-waiting parents are not exercised on a real host.',
       'Refusal fallback coverage uses native mode with a three-model chain: exactly two consecutive content-filter refusals are asserted from host step events, each chain model is called once, and the single completion admission must carry host subagent metadata rather than a Slim duplicate.',
       `The harness asserts OpenCode ${HOST_VERSION} exactly; point V2_LIFECYCLE_HOST at a ${HOST_VERSION} binary.`,
       'Terminal-but-not-yet-admitted crash and admitted-but-unconsumed restart windows need a deterministic host-side fault seam. No host DB mutations or plugin recovery are used to fabricate those states.',

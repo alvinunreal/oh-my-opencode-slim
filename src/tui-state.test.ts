@@ -4,7 +4,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   clearTuiAgentActivities,
-  clearTuiSessionAlias,
   flushTuiSnapshotBatch,
   getTuiStatePath,
   readTuiSnapshot,
@@ -17,7 +16,6 @@ import {
   snapshotSectionsEqual,
   TUI_SESSION_PARENTS_MAX,
   updateSnapshot,
-  updateTuiSessionDetails,
   withTuiSnapshotBatch,
 } from './tui-state';
 
@@ -1044,52 +1042,6 @@ describe('sessionDetails (clickable sidebar projection)', () => {
     const snapshot = readTuiSnapshot(tempDir);
     expect(snapshot.activeSessions).toEqual({});
     expect(snapshot.sessionDetails).toEqual({});
-  });
-
-  test('detail updates only apply to active sessions (no resurrection)', () => {
-    // Idle first: a late detail update must not recreate the entry.
-    recordTuiAgentActivity({ sessionID: 'gone', active: false }, tempDir);
-    updateTuiSessionDetails('gone', { alias: 'ora-9' }, tempDir);
-    expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({});
-
-    // Active session: updates merge into existing details.
-    recordTuiAgentActivity(
-      { sessionID: 'live', agentName: 'oracle', active: true },
-      tempDir,
-    );
-    updateTuiSessionDetails('live', { alias: 'ora-1' }, tempDir);
-    updateTuiSessionDetails('live', { status: 'retry' }, tempDir);
-    expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({
-      live: { alias: 'ora-1', status: 'retry' },
-    });
-  });
-
-  test('clearTuiSessionAlias retracts only the alias, keeping status', () => {
-    recordTuiAgentActivity(
-      {
-        sessionID: 'live',
-        agentName: 'oracle',
-        active: true,
-        details: { alias: 'ora-1', status: 'busy' },
-      },
-      tempDir,
-    );
-    clearTuiSessionAlias('live', tempDir);
-    expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({
-      live: { status: 'busy' },
-    });
-    // Alias-less entry with no other fields is removed entirely.
-    recordTuiAgentActivity(
-      {
-        sessionID: 'bare',
-        agentName: 'fixer',
-        active: true,
-        details: { alias: 'fix-1' },
-      },
-      tempDir,
-    );
-    clearTuiSessionAlias('bare', tempDir);
-    expect(readTuiSnapshot(tempDir).sessionDetails.bare).toBeUndefined();
   });
 
   test('orphaned details are swept by clearTuiAgentActivities', () => {

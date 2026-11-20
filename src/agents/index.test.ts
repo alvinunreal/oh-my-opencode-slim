@@ -14,6 +14,7 @@ import { RuntimeConfig } from '../config/runtime';
 import {
   type AgentModelProjection,
   applyModelInheritanceToConfig,
+  createAgentInferenceViews,
   createAgents,
   getAgentConfigs,
   getAgentConfigsFromDefinitions,
@@ -741,13 +742,13 @@ describe('orchestrator agent', () => {
   });
 
   test('orchestrator is allowed to invoke task-control tools', () => {
-    const agents = createAgents(runtimeFor());
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const permission = (
       orchestrator as { config: { permission: Record<string, unknown> } }
     ).config.permission;
 
-    for (const toolName of ['task_cancel', 'task_revive', 'task_status']) {
+    for (const toolName of ['task_cancel', 'task_status']) {
       expect(permission[toolName]).toBe('allow');
     }
   });
@@ -808,15 +809,6 @@ describe('orchestrator agent', () => {
     );
     const fixer = agents.find((agent) => agent.name === 'fixer');
     expect(fixer?.config.permission).toBe('allow');
-  });
-
-  test('orchestrator is allowed to invoke wait_for_user', () => {
-    const agents = createAgents(runtimeFor());
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(
-      (orchestrator as { config: { permission: Record<string, unknown> } })
-        .config.permission.wait_for_user,
-    ).toBe('allow');
   });
 
   test('interview_submit_state is allowed for the primary agent only', () => {
@@ -1231,13 +1223,13 @@ describe('tool permissions', () => {
   });
 
   test('oracle is denied access to task-control tools by default', () => {
-    const agents = createAgents(runtimeFor());
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const oracle = agents.find((a) => a.name === 'oracle');
     const permission = (
       oracle as { config: { permission: Record<string, unknown> } }
     ).config.permission;
 
-    for (const toolName of ['task_cancel', 'task_revive', 'task_status']) {
+    for (const toolName of ['task_cancel', 'task_status']) {
       expect(permission[toolName]).toBe('deny');
     }
   });
@@ -1359,6 +1351,26 @@ describe('tool permissions', () => {
     expect(Object.values(permission)).not.toContain('allow');
   });
 
+  test('observer remains read-only after default permissions are applied', () => {
+    const agents = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'));
+    const observer = agents.find((agent) => agent.name === 'observer');
+    const permission = observer?.config.permission as Record<
+      string,
+      'allow' | 'deny' | Record<string, 'allow' | 'deny'>
+    >;
+    expect(permission['*']).toBe('deny');
+    expect(permission.read).toBe('allow');
+    expect(permission.glob).toBe('allow');
+    expect(permission.grep).toBe('allow');
+    expect(permission.bash).toBe('deny');
+    expect(permission.edit).toBe('deny');
+    expect(permission.write).toBe('deny');
+    expect(permission.apply_patch).toBe('deny');
+    expect(permission.ast_grep_replace).toBe('deny');
+    expect(permission.task).toEqual({ '*': 'deny' });
+    expect(permission.task_report).toBe('deny');
+  });
+
   test('councillor remains read-only after default permissions are applied', () => {
     const agents = createAgents(
       runtimeFor({
@@ -1408,7 +1420,8 @@ describe('generated default permission availability', () => {
 
   test('disabled task controls omit primary allows but keep every deny', () => {
     const agents = createAgents(
-      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }),
+      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }, 'v2'),
+      { hostFlavor: 'v2' },
     );
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(Object.hasOwn(orchestrator, 'task_cancel')).toBe(false);
@@ -1419,14 +1432,14 @@ describe('generated default permission availability', () => {
     expect(oracle.task_reply).toBe('deny');
   });
 
-  test('native lifecycle registers only task_cancel and task_status defaults', () => {
+  test('native lifecycle registers task-control defaults', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { mode: 'native' } }),
+      runtimeFor({ backgroundJobs: { mode: 'native' } }, 'v2'),
+      { hostFlavor: 'v2' },
     );
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
-    expect(Object.hasOwn(orchestrator, 'task_reply')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'task_revive')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'wait_for_user')).toBe(false);
   });
@@ -1478,20 +1491,6 @@ describe('generated default permission availability', () => {
       reply: false,
       report: false,
     },
-    {
-      hostFlavor: 'v1',
-      mode: 'native',
-      disabled: [],
-      reply: false,
-      report: false,
-    },
-    {
-      hostFlavor: 'v1',
-      mode: 'managed',
-      disabled: [],
-      reply: true,
-      report: false,
-    },
   ] as const)(
     '$hostFlavor $mode reply/report grants follow actual tool availability ($disabled)',
     ({ hostFlavor, mode, disabled, reply, report }) => {
@@ -1514,7 +1513,7 @@ describe('generated default permission availability', () => {
       for (const name of ['explorer', 'reviewer']) {
         expect(permissionsOf(agents, name).task_reply).toBe('deny');
         expect(permissionsOf(agents, name).task_report).toBe(
-          report || hostFlavor === 'v1' ? 'allow' : 'deny',
+          report ? 'allow' : 'deny',
         );
       }
     },
@@ -1640,14 +1639,13 @@ describe('generated default permission availability', () => {
   });
 
   test('enabled generations keep the role permission stance', () => {
-    const agents = createAgents(runtimeFor({ disabled_agents: [] }));
+    const agents = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
+      hostFlavor: 'v2',
+    });
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_reply).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
-    expect(orchestrator.task_revive).toBe('allow');
-    expect(orchestrator.task_message).toBe('allow');
-    expect(orchestrator.wait_for_user).toBe('allow');
     expect(orchestrator.interview_submit_state).toBe('allow');
     expect(orchestrator.marketplace_inspect).toBe('allow');
     expect(permissionsOf(agents, 'explorer').question).toBe('deny');
@@ -2365,6 +2363,94 @@ describe('getAgentConfigs', () => {
   });
 });
 
+describe('dynamic councillor shared overrides', () => {
+  const seats = {
+    default_preset: 'default',
+    presets: {
+      default: {
+        alpha: { model: 'test/alpha' },
+        beta: { model: 'test/beta' },
+      },
+    },
+  };
+
+  test('shared temperature/options do not replace per-seat models or variants', () => {
+    const runtime = runtimeFor({
+      council: CouncilConfigSchema.parse(seats),
+      agents: {
+        councillor: {
+          model: 'shared/model',
+          variant: 'shared-variant',
+          temperature: 0.3,
+          options: { textVerbosity: 'low' },
+        },
+      },
+    });
+    const configs = getAgentConfigs(runtime);
+    for (const [seat, model] of [
+      ['alpha', 'test/alpha'],
+      ['beta', 'test/beta'],
+    ] as const) {
+      const config = configs[`councillor-${seat}`];
+      expect(config.model).toBe(model);
+      expect(config.variant).toBeUndefined();
+      expect(config.temperature).toBe(0.3);
+      expect(config.options).toEqual({ textVerbosity: 'low' });
+    }
+  });
+
+  test('inference views carry the shared settings without seat prompts', () => {
+    const runtime = runtimeFor({
+      council: CouncilConfigSchema.parse(seats),
+      agents: {
+        councillor: {
+          temperature: 0.4,
+          options: { reasoningEffort: 'medium' },
+        },
+      },
+    });
+    const views = createAgentInferenceViews(runtime);
+    for (const [seat, model] of [
+      ['alpha', 'test/alpha'],
+      ['beta', 'test/beta'],
+    ] as const) {
+      const view = views.find(({ name }) => name === `councillor-${seat}`);
+      expect(view?.config.model).toBe(model);
+      expect(view?.config.temperature).toBe(0.4);
+      expect(view?.config.options).toEqual({ reasoningEffort: 'medium' });
+      expect(view?.config.prompt).toBeUndefined();
+    }
+  });
+
+  test('shared skills grant seat skills without widening read-only or task roles', () => {
+    const configs = getAgentConfigs(
+      runtimeFor({
+        council: CouncilConfigSchema.parse(seats),
+        agents: {
+          councillor: {
+            skills: ['simplify'],
+            permission: {
+              edit: 'allow',
+              task: { '*': 'allow', explorer: 'allow' },
+            },
+          },
+        },
+      }),
+    );
+    const permission = configs['councillor-alpha'].permission as Record<
+      string,
+      unknown
+    >;
+    expect(permission.skill).toMatchObject({ simplify: 'allow' });
+    expect(permission.read).toBe('allow');
+    expect(permission.edit).toBe('deny');
+    expect(permission.write).toBe('deny');
+    expect(permission.bash).toBe('deny');
+    expect(permission.task).toBe('deny');
+    expect(permission.glob).toBe('allow');
+  });
+});
+
 describe('AgentOverrideConfigSchema color validation', () => {
   test('accepts OpenCode theme colors and six-digit hex colors', () => {
     for (const color of [
@@ -2411,10 +2497,8 @@ describe('council compaction exception', () => {
     expect(prompt).toContain(
       'if the host asks you to produce a session checkpoint or compaction summary in a specific template',
     );
-    // The override keeps the format marker, so single-track reinforcement
-    // appends nothing (no pointer, no fallback) on top of it.
-    expect(prompt).not.toContain('You MUST follow the Synthesis Process');
-    expect(prompt).not.toContain('You MUST produce: ## Council Response');
+    expect(prompt?.split('## Council Response')).toHaveLength(2);
+    expect(prompt).not.toContain('## Per-Councillor Details');
   });
 
   test('council prompt override without a format marker gets the fallback in createAgents', () => {
@@ -2432,7 +2516,8 @@ describe('council compaction exception', () => {
     expect(prompt).toContain('Custom council prompt with no format rules.');
     // The fallback reinforcement restores the required report structure the
     // override dropped — applied to the FINAL effective prompt.
-    expect(prompt).toContain('You MUST produce: ## Council Response');
+    expect(prompt).toContain('## Council Response');
+    expect(prompt).toContain('## Per-Councillor Details');
     expect(prompt).toContain('## Council Summary');
     expect(prompt).toContain(
       'if the host asks you to produce a session checkpoint or compaction summary in a specific template',
@@ -2835,7 +2920,7 @@ describe('PluginConfigSchema custom-agent-only prompt fields', () => {
   test('accepts backgroundJobs config', () => {
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: {
-        maxSessionsPerAgent: 2,
+        mode: 'native',
       },
     });
 
@@ -3099,21 +3184,6 @@ describe('createAgents with malformed disabled_tools', () => {
     };
     expect(() => createAgents(runtimeFor(config))).not.toThrow();
   });
-
-  test('orchestrator keeps wait_for_user available when disabled_tools is malformed', () => {
-    const config: PluginConfig = {
-      disabled_tools: 'not-an-array' as any,
-    };
-    const agents = createAgents(runtimeFor(config));
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(orchestrator).toBeDefined();
-    // A malformed list is treated as empty: the managed v1 lifecycle
-    // registers wait_for_user, so the primary default stays available.
-    expect(
-      (orchestrator as { config: { permission: Record<string, unknown> } })
-        .config.permission.wait_for_user,
-    ).toBe('allow');
-  });
 });
 
 describe('observer dispatch instruction injection', () => {
@@ -3123,7 +3193,7 @@ describe('observer dispatch instruction injection', () => {
       agents: { reviewer: { model: 'openai/gpt-5.5' } },
       council: councilConfig(),
     };
-    const agents = createAgents(runtimeFor(config), { hostFlavor: 'v2' });
+    const agents = createAgents(runtimeFor(config, 'v2'), { hostFlavor: 'v2' });
     for (const name of [
       'oracle',
       'explorer',
@@ -3139,41 +3209,26 @@ describe('observer dispatch instruction injection', () => {
       (agent) => agent.name === 'councillor-alpha',
     );
     expect(councillor?.config.permission).toMatchObject({ task: 'deny' });
-    const v1 = createAgents(runtimeFor(config), { hostFlavor: 'v1' });
-    const v1Permission = v1.find((agent) => agent.name === 'oracle')?.config
-      .permission;
-    expect(v1Permission).toBeDefined();
-    expect(v1Permission).not.toHaveProperty('task');
   });
 
-  test('advisory prompts gain the dispatch line only on v2 with observer enabled', () => {
-    const enabled = createAgents(runtimeFor({ disabled_agents: [] }), {
+  test('advisory prompts gain the dispatch line with observer enabled', () => {
+    const guidance =
+      "Read visual files directly when you can. If you can't view one or need help, send @observer the path and goal.";
+    const enabled = createAgents(runtimeFor({ disabled_agents: [] }, 'v2'), {
       hostFlavor: 'v2',
     });
     const oracleOn = enabled.find((a) => a.name === 'oracle');
-    expect(oracleOn?.config.prompt).toContain(
-      'dispatch @observer with the file path',
-    );
-
-    // v1 never gains the line, even with observer enabled: the host has no
-    // depth limit and children keep their pre-PR toolsets.
-    const v1 = createAgents(runtimeFor({ disabled_agents: [] }));
-    const oracleV1 = v1.find((a) => a.name === 'oracle');
-    expect(oracleV1?.config.prompt).not.toContain(
-      'dispatch @observer with the file path',
-    );
+    expect(oracleOn?.config.prompt).toContain(guidance);
 
     const disabledSet = createAgents(
-      runtimeFor({ disabled_agents: ['observer'] }),
+      runtimeFor({ disabled_agents: ['observer'] }, 'v2'),
       { hostFlavor: 'v2' },
     );
     const oracleOff = disabledSet.find((a) => a.name === 'oracle');
-    expect(oracleOff?.config.prompt).not.toContain(
-      'dispatch @observer with the file path',
-    );
+    expect(oracleOff?.config.prompt).not.toContain(guidance);
     // Non-advisory roles never gain the line.
-    const fixer = disabledSet.find((a) => a.name === 'fixer');
-    expect(fixer?.config.prompt).not.toContain('dispatch @observer');
+    const fixer = enabled.find((a) => a.name === 'fixer');
+    expect(fixer?.config.prompt).not.toContain(guidance);
   });
 });
 

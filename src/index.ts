@@ -43,27 +43,19 @@ import {
 import type { createAbsolutePathRescueHook } from './hooks/absolute-path-rescue';
 import type { createApplyPatchHook } from './hooks/apply-patch';
 import type { createCacheMonitorHook } from './hooks/cache-monitor';
-import { stripTaggedContents } from './hooks/cache-safe-injection';
 import type { createChatHeadersHook } from './hooks/chat-headers';
 import { isCommandEnabled } from './hooks/command-hook-utils';
-import {
-  COUNCIL_INJECT_METADATA_KEY,
-  createCouncilInjectHook,
-} from './hooks/council-inject';
+import { createCouncilInjectHook } from './hooks/council-inject';
 import type { createCouncilSeatHook } from './hooks/council-seats';
 import type { createDeepworkCommandHook } from './hooks/deepwork';
 import {
   createDeepworkGoalHook,
   createDeepworkHeadGate,
-  GOAL_POINTER_METADATA_KEY,
 } from './hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from './hooks/foreground-fallback';
 import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { createMessageTransformView } from './hooks/message-transform-view';
-import {
-  createPhaseReminderHook,
-  PHASE_REMINDER_METADATA_KEY,
-} from './hooks/phase-reminder';
+import { createPhaseReminderHook } from './hooks/phase-reminder';
 import type { createReflectCommandHook } from './hooks/reflect';
 import type { createSearchPathGuardHook } from './hooks/search-path-guard';
 import { SessionLifecycle } from './hooks/session-lifecycle';
@@ -74,10 +66,7 @@ import type { createInterviewService } from './interview/service';
 import { retryMarketplaceLeases } from './marketplace/lease';
 import type { MarketplaceRegistryImplementation } from './marketplace/registry-runtime';
 import type { MarketplaceService } from './marketplace/service';
-import {
-  missingMarketplaceSkills,
-  skillIdsFromResponse,
-} from './marketplace/skills';
+import { missingMarketplaceSkills } from './marketplace/skills';
 import { resolveDesiredMarketplacePackageIds } from './marketplace/status';
 import { createBuiltinMcps, getOverriddenBuiltinMcpKeys } from './mcp';
 import type { createAcpRunTool } from './tools/acp-run';
@@ -109,7 +98,6 @@ import {
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
-import { probeJSDOM } from './utils/jsdom';
 import { initLogger, log } from './utils/logger';
 import {
   type ModelImageCapabilityCache,
@@ -131,9 +119,7 @@ import {
 import type { SessionTeamBundle } from './v2/session-presets';
 
 /**
- * Best-effort log to opencode's app logger.
- * Wrapped in try/catch to avoid deadlocking on opencode v1.4.8–v1.4.9
- * where client.app.log() during init triggers a middleware cycle.
+ * Best-effort log to opencode's app logger; logging errors are ignored.
  */
 async function appLog(
   ctx: Parameters<Plugin>[0],
@@ -177,6 +163,7 @@ function buildChainGeneration(
   candidates:
     | Readonly<Record<string, readonly { id: string; variant?: string }[]>>
     | undefined,
+  registered: ResolvedAgentRegistry['managedAgentConfig'] | undefined,
 ): Record<string, ModelChainEntry[]> {
   const copyEntries = (
     entries: readonly { id: string; variant?: string }[],
@@ -198,6 +185,13 @@ function buildChainGeneration(
     for (const [name, entries] of Object.entries(candidates)) {
       if (table[name] || known.has(name) || entries.length <= 1) continue;
       table[name] = copyEntries(entries);
+    }
+  }
+  // Configuration aliases and agents from unregistered presets do not own
+  // host execution identities.
+  if (registered) {
+    for (const name of Object.keys(table)) {
+      if (!Object.hasOwn(registered, name)) delete table[name];
     }
   }
   return table;
@@ -313,6 +307,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     (!!agent && resolveRuntimeAgentName(runtime, agent) === 'orchestrator');
   let agents: ReturnType<typeof getAgentConfigsFromDefinitions>;
   let resolvedAgentRegistry: ResolvedAgentRegistry | undefined;
+  const resolveObservedAgentName = (agent: string): string => {
+    const name = normalizeAgentName(agent);
+    const registry = resolvedAgentRegistry;
+    return (
+      registry?.agentNames.find(
+        (canonical) =>
+          canonical === name || registry.identities[canonical] === name,
+      ) ?? name
+    );
+  };
   let latestHostSnapshot: RegistryHostSnapshot | undefined;
   let hostSnapshotProvenance: 'unknown' | 'clean' = 'unknown';
   let latestNativePermissionsByAgent: Readonly<
@@ -339,7 +343,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
     },
   });
-  const compactingSessionIds = new Set<string>();
   const ownedTuiActivitySessions = new Map<string, string>();
   // Busy/retry arrived before the session's agent was known. chat.message
   // latches the agent and flushes these so the spinner still starts. The
@@ -481,6 +484,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     ownedTuiActivitySessions.clear();
   };
   let sessionLifecycle: SessionLifecycle | undefined;
+  const batchEvent = <T>(operation: () => Promise<T>): Promise<T> =>
+    runtime.sidebarEnabled ? withTuiSnapshotBatch(operation) : operation();
   // Mirror of the runtime fallback switches, hoisted out of the try so the
   // returned hooks object can gate v2-only surfaces (retry registration).
   let fallbackRetryHookEnabled = false;
@@ -508,9 +513,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let jsonErrorRecoveryAfter:
-    | ((i: unknown, o: unknown) => Promise<void>)
-    | undefined;
   let releaseRuntimeConfig: (() => void) | undefined;
   let collapseActiveInterviewHistory:
     | typeof collapseInterviewHistory
@@ -673,7 +675,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       activePresetName,
     );
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
-    const delegation = delegationWording(hostFlavor);
+    const delegation = delegationWording();
     // Slash-command hooks are lifecycle-independent, but disabled commands
     // need neither a handler nor its captured state.
     const commandOptions = {
@@ -710,39 +712,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const { createWebfetchTool } = await import('./tools/smartfetch');
       webfetch = createWebfetchTool(ctx);
     }
-    sessionLifecycle = new SessionLifecycle(log);
-    sessionLifecycle.onSessionDeleted((sessionID) => {
-      compactingSessionIds.delete(sessionID);
-    });
-
-    // Initialize hooks and wrapPostToolHook helper for error isolation
-
-    // Wrap tool.execute.after handlers with per-hook error isolation.
-    // Preserves the old runPostToolHook behavior: one failing hook doesn't
-    // block the rest.
-    const wrapPostToolHook = (
-      name: string,
-      fn: (i: unknown, o: unknown) => Promise<void>,
-    ): ((i: unknown, o: unknown) => Promise<void>) => {
-      return async (i, o) => {
-        try {
-          await fn(i, o);
-        } catch (error) {
-          const meta = i as {
-            tool?: string;
-            sessionID?: string;
-            callID?: string;
-          };
-          log('[plugin] post-tool hook failed open', {
-            hook: name,
-            tool: meta.tool,
-            sessionID: meta.sessionID,
-            callID: meta.callID,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      };
-    };
+    // SessionLifecycle has only fallback cleanup subscribers on this host.
+    if (!runtime.disabledHooks.has('foreground-fallback')) {
+      sessionLifecycle = new SessionLifecycle(log);
+    }
 
     if (!runtime.disabledHooks.has('phase-reminder')) {
       phaseReminder = createPhaseReminderHook();
@@ -812,23 +785,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // aliases this record; see publishChainGeneration.
     foregroundFallbackChains = runtime.modelArrays;
     if (fallbackManagerNeeded) {
-      // The handoff module is consumed only by this manager; load it in the
-      // same breath (parallel, never when the manager is skipped) and only
+      // Load the manager only when the hook is available.
       const fallbackModule = await import('./hooks/foreground-fallback');
       foregroundFallback = new fallbackModule.ForegroundFallbackManager({
         chains: foregroundFallbackChains,
-        enabled: false,
         input: ctx,
+        resolveAgentName: resolveObservedAgentName,
         maxRetries: runtime.fallback.maxRetries,
         coordinator: sessionLifecycle,
-        // A managed background-task session switching models mid-flight must
-        // move its admission accounting (provider/model caps) to the new
-        // model. No-op for unknown/non-task sessions; idempotent per model.
+        // Project confirmed model switches to the live agent state.
         onSessionModelChanged: (sessionID, model, detail) => {
           if (detail?.agentName) {
             projectLiveAgentModel(
               sessionID,
-              resolveRuntimeAgentName(runtime, detail.agentName),
+              resolveObservedAgentName(detail.agentName),
               model,
               detail.variant,
             );
@@ -862,15 +832,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       absolutePathRescue = createAbsolutePathRescueHook(ctx);
     }
 
-    if (!runtime.disabledHooks.has('json-error-recovery')) {
-      const { createJsonErrorRecoveryHook } = await import(
-        './hooks/json-error-recovery/hook'
-      );
-      const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
-      jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
-        jsonErrorRecoveryHook['tool.execute.after'](i as never, o as never),
-      );
-    }
     if (!runtime.disabledHooks.has('tool-loop-guard')) {
       const { createToolLoopGuardHook } = await import(
         './hooks/tool-loop-guard/hook'
@@ -883,12 +844,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // a real council agent exists — no council, no seat machinery.
     // Council-inject stays independently switchable by disabled_hooks above.
     if (agentDefs.some((a) => a.name === 'council')) {
-      const [seatHookModule, native] = await Promise.all([
-        import('./hooks/council-seats'),
-        import('./hooks/council-seats/native'),
-      ]);
-      councilSeatHook = seatHookModule.createCouncilSeatHook({
-        resolveSeats: native.createNativeSeatResolver(ctx),
+      const { createCouncilSeatHook } = await import('./hooks/council-seats');
+      councilSeatHook = createCouncilSeatHook(ctx, {
+        isCouncilAgent: (name) => {
+          const normalized = normalizeAgentName(name);
+          if (normalized === 'council') return true;
+          return resolvedAgentRegistry
+            ? resolvedAgentRegistry.identities.council === normalized
+            : resolveRuntimeAgentName(runtime, normalized) === 'council';
+        },
       });
     }
     if (runtime.interviewEnabled) {
@@ -938,13 +902,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    // v2 hosts skip wait_for_user: the native `question` tool covers the
-    // blocking boundary there. task_revive remains a v1-only recovery tool;
-    // v2 resumes retained sessions through native subagent(sessionID, prompt).
-    // v1 registration is unchanged; the generic disabled_tools filter below
-    // still removes either tool when listed. The interview tool follows the
-    // interviewEnabled master switch, disabled_commands and disabled_tools; a
-    // tool-level off skips the implementation import below.
+    // The interview tool follows the master switch, disabled_commands and
+    // disabled_tools; a tool-level off skips the implementation import.
     const shouldRegisterInterview =
       runtime.interviewEnabled &&
       !runtime.disabledCommands.has('interview') &&
@@ -1009,22 +968,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     throw err;
   }
 
-  // ── Probe jsdom (async, non-blocking) ───────────────────────────────
-  // Don't await this; we don't want to block init. The warning will
-  // appear shortly after startup if jsdom is broken. Skipped entirely when
-  // the enhanced webfetch is unavailable (config switch or disabled_tools):
-  // a disabled feature must not pay for the JSDOM load (the probe is the only
-  // startup importer of jsdom).
-  if (webfetch) {
-    probeJSDOM().then((err) => {
-      if (err) {
-        const msg = `jsdom probe failed; webfetch tool will not work: ${err}`;
-        log(`[plugin] WARN: ${msg}`);
-        appLog(ctx, 'warn', msg).catch(() => {});
-      }
-    });
-  }
-
   if (companionManager) {
     if (runtime.companion?.binaryPath?.trim()) {
       companionManager.onLoad();
@@ -1065,62 +1008,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     );
   }
 
-  function resolveTuiVariantForModel(
-    agentName: string,
-    model: string,
-  ): string | undefined {
-    const configEntry = runtime.agents()[agentName];
-    const defaultVariant =
-      typeof configEntry?.variant === 'string'
-        ? configEntry.variant
-        : undefined;
-    // Sidebar is a current-generation surface: variants come from the
-    // published chain table, so refreshed models resolve their variants too.
-    const chain = foregroundFallbackChains[agentName];
-    if (chain) {
-      const match = chain.find((entry) => entry.id === model);
-      return (
-        match?.variant ?? (chain[0]?.id === model ? defaultVariant : undefined)
-      );
-    }
-
-    if (
-      typeof configEntry?.model === 'string' &&
-      configEntry.model === model &&
-      defaultVariant
-    ) {
-      return defaultVariant;
-    }
-
-    return undefined;
-  }
-
   let registryBridge: RegistryFactoryBridge;
   // Marketplace kill switch (P2): when disabled, no service, no store, no
   // management tools, and no marketplace activation surface. Selected
   // package IDs are ignored. This is distinct from an empty per-preset
   // activation list, which keeps the service running with nothing selected.
   const marketplaceEnabled = runtime.marketplaceEnabled;
-  let marketplaceSkillReader = async (): Promise<readonly string[]> =>
-    skillIdsFromResponse(
-      // The v1 SDK omits /skill, but its transport preserves host auth and in-process routing.
-      await (
-        ctx.client as unknown as {
-          _client: {
-            get(input: {
-              url: string;
-              query: { directory: string };
-              throwOnError: true;
-            }): Promise<unknown>;
-          };
-        }
-      )._client.get({
-        url: '/skill',
-        query: { directory: ctx.directory },
-        throwOnError: true,
-      }),
-      'name',
-    );
+  let marketplaceSkillReader = async (): Promise<readonly string[]> => {
+    throw new Error('Native skill inventory unavailable');
+  };
   const readMarketplaceSkillIds = async (): Promise<readonly string[]> => {
     try {
       return await withTimeout(
@@ -1333,6 +1229,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             runtime,
             agentDefs,
             resolvedAgentRegistry.modelCandidates,
+            resolvedAgentRegistry.managedAgentConfig,
           ),
           runtime,
           (name) => runtime.hasModelSwitched(name),
@@ -1399,7 +1296,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const toolThreshold = minimumExpectedToolCount(
     runtime.disabledTools,
     Boolean(webfetch),
-    hostFlavor,
     runtime.backgroundJobsMode,
   );
   if (
@@ -1436,8 +1332,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
    * This is deliberately NOT a global agent reload: the session-frozen
    * surfaces (agent definitions, prompts, tools, permissions, skills, MCPs)
    * are never rebuilt and the host agent registry is never reloaded. The
-   * running generation state (`config`, `runtime`, `agentDefs`, `agents`,
-   * `finalHostAgentConfig`) is untouched — a throwaway `RuntimeConfig.createDetached`
+   * running generation state (`config`, `runtime`, `agentDefs`, `agents`) is
+   * untouched — a throwaway `RuntimeConfig.createDetached`
    * view resolves the fresh file against the captured host layer. On success
    * the refresh republishes the complete next chain generation (config +
    * marketplace-merged, see buildChainGeneration) beside the sidebar write,
@@ -1535,14 +1431,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
       // Keep the finalized roster (including marketplace agents), but resolve
       // only inference overrides. No package/resource activation occurs here.
+      const registered = resolvedAgentRegistry?.managedAgentConfig;
       const marketplaceInheritance: SessionTeamBundle['inheritance'] = {};
-      for (const [name, registered] of Object.entries(
-        resolvedAgentRegistry?.getSdkAgentProjection() ?? {},
-      )) {
+      for (const [name, registeredConfig] of Object.entries(registered ?? {})) {
         const manifestBase =
           resolvedAgentRegistry?.marketplaceInferenceBase[name];
         if (Object.hasOwn(freshAgents, name) && !manifestBase) continue;
-        const base = (manifestBase ?? registered) as Record<string, unknown>;
+        const base = (manifestBase ?? registeredConfig) as Record<
+          string,
+          unknown
+        >;
         const override = freshRuntime.agent(name);
         const inference: Record<string, unknown> = {};
         for (const field of [
@@ -1643,14 +1541,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         freshRuntime,
         freshAgentViews,
         freshCandidates,
+        registered,
       );
       const inheritance: SessionTeamBundle['inheritance'] = {};
-      const registered = resolvedAgentRegistry?.getSdkAgentProjection();
       for (const name of Object.keys(profiles)) {
         // Runtime presets cannot register new agents or expand resource policy.
         if (registered && !Object.hasOwn(registered, name)) {
           delete profiles[name];
-          delete chains[name];
           continue;
         }
         const effective = freshRuntime.agent(name);
@@ -1676,6 +1573,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       for (const [identity, canonical] of Object.entries(
         resolvedAgentRegistry?.identities ?? {},
       )) {
+        if (registered && !Object.hasOwn(registered, identity)) continue;
         if (profiles[canonical]) profiles[identity] = profiles[canonical];
         if (chains[canonical]) chains[identity] = chains[canonical];
         if (inheritance[canonical])
@@ -1798,7 +1696,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     name: 'oh-my-opencode-slim',
     // v2-only extension hook: re-read the plugin config and resolve the
     // inference/runtime profiles for new child sessions + the sidebar.
-    // Unknown to v1 hosts, consumed by src/v2/setup.ts.
+    // Consumed by src/v2/setup.ts.
     'v2.refreshProfiles': refreshProfilesFromDisk,
     'v2.resolveDelegatedModel': resolveV2DelegatedModel,
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => {
@@ -1806,6 +1704,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
     'v2.pendingRefusalOutcome':
       foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
+    'v2.refusalRecovery':
+      foregroundFallback?.refusalRecovery.bind(foregroundFallback),
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -1817,16 +1717,26 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       chains?: SessionTeamBundle['chains'],
       enabled?: boolean,
     ) => {
-      foregroundFallback?.pinSessionChains(sessionID, chains, enabled);
+      const registered = resolvedAgentRegistry?.managedAgentConfig;
+      foregroundFallback?.pinSessionChains(
+        sessionID,
+        chains && registered
+          ? Object.fromEntries(
+              Object.entries(chains).filter(([name]) =>
+                Object.hasOwn(registered, name),
+              ),
+            )
+          : chains,
+        enabled,
+      );
     },
     // v2-only extension hook: release the pin when the admission that
     // captured it fails, so the retry pins the generation current then.
     'v2.releaseSessionChains': (sessionID: string) => {
       foregroundFallback?.releaseSessionChains(sessionID);
     },
-    // v2 owns its own interview bridge/service; point the submit tool and
-    // text-complete fallback at it so `/interview` state lands in the same
-    // service that captured the session transcript.
+    // Point the submit tool at the v2 interview bridge's service, which
+    // captures the session transcript.
     'v2.setInterviewService': (
       service: ReturnType<typeof createInterviewService>,
     ) => {
@@ -1915,15 +1825,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // that is exactly our injected shape is re-asserted, so a host that
       // hands the mutated object back can't out-stare a later user edit
       // (same class as the injectedMcps filter below).
-      const mergedAgentConfig = opencodeConfig.agent as Record<string, unknown>;
-      for (const name of BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE) {
-        const existing = mergedAgentConfig[name];
-        if (
-          existing !== undefined &&
-          !Bun.deepEquals(existing, { disable: true })
-        )
-          continue;
-        mergedAgentConfig[name] = { disable: true };
+      if (runtime.featureGates.replaceBuiltinSubagents) {
+        const mergedAgentConfig = opencodeConfig.agent as Record<
+          string,
+          unknown
+        >;
+        for (const name of BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE) {
+          const existing = mergedAgentConfig[name];
+          if (
+            existing !== undefined &&
+            !Bun.deepEquals(existing, { disable: true })
+          )
+            continue;
+          mergedAgentConfig[name] = { disable: true };
+        }
       }
       const currentMcpConfig =
         opencodeConfig.mcp && typeof opencodeConfig.mcp === 'object'
@@ -1941,7 +1856,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
       // User-authored MCP entries own their key (issue #1290): reconcile
       // the live export from the built-in set (not a one-way prune) so a
-      // removed override comes back and v1/v2 registration both see it.
+      // removed override comes back on the next registration.
       // Merge user-wins for opencodeConfig.mcp: built-ins only fill keys
       // the user did not set.
       const effectiveMcps: Record<string, unknown> = structuredClone(
@@ -1972,31 +1887,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
       }
 
-      // This is the source of truth for admission. It is intentionally
-      // captured only after every host/plugin merge, model pass and
-      // permission pass.
-      const finalHostAgentConfig = opencodeConfig.agent as Record<
-        string,
-        unknown
-      >;
-      const compaction = finalHostAgentConfig.compaction as
-        | { model?: unknown }
-        | undefined;
-      foregroundFallback?.setCompactionModelPinned(
-        typeof compaction?.model === 'string' && compaction.model.length > 0,
-      );
-
       registryBridge.prepareCommands(opencodeConfig);
     },
 
     event: (input) =>
-      withTuiSnapshotBatch(async () => {
+      batchEvent(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
           companionStartupAbort?.abort();
           marketplaceLeaseAbort.abort();
         }
-        // V1 token streams have no work in this fan-out.
+        // Text deltas have no work in this fan-out.
         const streamEventType = (input.event as { type?: string } | undefined)
           ?.type;
         if (streamEventType === 'message.part.delta') {
@@ -2044,9 +1945,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // message id in info.id and the session id in info.sessionID. Resolve
         // by session so child activity refreshes the correct stuck timer.
         const eventSessionID = resolveEventSessionID(event);
-        if (event.type === 'message.updated' && event.properties?.info) {
-          foregroundFallback?.observeCompactionMessage(event.properties.info);
-        }
         const rawStatus = event.properties?.status;
         const statusType =
           typeof rawStatus === 'string'
@@ -2129,12 +2027,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             (statusType === 'busy' || statusType === 'retry')
           ) {
             sessionMetadata.markOrchestratorActive(eventSessionID);
-            const agentName = sessionMetadata.getAgent(eventSessionID);
-            if (agentName) {
-              pendingTuiBusySessions.delete(eventSessionID);
-              markTuiAgentActive(eventSessionID, agentName, statusType);
-            } else {
-              pendingTuiBusySessions.set(eventSessionID, statusType);
+            if (runtime.sidebarEnabled || companionManager) {
+              const agentName = sessionMetadata.getAgent(eventSessionID);
+              if (agentName) {
+                pendingTuiBusySessions.delete(eventSessionID);
+                markTuiAgentActive(eventSessionID, agentName, statusType);
+              } else {
+                pendingTuiBusySessions.set(eventSessionID, statusType);
+              }
             }
           } else if (
             event.type === 'session.idle' ||
@@ -2150,75 +2050,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             pendingTuiBusySessions.delete(eventSessionID);
             sessionMetadata.markOrchestratorIdle(eventSessionID);
             markTuiAgentInactive(eventSessionID);
-          }
-        }
-
-        if (event.type === 'message.updated') {
-          const info = event.properties?.info;
-          const providerID =
-            typeof info?.providerID === 'string'
-              ? info.providerID
-              : typeof info?.model?.providerID === 'string'
-                ? info.model.providerID
-                : undefined;
-          const modelID =
-            typeof info?.modelID === 'string'
-              ? info.modelID
-              : typeof info?.model?.modelID === 'string'
-                ? info.model.modelID
-                : undefined;
-          // Track each session's current model so background task admission
-          // can resolve the model a model-less subagent will inherit.
-          if (
-            typeof info?.sessionID === 'string' &&
-            info.summary !== true &&
-            providerID &&
-            modelID
-          ) {
-            const model = `${providerID}/${modelID}`;
-            // Accounting/fallback follows the model actually executing.
-            // External selection tracking does not: a synthetic wake's
-            // message.updated must not poison Plan/Build metadata (#1079).
-            const internalAdmission =
-              (typeof info.id === 'string' &&
-                isInternalAdmission(info.sessionID, info.id)) ||
-              (typeof info.parentID === 'string' &&
-                isInternalAdmission(info.sessionID, info.parentID));
-            if (!internalAdmission) {
-              sessionMetadata.setModel(info.sessionID, model);
-              companionManager?.onSessionModelChanged({
-                sessionId: info.sessionID,
-                model,
-              });
-            }
-          }
-          if (
-            typeof info?.agent === 'string' &&
-            typeof info.sessionID === 'string' &&
-            providerID &&
-            modelID
-          ) {
-            const agentName = resolveRuntimeAgentName(runtime, info.agent);
-            const model = `${providerID}/${modelID}`;
-            const observedVariant = (info as { variant?: unknown }).variant;
-            if (runtime.sidebarEnabled) {
-              recordTuiAgentModel(
-                {
-                  agentName,
-                  model,
-                  ...(typeof observedVariant === 'string'
-                    ? { variant: observedVariant }
-                    : {
-                        fallbackVariant:
-                          resolveTuiVariantForModel(agentName, model) ?? null,
-                      }),
-                  sessionID: info.sessionID,
-                },
-                (info?.sessionID &&
-                  sessionMetadata.getDirectory(info.sessionID)) ??
-                  ctx.directory,
-              );
-            }
           }
         }
 
@@ -2250,10 +2081,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // re-prompt: the re-prompt's busy event commits in its own scope,
         // and a still-staged "inactive" must not land after it (#1697).
         flushTuiSnapshotBatch();
-
-        // Resolve identity before task error bookkeeping, but replay afterwards:
-        // prompt admission may synchronously emit a busy event.
-        await foregroundFallback?.preflightEvent(input.event);
 
         if (event.type === 'server.instance.disposed') {
           clearTuiActivities();
@@ -2374,16 +2201,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? { 'chat.headers': chatHeadersHook['chat.headers'] }
       : {}),
 
-    'chat.params': async () => {
-      if (marketplaceEnabled) await registryBridge.verifyMarketplaceSkills();
-    },
-
-    // v1 compaction requests use the same message transform as normal turns.
-    // v2 handles compaction in its separate session.compaction bridge.
-    'experimental.session.compacting': async ({ sessionID }) => {
-      compactingSessionIds.add(sessionID);
-    },
-
     // Track which agent each session uses (needed for serve-mode prompt
     // injection)
     'chat.message': async (
@@ -2415,13 +2232,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         parts?: unknown[];
       },
     ) => {
-      // A fresh user message proves no compaction transform is coming for a
-      // pending mark (the host runs compacting → transform back to back):
-      // drop it so a stale mark can never strip reminders from an ordinary
-      // turn. Fails safe — worst case the summary keeps the boilerplate,
-      // which is the pre-change behavior.
-      compactingSessionIds.delete(input.sessionID);
-
       // #1079: internal admissions (lifecycle wakes, terminal
       // notifications) must not overwrite the user's tracked selection.
       // Without this filter, a synthetic orchestrator wake flips a
@@ -2439,11 +2249,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           isInternalInitiatorPart(part) ||
           isNativeBackgroundTaskNotification(part),
       );
-      // v1 chat.message sees the internal parts but historically never
-      // recorded the message id, so the later message.updated could not
-      // classify the same admission (#1079 Oracle r2). Record it here
-      // so assistant replies (parentID) and message.updated share the
-      // registry the v2 shim already maintains.
+      // Record internal admissions for the v2 shim's shared registry (#1079).
       if (partsInternal && typeof messageID === 'string') {
         recordInternalAdmission(input.sessionID, messageID);
       }
@@ -2458,16 +2264,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         const model = input.model ?? output?.message?.model;
         foregroundFallback?.noteExternalTurn(
           input.sessionID,
-          // v2 retains its retry budget across external prompts.
-          undefined,
           model ? `${model.providerID}/${model.modelID}` : undefined,
         );
       }
 
       const rawAgent = input.agent ?? output?.message?.agent;
-      const agent = rawAgent
-        ? resolveRuntimeAgentName(runtime, rawAgent)
-        : undefined;
+      const agent = rawAgent ? resolveObservedAgentName(rawAgent) : undefined;
 
       if (
         agent &&
@@ -2477,8 +2279,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         output.message.agent = agent;
       }
 
-      if (agent) {
-        foregroundFallback?.registerSessionAgent(input.sessionID, agent);
+      if (rawAgent && agent) {
+        foregroundFallback?.registerSessionAgent(
+          input.sessionID,
+          normalizeAgentName(rawAgent),
+        );
         if (!internalAdmission) {
           sessionMetadata.setAgent(input.sessionID, agent);
         }
@@ -2557,10 +2362,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       input: { sessionID?: string; agent?: unknown },
       output: { system: string[] },
     ): Promise<void> => {
-      // Request-scoped agent when the host provides one (the v2 context
-      // bridge forwards `event.agent`). v1 hosts only pass sessionID, so
-      // there we fall back to the session's tracked agent — which is the
-      // SESSION agent, not the request agent: auxiliary LLM requests
+      // Prefer the request-scoped agent forwarded by the v2 context bridge.
+      // Otherwise fall back to the tracked SESSION agent: auxiliary LLM requests
       // (title generation, compaction) run in the same session under
       // their own agent and must not receive orchestrator instructions.
       const requestAgent =
@@ -2644,12 +2447,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         collapseActiveInterviewHistory?.(typedOutput.messages);
         view = createMessageTransformView(typedOutput.messages);
       }
-      // Claim the mark synchronously: overlapping requests for this session
-      // must not both strip reminders after their first asynchronous step.
-      const compacting = sessionID
-        ? compactingSessionIds.delete(sessionID)
-        : false;
-
       for (const message of view.userMessages) {
         for (const part of message.parts) {
           if (part.type !== 'text' || typeof part.text !== 'string') {
@@ -2667,11 +2464,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // auto routing keys on the model that will actually serve this
       // request: vision-capable models keep image parts inline (native
       // read); only non-vision chains fall back to the observer relay.
-      // On v2 the context bridge passes the request model as `hints.model`
+      // The context bridge passes the request model as `hints.model`
       // (the host resolves it before the context hook, and a per-request
       // router may swap it) — that beats the session's last-recorded model.
-      // v1 hosts have no such seam, so the fallback chain and session
-      // metadata remain the source there.
       const hintModel = hints?.model
         ? { providerID: hints.model.providerID, id: hints.model.id }
         : undefined;
@@ -2690,7 +2485,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const acceptsImages =
         turnModelRef && hasImageParts
           ? await modelAcceptsImageInput(turnModelRef, {
-              client: ctx.client,
               modelDomain: (
                 ctx as {
                   experimental_v2?: ModelImageCapabilityDeps;
@@ -2756,28 +2550,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           createMessageTransformView(typedOutput.messages),
         );
       }
-      if (compacting) {
-        stripTaggedContents(typedOutput.messages, [
-          PHASE_REMINDER_METADATA_KEY,
-          COUNCIL_INJECT_METADATA_KEY,
-          GOAL_POINTER_METADATA_KEY,
-        ]);
-      }
     },
 
-    'tool.execute.after':
-      jsonErrorRecoveryAfter || toolLoopGuard
-        ? async (input, output) => {
-            await jsonErrorRecoveryAfter?.(input, output);
-            await toolLoopGuard?.['tool.execute.after'](
-              input as never,
-              output as never,
-            );
-          }
-        : undefined,
+    'tool.execute.after': toolLoopGuard
+      ? async (input, output) => {
+          await toolLoopGuard?.['tool.execute.after'](
+            input as never,
+            output as never,
+          );
+        }
+      : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
+      | undefined;
+    'v2.refusalRecovery':
+      | ForegroundFallbackManager['refusalRecovery']
       | undefined;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;

@@ -18,9 +18,7 @@
 import {
   AGENT_ALIASES,
   ALL_AGENT_NAMES,
-  DEFAULT_CHILD_INPUT_WAKE_KINDS,
   DEFAULT_DISABLED_AGENTS,
-  DEFAULT_MAX_SESSIONS_PER_AGENT,
   type ImageRouting,
   PROTECTED_AGENTS,
   resolveImageRouting,
@@ -39,7 +37,6 @@ import { discoverProjectLocalSkillNames } from './project-skills';
 import {
   type AcpAgentsConfig,
   type AgentOverrideConfig,
-  type BackgroundJobsConfig,
   type CompanionConfig,
   type FailoverConfig,
   type MultiplexerConfig,
@@ -80,23 +77,6 @@ const reloadState = new Map<
 
 const DEFAULT_MULTIPLEXER: MultiplexerConfig =
   MultiplexerConfigStrictSchema.parse({});
-
-const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
-  mode: 'managed',
-  maxSessionsPerAgent: DEFAULT_MAX_SESSIONS_PER_AGENT,
-  wallClockTimeoutMs: 0,
-  stopConfirmationMs: 5_000,
-  concurrency: {
-    defaultConcurrency: 0,
-    providerConcurrency: {},
-    modelConcurrency: {},
-  },
-  sameProviderPolicy: {},
-  waitForUserGuard: true,
-  childInputWake: true,
-  childInputWakeKinds: { ...DEFAULT_CHILD_INPUT_WAKE_KINDS },
-  pruneEvictedSessions: false,
-};
 
 const DEFAULT_FALLBACK: FailoverConfig = {
   enabled: true,
@@ -267,7 +247,7 @@ export class RuntimeConfig {
     pluginConfig: ResolvedPluginConfig,
     hostFlavor?: string,
   ): void {
-    const featureGates = resolveFeatureGates(pluginConfig, hostFlavor);
+    const featureGates = resolveFeatureGates(pluginConfig);
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
     this.hostFlavor = hostFlavor;
     this.featureGatesCache = featureGates;
@@ -302,10 +282,7 @@ export class RuntimeConfig {
    * current config generation; unseeded instances expose the defaults.
    */
   get featureGates(): Readonly<FeatureGates> {
-    this.featureGatesCache ??= resolveFeatureGates(
-      this.pluginConfig,
-      this.hostFlavor,
-    );
+    this.featureGatesCache ??= resolveFeatureGates(this.pluginConfig);
     return this.featureGatesCache;
   }
 
@@ -447,30 +424,6 @@ export class RuntimeConfig {
     return this.pluginConfig?.multiplexer ?? DEFAULT_MULTIPLEXER;
   }
 
-  get backgroundJobs(): BackgroundJobsConfig {
-    return {
-      ...this.resolveChildInputWake(
-        this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS,
-      ),
-      mode: this.featureGates.backgroundJobsMode,
-    };
-  }
-
-  private resolveChildInputWake(
-    backgroundJobs: BackgroundJobsConfig,
-  ): BackgroundJobsConfig {
-    if (backgroundJobs.childInputWake !== false) return backgroundJobs;
-    // #1504: master switch off silences every kind. The scheduler's per-kind
-    // gate stays the only runtime gate; the stored config stays raw.
-    return {
-      ...backgroundJobs,
-      childInputWakeKinds: {
-        permission: false,
-        question: false,
-      },
-    };
-  }
-
   get fallback(): FailoverConfig {
     return this.pluginConfig?.fallback ?? DEFAULT_FALLBACK;
   }
@@ -521,9 +474,7 @@ export class RuntimeConfig {
   }
 
   /**
-   * Update checker switch: enabled unless `autoUpdate: false` or the
-   * `auto-update-checker` hook is disabled. Both are independent off
-   * switches for the same update hook.
+   * Update checker switch: enabled unless `autoUpdate: false` is set.
    */
   get updateCheckerEnabled(): boolean {
     return this.featureGates.updateChecker;
@@ -538,11 +489,6 @@ export class RuntimeConfig {
    */
   get backgroundJobsMode(): FeatureGates['backgroundJobsMode'] {
     return this.featureGates.backgroundJobsMode;
-  }
-
-  /** True only for the managed lifecycle (`mode: "managed"`). */
-  get backgroundJobsEnabled(): boolean {
-    return this.featureGates.managedJobs;
   }
 
   get interviewEnabled(): boolean {

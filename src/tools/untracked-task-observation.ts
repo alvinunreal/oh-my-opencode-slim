@@ -1,10 +1,11 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   attributeHostRoundToTranscript,
+  type CurrentRoundClassification,
   classifyMigratedV1Round,
-  classifyTerminalEvidence,
   fetchChildTranscript,
   latestInputAtOf,
+  terminalErrorOf,
   terminalTextOf,
 } from '../utils/child-transcript';
 import { isRecord } from '../utils/guards';
@@ -12,26 +13,20 @@ import { getClient } from '../utils/opencode-client';
 import { SESSION_ID_PATTERN, withTimeout } from '../utils/session';
 import {
   composeHostRound,
-  getRuntimeSessionStatusSnapshot,
   hostRoundStateOf,
+  hostRunningSince,
+  isHostTimestamp,
 } from '../utils/session-runtime-status';
 
 /** Each untracked host read (ownership, transcript) refuses after 5 s. */
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 
-/** v1 live probe + transcript classification for an untracked task.
- *  `live.status` is `v2` on hosts with no status map; `round` is absent
- *  when a live verdict short-circuits the read or it failed (`roundError`
- *  carries the raw error for callers that rethrow). */
+/** Host execution or transcript evidence for an untracked task. */
 export interface UntrackedEvidence {
-  live: {
-    status: 'busy' | 'retry' | 'unknown' | 'absent' | 'v2';
-    reason?: string;
-  };
-  round?:
-    | Awaited<ReturnType<typeof classifyTerminalEvidence>>
-    | ReturnType<typeof composeHostRound>;
+  running?: { since: number };
+  round?: CurrentRoundClassification;
   roundError?: unknown;
+  error?: string;
   source?: 'history';
 }
 
@@ -102,45 +97,20 @@ export async function verifyUntrackedOwnership(
   };
 }
 
-/** A live verdict short-circuits the transcript (unreadable liveness cannot
- *  rule out a newer run, so history proves nothing); v2 skips the probe. */
+/** An open host execution short-circuits the transcript. */
 export async function readUntrackedEvidence(
   options: {
     input: PluginInput;
     readTimeoutMs?: number;
-    statusTimeoutMs?: number;
   },
   identity: string,
   hostInfo?: Record<string, unknown>,
 ): Promise<UntrackedEvidence> {
   const readTimeoutMs = options.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
+  const since = hostRunningSince(hostInfo);
+  if (since !== undefined) return { running: { since } };
   const client = getClient(options.input);
-  const v2 = (options.input as { hostFlavor?: string }).hostFlavor === 'v2';
-  if (v2)
-    return readTranscript(
-      client,
-      options,
-      identity,
-      readTimeoutMs,
-      true,
-      hostInfo,
-    );
-  const snapshot = await getRuntimeSessionStatusSnapshot(options.input, {
-    timeoutMs: options.statusTimeoutMs,
-  });
-  if (snapshot.error || snapshot.malformedSessionIDs.has(identity)) {
-    return {
-      live: {
-        status: 'unknown',
-        reason: snapshot.error ?? 'malformed session-status entry',
-      },
-    };
-  }
-  const status = snapshot.statuses.get(identity);
-  if (status === 'busy' || status === 'retry') {
-    return { live: { status } };
-  }
-  return readTranscript(client, options, identity, readTimeoutMs, false);
+  return readTranscript(client, options, identity, readTimeoutMs, hostInfo);
 }
 
 async function readTranscript(
@@ -148,10 +118,8 @@ async function readTranscript(
   options: { input: PluginInput },
   identity: string,
   readTimeoutMs: number,
-  v2: boolean,
   hostInfo?: Record<string, unknown>,
 ): Promise<UntrackedEvidence> {
-  const live: UntrackedEvidence['live'] = { status: v2 ? 'v2' : 'absent' };
   try {
     const transcript = await boundedRead(
       (signal) =>
@@ -165,9 +133,6 @@ async function readTranscript(
       readTimeoutMs,
       'child transcript read timed out',
     );
-    if (!v2) {
-      return { live, round: classifyTerminalEvidence(transcript) };
-    }
     const state = attributeHostRoundToTranscript(
       hostRoundStateOf(hostInfo),
       transcript,
@@ -179,21 +144,27 @@ async function readTranscript(
       hostTime?.idle === undefined
     ) {
       const migrated = classifyMigratedV1Round(transcript);
-      if (migrated) return { live, round: migrated, source: 'history' };
+      if (migrated) return { round: migrated, source: 'history' };
     }
     const latestInputAt = latestInputAtOf(transcript);
-    const round = composeHostRound(state, latestInputAt);
+    const busy = hostTime?.busy;
+    const busyAt = isHostTimestamp(busy) ? busy : undefined;
+    const round = composeHostRound(state, latestInputAt, busyAt);
     if (state.kind === 'terminal') {
       const text = terminalTextOf(transcript);
       if (text) round.text = text;
       else if (state.outcome === 'succeeded')
         return {
-          live,
           round: { verdict: 'incomplete', startedAt: latestInputAt },
         };
     }
-    return { live, round };
+    return {
+      round,
+      ...(state.kind === 'terminal' && state.outcome === 'failed'
+        ? { error: terminalErrorOf(transcript) }
+        : {}),
+    };
   } catch (error) {
-    return { live, roundError: error };
+    return { roundError: error };
   }
 }

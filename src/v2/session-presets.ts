@@ -84,7 +84,7 @@ export type SessionPresetState = {
 };
 /** Per-call execution intent is separate from the inherited team bundle. */
 export type SessionTeamAdmission = {
-  /** Null is an explicit compatibility admission, never a missing capture. */
+  /** Null explicitly leaves execution to the host, never a missing capture. */
   bundle: SessionTeamBundle | null;
   explicitModel: boolean;
   inheritedProviderID?: string;
@@ -250,26 +250,67 @@ export function createSessionPresets(options: {
     check(signal);
     return record;
   }
+  /** Host identity read for one session id, unwrapping the `{data}` envelope.
+   * The cast mirrors the previous inline read: a missing envelope still
+   * yields a falsy value at runtime, caught by the `!info` guard below. */
+  async function readSession(id: string) {
+    const session = options.session;
+    if (!session || typeof session.get !== 'function') {
+      throw new Error('Session preset identity unavailable');
+    }
+    const response = await session.get({ sessionID: id });
+    check();
+    const value = response as Record<string, unknown>;
+    return (value?.data ?? value) as Record<string, unknown>;
+  }
+  /** Best-effort parent identity read for the session_move fallback:
+   * any failure proves nothing, so it reports absence and the caller
+   * keeps the strict rejection. */
+  async function readSessionQuiet(id: string) {
+    try {
+      return await readSession(id);
+    } catch {
+      return undefined;
+    }
+  }
+  /** Strict directory guard: the session id matches and its reported
+   * directory is the plugin's startup directory. */
+  function inPluginDirectory(
+    info: Record<string, unknown> | undefined,
+    id: string,
+  ): boolean {
+    if (!info || info.id !== id) return false;
+    const location = info.location as { directory?: string } | undefined;
+    const directory = location?.directory ?? info.directory;
+    return (
+      typeof directory === 'string' &&
+      path.resolve(directory) === path.resolve(options.directory)
+    );
+  }
   async function identity(id: string) {
     check();
     if (!id || typeof options.session?.get !== 'function') {
       throw new Error('Session preset identity unavailable');
     }
-    const response = await options.session.get({ sessionID: id });
-    check();
-    const value = response as Record<string, unknown>;
-    const info = (value?.data ?? value) as Record<string, unknown>;
+    const info = await readSession(id);
+    if (inPluginDirectory(info, id)) return info;
+    // #1915: a child that moved itself after creation (session_move)
+    // reports a directory outside the plugin's startup directory. Its
+    // parent still lives there, so prove provenance through the parent
+    // instead of rejecting a live child of this project. A session with
+    // no reported directory, no parent, or an unprovable parent keeps
+    // the strict rejection below.
     const location = info?.location as { directory?: string } | undefined;
     const directory = location?.directory ?? info?.directory;
-    if (
-      !info ||
-      info.id !== id ||
-      typeof directory !== 'string' ||
-      path.resolve(directory) !== path.resolve(options.directory)
-    ) {
-      throw new Error('Session preset session/location mismatch');
+    const parentID =
+      typeof info?.parentID === 'string' ? info.parentID : undefined;
+    if (info?.id === id && typeof directory === 'string' && parentID) {
+      const parent = await readSessionQuiet(parentID);
+      if (parent?.id === parentID && inPluginDirectory(parent, parentID)) {
+        return info;
+      }
     }
-    return info;
+    throw new Error('Session preset session/location mismatch');
   }
   async function ensureTransaction(
     id: string,
@@ -608,6 +649,7 @@ export function wrapSessionPresetSubagent(options: {
     const admission = await options.capture(context.id, context.sessionID);
     const { bundle } = admission;
     options.presets.checkActive(context.signal);
+    if (!bundle) return options.execute(input, rawContext);
     const args = input as Record<string, unknown>;
     const existingID =
       typeof args.sessionID === 'string' ? args.sessionID : undefined;
@@ -619,11 +661,10 @@ export function wrapSessionPresetSubagent(options: {
       : undefined;
     const agent = previous?.identity.agent;
     const sameAgent = Boolean(
-      agent && agent === args.agent && bundle?.profiles[agent],
+      agent && agent === args.agent && bundle.profiles[agent],
     );
     const changed = Boolean(
-      bundle &&
-        previous?.record?.parentID === context.sessionID &&
+      previous?.record?.parentID === context.sessionID &&
         sameAgent &&
         agent &&
         bundle.profiles[agent] &&
@@ -667,7 +708,7 @@ export function wrapSessionPresetSubagent(options: {
                   existingID,
                   context.signal,
                 );
-                if (changed && bundle && current?.record && !adopted) {
+                if (changed && current?.record && !adopted) {
                   if (
                     current.identity.parentID !== context.sessionID ||
                     current.identity.agent !== previous?.identity.agent
@@ -696,7 +737,7 @@ export function wrapSessionPresetSubagent(options: {
                     adopted,
                   );
                 }
-              } else if (bundle) {
+              } else {
                 await options.presets.bindChild(
                   update.sessionID,
                   context.sessionID,

@@ -15,16 +15,18 @@ describe('modelAcceptsImageInput', () => {
         list: async () => ({
           data: [
             {
+              id: 'vision',
+              modelID: 'vision-api',
               providerID: 'p',
-              modelID: 'vision',
               capabilities: { input: ['text', 'image'] },
             },
             {
+              id: 'text-only',
+              modelID: 'text-only-api',
               providerID: 'p',
-              modelID: 'text-only',
               capabilities: { input: ['text'] },
             },
-            { providerID: 'p', modelID: 'no-capabilities' },
+            { id: 'no-capabilities', providerID: 'p' },
           ],
         }),
       },
@@ -43,32 +45,29 @@ describe('modelAcceptsImageInput', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('reads the v1 providers catalog (boolean record shape) and caches it', async () => {
+  test('reads the model registry and caches it', async () => {
     let calls = 0;
     const deps: ModelImageCapabilityDeps = {
       cache: {},
-      client: {
-        config: {
-          providers: async () => {
-            calls++;
-            return {
-              data: {
-                providers: [
-                  {
-                    id: 'p',
-                    models: {
-                      vision: {
-                        capabilities: { input: { text: true, image: true } },
-                      },
-                      'text-only': {
-                        capabilities: { input: { text: true, image: false } },
-                      },
-                    },
-                  },
-                ],
+      modelDomain: {
+        list: async () => {
+          calls++;
+          return {
+            data: [
+              {
+                id: 'vision',
+                modelID: 'vision-api',
+                providerID: 'p',
+                capabilities: { input: ['text', 'image'] },
               },
-            };
-          },
+              {
+                id: 'text-only',
+                modelID: 'text-only-api',
+                providerID: 'p',
+                capabilities: { input: ['text'] },
+              },
+            ],
+          };
         },
       },
     };
@@ -79,7 +78,7 @@ describe('modelAcceptsImageInput', () => {
       modelAcceptsImageInput({ providerID: 'p', id: 'text-only' }, deps),
     ).resolves.toBe(false);
     await expect(
-      modelAcceptsImageInput({ providerID: 'p', modelID: 'unknown' }, deps),
+      modelAcceptsImageInput({ providerID: 'p', id: 'unknown' }, deps),
     ).resolves.toBeUndefined();
     // The catalog is fetched once per generation.
     expect(calls).toBe(1);
@@ -89,6 +88,90 @@ describe('modelAcceptsImageInput', () => {
     await expect(
       modelAcceptsImageInput(REF, { cache: {} }),
     ).resolves.toBeUndefined();
+  });
+
+  test('keys the catalog by the stable Model.Info id, not provider modelID', async () => {
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            {
+              id: 'vision',
+              modelID: 'gpt-6-api',
+              providerID: 'p',
+              capabilities: { input: ['text', 'image'] },
+            },
+          ],
+        }),
+      },
+    };
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'vision' }, deps),
+    ).resolves.toBe(true);
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'gpt-6-api' }, deps),
+    ).resolves.toBeUndefined();
+  });
+
+  test('keeps aliases distinct when they share one provider modelID', async () => {
+    // `gpt-6-fast` aliases `gpt-6` and shares its API id; keying by modelID
+    // would collapse the two entries and answer for the wrong model.
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            {
+              id: 'gpt-6',
+              modelID: 'gpt-6-api',
+              providerID: 'p',
+              capabilities: { input: ['text', 'image'] },
+            },
+            {
+              id: 'gpt-6-fast',
+              modelID: 'gpt-6-api',
+              providerID: 'p',
+              capabilities: { input: ['text'] },
+            },
+          ],
+        }),
+      },
+    };
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'gpt-6' }, deps),
+    ).resolves.toBe(true);
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'gpt-6-fast' }, deps),
+    ).resolves.toBe(false);
+  });
+
+  test('accepts image-prefixed input modalities like the host check', async () => {
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            {
+              id: 'png-only',
+              providerID: 'p',
+              capabilities: { input: ['text', 'image/png'] },
+            },
+            {
+              id: 'audio-only',
+              providerID: 'p',
+              capabilities: { input: ['text', 'audio'] },
+            },
+          ],
+        }),
+      },
+    };
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'png-only' }, deps),
+    ).resolves.toBe(true);
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'audio-only' }, deps),
+    ).resolves.toBe(false);
   });
 
   test('a failed fetch resolves undefined and stays cached', async () => {
@@ -115,8 +198,8 @@ describe('modelExistsInCatalog', () => {
     modelDomain: {
       list: async () => ({
         data: [
-          { providerID: 'p', modelID: 'live' },
-          { providerID: 'p', modelID: 'also-live' },
+          { id: 'live', modelID: 'live-api', providerID: 'p' },
+          { id: 'also-live', modelID: 'also-live-api', providerID: 'p' },
         ],
       }),
     },
@@ -129,6 +212,40 @@ describe('modelExistsInCatalog', () => {
     ).resolves.toBe(true);
     await expect(
       modelExistsInCatalog({ providerID: 'p', id: 'gone' }, deps),
+    ).resolves.toBe(false);
+  });
+
+  test('resolves pins by the stable Model.Info id, not provider modelID', async () => {
+    const deps = catalogDeps();
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'live' }, deps),
+    ).resolves.toBe(true);
+    // A provider-facing API id is not a selectable model id; only `id` pins.
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'live-api' }, deps),
+    ).resolves.toBe(false);
+  });
+
+  test('pin existence tracks each alias even when modelIDs collide', async () => {
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            { id: 'gpt-6', modelID: 'gpt-6-api', providerID: 'p' },
+            { id: 'gpt-6-fast', modelID: 'gpt-6-api', providerID: 'p' },
+          ],
+        }),
+      },
+    };
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'gpt-6' }, deps),
+    ).resolves.toBe(true);
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'gpt-6-fast' }, deps),
+    ).resolves.toBe(true);
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'gpt-6-api' }, deps),
     ).resolves.toBe(false);
   });
 

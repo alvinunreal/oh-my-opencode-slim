@@ -4,7 +4,7 @@
  * Every optional subsystem reads one frozen object, so the enable/disable
  * decisions live in one place and cannot drift between the v1 factory, the v2
  * setup pre-flight, the TUI gates, and the runtime getters. No IO or registry;
- * the host flavor selects the lifecycle supported by the two adapters.
+ * the v2 host owns the native background lifecycle.
  *
  * Fallback is deliberately not projected here: `fallback.enabled` and the
  * `foreground-fallback` hook differ on v2 (the former keeps retry bookkeeping
@@ -17,6 +17,8 @@ export interface FeatureGateConfig {
   readonly backgroundJobs?: {
     readonly mode?: BackgroundJobsMode;
   };
+  readonly sessionPresetRouting?: boolean;
+  readonly replaceBuiltinSubagents?: boolean;
   readonly tui?: boolean;
   readonly sidebar?: boolean;
   readonly interview?: {
@@ -25,12 +27,8 @@ export interface FeatureGateConfig {
   readonly marketplace?: {
     readonly enabled?: boolean;
   };
-  readonly webfetch?: {
-    readonly enabled?: boolean;
-  };
   readonly liveConfigRefresh?: boolean;
   readonly autoUpdate?: boolean;
-  readonly disabled_hooks?: readonly string[];
   readonly disabled_tools?: readonly string[];
 }
 
@@ -47,9 +45,8 @@ const UNSUPPORTED_MANAGED_MODE_MESSAGE =
 
 /**
  * Validate explicit config before sanitization or schema defaults are applied.
- * Resolved configs contain V1 defaults for these keys, so must not be checked
- * here. Lifecycle mode itself has no schema default and is also checked by
- * resolveFeatureGates for direct runtime seeds.
+ * Reject invalid lifecycle switches and positive limits the host cannot enforce.
+ * The retired managed mode is normalized by the loader after this validation.
  */
 export function validateExplicitHostConfig(
   config: unknown,
@@ -66,30 +63,58 @@ export function validateExplicitHostConfig(
   ) {
     return;
   }
-  if ((backgroundJobs as Record<string, unknown>).mode === 'managed') {
+  const jobs = backgroundJobs as Record<string, unknown>;
+  if (
+    Object.hasOwn(jobs, 'mode') &&
+    jobs.mode !== undefined &&
+    jobs.mode !== 'native' &&
+    jobs.mode !== 'off' &&
+    jobs.mode !== 'managed'
+  ) {
     throw new UnsupportedHostConfigError(
-      `${source}${UNSUPPORTED_MANAGED_MODE_MESSAGE}`,
+      `${source}Invalid backgroundJobs.mode ${JSON.stringify(jobs.mode)}; use "native" or "off", then run /reload.`,
     );
   }
-  for (const key of [
-    'concurrency',
-    'wallClockTimeoutMs',
-    'maxSessionsPerAgent',
-    'stopConfirmationMs',
-  ]) {
-    if (Object.hasOwn(backgroundJobs, key)) {
-      throw new UnsupportedHostConfigError(
-        `${source}Unsupported backgroundJobs.${key} on OpenCode v2; this setting requires the V1 managed lifecycle. Remove it and use the native host lifecycle.`,
-      );
+  const unsupported: string[] = [];
+  const collectLimit = (key: string, value: unknown) => {
+    if (typeof value === 'number' && value > 0) {
+      unsupported.push(`backgroundJobs.${key} = ${value}`);
     }
+  };
+  collectLimit('wallClockTimeoutMs', jobs.wallClockTimeoutMs);
+  const concurrency = jobs.concurrency;
+  if (
+    concurrency &&
+    typeof concurrency === 'object' &&
+    !Array.isArray(concurrency)
+  ) {
+    const limits = concurrency as Record<string, unknown>;
+    collectLimit('concurrency.defaultConcurrency', limits.defaultConcurrency);
+    for (const key of ['providerConcurrency', 'modelConcurrency']) {
+      const entries = limits[key];
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+        continue;
+      for (const [id, value] of Object.entries(entries)) {
+        collectLimit(`concurrency.${key}.${id}`, value);
+      }
+    }
+  }
+  if (unsupported.length > 0) {
+    const remedy =
+      unsupported.length === 1
+        ? 'this limit. Remove the key or set it'
+        : 'these limits. Remove the keys or set them';
+    throw new UnsupportedHostConfigError(
+      `${source}Unsupported ${unsupported.join(', ')} on OpenCode v2: Slim no longer enforces ${remedy} to 0, then run /reload.`,
+    );
   }
 }
 
 /** Resolved enable/disable decisions for the optional subsystems. */
 export interface FeatureGates {
   readonly backgroundJobsMode: BackgroundJobsMode;
-  readonly managedJobs: boolean;
   readonly presetRouting: boolean;
+  readonly replaceBuiltinSubagents: boolean;
   readonly tui: boolean;
   readonly sidebar: boolean;
   readonly interview: boolean;
@@ -106,35 +131,29 @@ export interface FeatureGates {
  */
 export function resolveFeatureGates(
   config: FeatureGateConfig = {},
-  hostFlavor?: string,
 ): Readonly<FeatureGates> {
-  if (hostFlavor === 'v2' && config.backgroundJobs?.mode === 'managed') {
+  if (config.backgroundJobs?.mode === 'managed') {
     throw new UnsupportedHostConfigError(UNSUPPORTED_MANAGED_MODE_MESSAGE);
   }
-  const backgroundJobsMode =
-    config.backgroundJobs?.mode ?? (hostFlavor === 'v2' ? 'native' : 'managed');
+  validateExplicitHostConfig(config, 'v2');
+  const backgroundJobsMode = config.backgroundJobs?.mode ?? 'native';
   const tui = config.tui !== false;
   // User-edited config can be malformed despite the declared type; treat a
   // non-array disabled list as empty instead of failing plugin init.
   const disabledTools = Array.isArray(config.disabled_tools)
     ? config.disabled_tools
     : [];
-  const disabledHooks = Array.isArray(config.disabled_hooks)
-    ? config.disabled_hooks
-    : [];
   return Object.freeze({
     backgroundJobsMode,
-    managedJobs: hostFlavor !== 'v2' && backgroundJobsMode === 'managed',
-    presetRouting: backgroundJobsMode !== 'off',
+    presetRouting:
+      config.sessionPresetRouting ?? backgroundJobsMode === 'native',
+    replaceBuiltinSubagents: config.replaceBuiltinSubagents !== false,
     tui,
     sidebar: tui && config.sidebar !== false,
     interview: config.interview?.enabled !== false,
     marketplace: config.marketplace?.enabled !== false,
-    webfetch:
-      config.webfetch?.enabled !== false && !disabledTools.includes('webfetch'),
+    webfetch: !disabledTools.includes('webfetch'),
     liveConfigRefresh: config.liveConfigRefresh !== false,
-    updateChecker:
-      config.autoUpdate !== false &&
-      !disabledHooks.includes('auto-update-checker'),
+    updateChecker: config.autoUpdate !== false,
   });
 }

@@ -86,9 +86,8 @@ is shown without starting a repair; the next service turn carries a brief note
 to re-base on the current spec. The failed patch is not partially applied: the
 last accepted spec remains on disk.
 
-If the model prints an `<interview_state>` block instead of calling the tool, the
-v1 text-block fallback is applied and hidden from the TUI. On OpenCode v2 the
-fallback is applied by the bridge, but the printed fallback remains visible.
+If the model prints an `<interview_state>` block instead of calling the tool,
+the bridge applies the fallback and the printed block remains visible.
 
 Providers that allowlist plugin tools must include `interview_submit_state` in
 that allowlist, then be fully restarted; otherwise the model uses the text-block
@@ -278,9 +277,8 @@ path.
  The `interview_submit_state` tool is the quiet submission path. Its object
 argument is omitted from the generic TUI row, which is followed by one
 `Spec updated` or `Interview update failed` status line. It is allowed for
-primary agents and denied for subagents. The v1 text-block fallback is hidden
-from the TUI; v2 applies the fallback through its context bridge but leaves the
-printed block visible. See [Tools](tools.md#interview_submit_state).
+primary agents and denied for subagents. The text-block fallback remains visible
+in the TUI. See [Tools](tools.md#interview_submit_state).
 
 ## Implementing a completed spec
 
@@ -348,7 +346,7 @@ ssh -L <port>:127.0.0.1:<port> your-server
   state pushes with polling fallback
 - runtime interview state is in-memory; the markdown file is the durable artifact
 - the flow depends on the assistant returning valid state, either through the
-  `interview_submit_state` tool or the v1 text-block fallback
+  `interview_submit_state` tool or the text-block fallback
 - dashboard-owned sessions receive queued actions when idle; other sessions
   poll the dashboard every 10 seconds
 
@@ -368,7 +366,7 @@ and renaming without expanding the global client shim.
 
 Every earlier full-spec kickoff in an active interview's history is collapsed to
 a placeholder (`Previous spec omitted. The current spec is on disk.`); this
-applies to both v1 text blocks and v2 tool-call parts. Later status/patch turns
+applies to both text blocks and tool-call parts. Later status/patch turns
 are retained. This rewrite is gated to sessions with an active interview and
 causes one deliberate cache miss per interview.
 

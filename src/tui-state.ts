@@ -15,8 +15,8 @@ interface ReusableSessionSelection {
 }
 
 /**
- * Per-session alias/status projection for the clickable sidebar. Entries only
- * exist for sessions present in `activeSessions`; they never activate a
+ * Per-session alias/status projection for the clickable sidebar. Host overlays
+ * may include idle parent aliases for attribution; entries never activate a
  * session by themselves. The key is always the full sessionID — never an
  * alias — and the parent link lives exclusively in `sessionParents`.
  */
@@ -698,8 +698,8 @@ export function updateSnapshot(
 }
 
 /**
- * One native event's fan-out scope. Every recorder call and every
- * projection publish made inside the scope stages its work; the scope
+ * One native event's fan-out scope. Every recorder call inside the scope
+ * stages its work; the scope
  * commits once, in its finally, with one locked update per project.
  *
  * The scope is a VALUE carried by AsyncLocalStorage, never a global flag:
@@ -714,19 +714,16 @@ interface TuiSnapshotBatch {
     string,
     Array<{
       mutator: (snapshot: TuiSnapshot) => void;
-      onCommit?: (applied: boolean) => void;
       isCurrent?: (snapshot: TuiSnapshot) => boolean;
     }>
   >;
-  /** Deferred projections keyed by their coalescing key (one per key). */
-  projections: Map<object, () => void>;
 }
 
 const tuiSnapshotBatch = new AsyncLocalStorage<TuiSnapshotBatch>();
 
 /**
- * Run a native event's fan-out as one batch: staged recorder writes and
- * deferred projections commit together in the finally, even when the
+ * Run a native event's fan-out as one batch: staged recorder writes
+ * commit together in the finally, even when the
  * operation rejects. A nested call joins the open scope.
  */
 export async function withTuiSnapshotBatch<T>(
@@ -737,7 +734,6 @@ export async function withTuiSnapshotBatch<T>(
   const batch: TuiSnapshotBatch = {
     open: true,
     mutations: new Map(),
-    projections: new Map(),
   };
   return tuiSnapshotBatch.run(batch, async () => {
     try {
@@ -760,24 +756,11 @@ export function flushTuiSnapshotBatch(): void {
 }
 
 function commitTuiSnapshotBatch(batch: TuiSnapshotBatch): void {
-  // Run the deferred projections while the scope is still open: each
-  // publishes by staging, so every section lands in the same per-project
-  // update below — one physical write including the recorder updates.
-  const projections = [...batch.projections.values()];
-  batch.projections.clear();
-  for (const project of projections) {
-    try {
-      project();
-    } catch {
-      // Best-effort: one projection must not prevent other commits.
-    }
-  }
   const mutations = [...batch.mutations];
   batch.mutations.clear();
   for (const [projectDir, pending] of mutations) {
-    let applied = false;
     try {
-      applied = updateSnapshot(
+      updateSnapshot(
         projectDir,
         (snapshot) => {
           for (const { mutator } of pending) mutator(snapshot);
@@ -789,13 +772,6 @@ function commitTuiSnapshotBatch(batch: TuiSnapshotBatch): void {
     } catch {
       // A failed projection is not a committed ownership update.
     }
-    for (const { onCommit } of pending) {
-      try {
-        onCommit?.(applied);
-      } catch {
-        // Isolate each best-effort observer from the remaining commits.
-      }
-    }
   }
 }
 
@@ -804,7 +780,6 @@ function drainTuiSnapshotBatch(batch: TuiSnapshotBatch): void {
     commitTuiSnapshotBatch(batch);
   } finally {
     batch.open = false;
-    batch.projections.clear();
     batch.mutations.clear();
   }
 }
@@ -817,54 +792,16 @@ function drainTuiSnapshotBatch(batch: TuiSnapshotBatch): void {
 function recordSnapshotUpdate(
   projectDir: string,
   mutator: (snapshot: TuiSnapshot) => void,
-  onCommit?: (applied: boolean) => void,
   isCurrent?: (snapshot: TuiSnapshot) => boolean,
 ): void {
   const batch = tuiSnapshotBatch.getStore();
   if (batch?.open) {
     const pending = batch.mutations.get(projectDir);
-    if (pending) pending.push({ mutator, onCommit, isCurrent });
-    else batch.mutations.set(projectDir, [{ mutator, onCommit, isCurrent }]);
+    if (pending) pending.push({ mutator, isCurrent });
+    else batch.mutations.set(projectDir, [{ mutator, isCurrent }]);
     return;
   }
-  const applied = updateSnapshot(projectDir, mutator, isCurrent);
-  onCommit?.(applied);
-}
-
-/**
- * Publish a projection section. Inside an open scope the write is staged
- * and `onCommit` reports the real commit result; outside one it is an
- * immediate locked write.
- */
-export function publishTuiProjection(
-  projectDir: string,
-  mutator: (snapshot: TuiSnapshot) => void,
-  onCommit?: (applied: boolean) => void,
-): void {
-  recordSnapshotUpdate(projectDir, mutator, onCommit);
-}
-
-/**
- * Defer a projection until the open scope commits. Repeated calls with
- * the same key coalesce into one run; without an open scope the
- * projection runs synchronously.
- */
-export function deferTuiProjection(key: object, project: () => void): void {
-  const batch = tuiSnapshotBatch.getStore();
-  if (batch?.open) {
-    if (!batch.projections.has(key)) batch.projections.set(key, project);
-    return;
-  }
-  project();
-}
-
-/** Run a deferred projection now (disposal path). */
-export function flushTuiProjection(key: object): void {
-  const batch = tuiSnapshotBatch.getStore();
-  const pending = batch?.projections.get(key);
-  if (!pending) return;
-  batch?.projections.delete(key);
-  pending();
+  updateSnapshot(projectDir, mutator, isCurrent);
 }
 
 /**
@@ -967,7 +904,6 @@ export function recordTuiAgentModel(
       delete sessions[input.sessionID];
       sessions[input.sessionID] = agents;
     },
-    undefined,
     (snapshot) =>
       isCurrent(snapshot.sessionModels?.[input.sessionID]?.[input.agentName]),
   );
@@ -1003,7 +939,6 @@ export function recordTuiAgentActivity(
         delete snapshot.sessionDetails[input.sessionID];
       }
     },
-    undefined,
     (snapshot) => {
       if (!input.active)
         return (
@@ -1021,47 +956,6 @@ export function recordTuiAgentActivity(
       );
     },
   );
-}
-
-/**
- * Update per-session sidebar details (alias/status) for an ACTIVE
- * session only. A late detail update after idle must never resurrect an
- * activity entry — the whole update is dropped when the session is gone
- * from `activeSessions` at commit time (under the same lock).
- */
-export function updateTuiSessionDetails(
-  sessionID: string,
-  details: TuiSessionDetails,
-  projectDir: string,
-): void {
-  recordSnapshotUpdate(projectDir, (snapshot) => {
-    if (snapshot.activeSessions[sessionID] === undefined) return;
-    const current = snapshot.sessionDetails[sessionID] ?? {};
-    snapshot.sessionDetails[sessionID] = { ...current, ...details };
-  });
-}
-
-/**
- * Retract only the alias of an active session (e.g. its board record was
- * dropped). Status survives; the session stays visible in the
- * sidebar under its abbreviated sessionID until it goes idle.
- */
-export function clearTuiSessionAlias(
-  sessionID: string,
-  projectDir: string,
-): void {
-  recordSnapshotUpdate(projectDir, (snapshot) => {
-    if (snapshot.activeSessions[sessionID] === undefined) return;
-    const current = snapshot.sessionDetails[sessionID];
-    if (current === undefined || current.alias === undefined) return;
-    const next: TuiSessionDetails = { ...current };
-    delete next.alias;
-    if (Object.keys(next).length === 0) {
-      delete snapshot.sessionDetails[sessionID];
-    } else {
-      snapshot.sessionDetails[sessionID] = next;
-    }
-  });
 }
 
 // Startup cleanup: drop crash residue (dead recorder pid) and legacy
@@ -1108,7 +1002,6 @@ export function recordTuiSessionParent(
       delete snapshot.sessionParents[sessionID]; // Re-registered link is newest.
       snapshot.sessionParents[sessionID] = parentID;
     },
-    undefined,
     (snapshot) =>
       snapshot.sessionParents[sessionID] === parentID &&
       Object.keys(snapshot.sessionParents).at(-1) === sessionID,

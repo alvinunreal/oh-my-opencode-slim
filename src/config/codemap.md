@@ -25,7 +25,7 @@ The config system follows a layered architecture:
 | Abstraction | Purpose | Location |
 |-------------|---------|----------|
 | `PluginConfig` | Root configuration object with agents, presets, and feature flags | schema.ts |
-| `FeatureGates` | Frozen host-aware optional-subsystem projection: V1 defaults to managed, V2 to native; explicit V2 managed is rejected before construction | feature-gates.ts |
+| `FeatureGates` | Frozen optional-subsystem projection; defaults to native and rejects a direct managed-mode seed | feature-gates.ts |
 | `AgentOverrideConfig` | Per-agent configuration (model, temperature, skills, MCPs) | schema.ts |
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
@@ -168,21 +168,25 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ### PluginConfig (Root Schema)
 - `preset`: Active preset name
-- `setDefaultAgent`: Whether to set default agent model
-- `autoUpdate`: Master switch for OMOS plugin update checks, notices, and automatic installs; `disabled_hooks: ["auto-update-checker"]` is the per-hook form of the same off switch
+- `setDefaultAgent`: Whether to select the orchestrator as the default agent
+- `sessionPresetRouting`: Session binding and inference routing, independently
+  selectable from Slim task controls; absent follows `backgroundJobs.mode`
+- `replaceBuiltinSubagents`: Controls replacement of undeclared host general/explore
+  agents (default true)
+- `autoUpdate`: Single master switch for OMOS plugin update checks, notices, and automatic installs; the `auto-update-checker` hook-list alias is removed
 - `presets`: Named preset groupings (map of presetName → AgentOverrideConfig)
 - `agents`: Per-agent overrides (map of agentName → AgentOverrideConfig)
 - `disabled_agents`: List of agents to disable
 - `disabled_mcps`: List of MCPs to disable
-- `disabled_tools`: List of tools to disable
+- `disabled_tools`: Tool-level cold gate, including enhanced `webfetch`; its former root `webfetch.enabled` switch is removed
 - `disabled_skills`: List of skills to disable
-- `disabled_hooks`: List of hooks to disable (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`)
+- `disabled_hooks`: List of hooks to disable (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`)
 - `disabled_commands`: List of slash commands to disable (`interview`, `implement`, `deepwork`, `reflect`, `loop`, `preset`)
 - Enum-backed disabled keys use whole-family replacement semantics: explicit `[]` overrides a lower layer, a mixed list replaces it with the valid subset, and a list containing only unknown names is treated as unset so the lower layer applies.
 - `multiplexer`: Unified pane management config (type, layout, sizes, viewer surface)
 - `interview`: Interview feature configuration
 - `backgroundJobs`: Background job configuration
-- `backgroundJobs.concurrency`: Optional default, provider, and model caps for V1 managed background task admission. V2 rejects explicit concurrency, wall-clock, retention, and stop-confirmation settings before schema defaults; `sameProviderPolicy` applies only to V1 managed and warns as ignored on V2.
+- Removed managed settings include `backgroundJobs.concurrency`, `sameProviderPolicy`, `wallClockTimeoutMs`, and `stopConfirmationMs`. The v2 loader rejects positive concurrency and wall-clock limits; other removed keys are stripped with a warning before schema validation.
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration
@@ -219,7 +223,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ## Backward Compatibility
 
-- Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, `webfetch.model`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
+- Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, root `webfetch`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
 - `legacy-preset-defaults.ts` removes only the empty Explorer MCP override matching the historical Librarian/Explorer preset pair before alias merging. Loader, doctor, and the effective preset catalog share the rule; files, root overrides, and other fields remain unchanged.
 - Invalid `multiplexer` values disable pane management (`type: "none"`) with one diagnostic
 

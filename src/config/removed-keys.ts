@@ -1,6 +1,6 @@
 /**
  * Config keys removed in this version (dropped, not migrated, except that
- * `backgroundJobs.enabled: false` still maps to `backgroundJobs.mode: "off"`).
+ * `backgroundJobs.enabled: false` maps to `"off"` and `"managed"` to `"native"`).
  *
  * A stale removed key must not invalidate the whole config file: the loader
  * strips each one from the raw layer before schema validation and reports a
@@ -11,6 +11,18 @@
  * Paths use `*` for one arbitrary record key (a council preset name).
  * Delete entries (or this whole module) once the compatibility window ends.
  */
+const REMOVED_MANAGED_KEYS = [
+  'backgroundJobs.maxSessionsPerAgent',
+  'backgroundJobs.stopConfirmationMs',
+  'backgroundJobs.wallClockTimeoutMs',
+  'backgroundJobs.concurrency',
+  'backgroundJobs.sameProviderPolicy',
+  'backgroundJobs.waitForUserGuard',
+  'backgroundJobs.childInputWake',
+  'backgroundJobs.childInputWakeKinds',
+  'backgroundJobs.pruneEvictedSessions',
+] as const;
+
 const REMOVED_CONFIG_KEYS = [
   'tmux',
   'agents.*.primary',
@@ -31,17 +43,26 @@ const REMOVED_CONFIG_KEYS = [
   'backgroundJobs.maxRetainedSnapshots',
   'backgroundJobs.boardInjection',
   'backgroundJobs.abortGraceMs',
+  ...REMOVED_MANAGED_KEYS,
   'fallback.timeoutMs',
   'fallback.retry_on_empty',
   'fallback.runtimeOverride',
   'multiplexer.zellij_pane_mode',
-  'webfetch.model',
+  'webfetch',
 ] as const;
 
 /** Removed keys whose successor needs a specific message. */
 const REMOVED_CONFIG_KEY_MESSAGES: Readonly<Record<string, string>> = {
   'backgroundJobs.enabled':
-    'Config key "backgroundJobs.enabled" was removed; use backgroundJobs.mode ("managed" | "native" | "off") instead. enabled: false is still applied as mode "off".',
+    'Config key "backgroundJobs.enabled" was removed; use backgroundJobs.mode ("native" | "off") instead. enabled: false is still applied as mode "off".',
+  webfetch:
+    'webfetch config was removed; use disabled_tools: ["webfetch"] to use the native host tool',
+  ...Object.fromEntries(
+    REMOVED_MANAGED_KEYS.map((path) => [
+      path,
+      `Config key "${path}" belonged to the retired managed lifecycle and is ignored.`,
+    ]),
+  ),
 };
 
 function removedConfigKeyMessage(path: string): string {
@@ -108,6 +129,13 @@ export function stripRemovedConfigKeys(
   ) {
     jobs.mode = 'off';
   }
+  if (isPlainObject(jobs) && jobs.mode === 'managed') {
+    jobs.mode = 'native';
+    onRemoved(
+      'Config value backgroundJobs.mode "managed" was removed; "native" is applied instead. Use "off" to disable Slim task tools and (by default) session presets.',
+      'backgroundJobs.mode',
+    );
+  }
   const removed: string[] = [];
   for (const path of REMOVED_CONFIG_KEYS) {
     stripPath(rawConfig, path.split('.'), [], removed);
@@ -118,7 +146,7 @@ export function stripRemovedConfigKeys(
 /**
  * Enum-backed `disabled_*` values removed in this version, keyed by config
  * key then value. A stale member must not invalidate the whole config file:
- * the loader strips it from the raw array before schema validation (the
+ * the loader strips it from the raw value before schema validation (the
  * value enum no longer accepts it) and reports the removal message through
  * the same `removed-key` channel as removed keys — the generic
  * unknown-value normalization would otherwise label it a typo.
@@ -129,14 +157,20 @@ const REMOVED_DISABLED_VALUES: Readonly<
   disabled_hooks: {
     'council-assembly':
       'council-assembly is no longer a hook: council seat assembly is unconditional and fail-open — remove this entry.',
+    'auto-update-checker':
+      'The disabled_hooks entry "auto-update-checker" was removed and is ignored; use autoUpdate: false to disable update checks, notices, and installation.',
+    'json-error-recovery':
+      'json-error-recovery is no longer a hook: OpenCode 2.3 rejects tool calls with malformed JSON arguments itself and asks the model to reissue them — remove this entry.',
   },
 };
 
 /**
- * Strip every {@link REMOVED_DISABLED_VALUES} member from its raw array
- * (mutates in place) and report each concrete value once. An array left
- * empty by the strip is deleted, so a lower config layer's list still
- * applies.
+ * Strip every {@link REMOVED_DISABLED_VALUES} member from its raw
+ * `disabled_*` value (mutates in place) and report each concrete value once.
+ * Arrays and the supported single string are both inspected; a string with
+ * no retired member stays untouched for the later array normalization. A
+ * value left empty by the strip is deleted, so a lower config layer's list
+ * still applies.
  */
 export function stripRemovedDisabledValues(
   rawConfig: unknown,
@@ -144,8 +178,12 @@ export function stripRemovedDisabledValues(
 ): void {
   if (!isPlainObject(rawConfig)) return;
   for (const [key, messages] of Object.entries(REMOVED_DISABLED_VALUES)) {
-    const list = rawConfig[key];
-    if (!Array.isArray(list)) continue;
+    const value = rawConfig[key];
+    if (!Array.isArray(value) && typeof value !== 'string') continue;
+    // The supported string shape is normalized to an array later; inspect it
+    // here as a one-entry list so a retired value gets the removal warning
+    // instead of a generic unknown-value diagnostic.
+    const list: unknown[] = typeof value === 'string' ? [value] : value;
     const removed = new Set<string>();
     const kept: unknown[] = [];
     for (const entry of list) {
@@ -156,7 +194,7 @@ export function stripRemovedDisabledValues(
       }
     }
     if (removed.size === 0) continue;
-    for (const value of removed) onRemoved(messages[value] as string, value);
+    for (const name of removed) onRemoved(messages[name] as string, name);
     if (kept.length === 0) delete rawConfig[key];
     else rawConfig[key] = kept;
   }

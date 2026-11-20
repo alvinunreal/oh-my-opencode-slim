@@ -2,6 +2,26 @@ import { describe, expect, test } from 'bun:test';
 import fc from 'fast-check';
 import { asHttpStatus } from './dedup';
 
+// Mutation runs bail on the first failure. Keep the ledger's deterministic
+// contracts ahead of properties whose counterexamples vary between runs.
+describe('asHttpStatus fixed examples', () => {
+  test('contract: numeric and string 404 parse to 404', () => {
+    expect(asHttpStatus(404)).toBe(404);
+    expect(asHttpStatus('404')).toBe(404);
+  });
+
+  test('contract: out-of-range and non-numeric strings are rejected', () => {
+    expect(asHttpStatus('600')).toBeUndefined();
+    expect(asHttpStatus('099')).toBeUndefined();
+    expect(asHttpStatus('abc')).toBeUndefined();
+  });
+
+  test('contract: non-string values that stringify to a status are rejected', () => {
+    expect(asHttpStatus(['404'])).toBeUndefined();
+    expect(asHttpStatus({ toString: () => '404' })).toBeUndefined();
+  });
+});
+
 describe('asHttpStatus properties', () => {
   test('accepts integer HTTP status codes', () => {
     fc.assert(
@@ -89,23 +109,5 @@ describe('asHttpStatus properties', () => {
         expect(asHttpStatus(value)).toBeUndefined();
       }),
     );
-  });
-});
-
-describe('asHttpStatus fixed examples', () => {
-  test('contract: numeric and string 404 parse to 404', () => {
-    expect(asHttpStatus(404)).toBe(404);
-    expect(asHttpStatus('404')).toBe(404);
-  });
-
-  test('contract: out-of-range and non-numeric strings are rejected', () => {
-    expect(asHttpStatus('600')).toBeUndefined();
-    expect(asHttpStatus('099')).toBeUndefined();
-    expect(asHttpStatus('abc')).toBeUndefined();
-  });
-
-  test('contract: non-string values that stringify to a status are rejected', () => {
-    expect(asHttpStatus(['404'])).toBeUndefined();
-    expect(asHttpStatus({ toString: () => '404' })).toBeUndefined();
   });
 });
