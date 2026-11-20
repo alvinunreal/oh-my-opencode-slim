@@ -113,11 +113,13 @@ The test job converts Bun's LCOV report into
 report-only Fallow job waits for the test job, downloads
 `test-results-bun-pinned` into the checkout, and auto-detects that file for
 CRAP scoring. The audit remains non-blocking and skips when the test job
-fails.
+fails. The Fallow job installs dependencies with `bun ci` before analysis
+so dependency resolution does not run with missing `node_modules`.
 
 To reproduce from the repository root:
 
 ```bash
+bun ci
 bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
 bun run coverage:istanbul
 npx fallow@3.43.0 audit --base origin/master --no-css

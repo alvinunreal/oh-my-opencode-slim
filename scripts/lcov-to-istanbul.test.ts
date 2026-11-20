@@ -1,22 +1,26 @@
 import { expect, test } from 'bun:test';
+import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 type Step = {
-  name?: string;
   uses?: string;
-  if?: string;
+  run?: string;
+  with: Record<string, unknown>;
   'continue-on-error'?: boolean;
-  with?: Record<string, unknown>;
 };
-type Job = {
-  if?: string;
-  needs?: string | string[];
-  'continue-on-error'?: boolean;
-  steps?: Step[];
+type Workflow = {
+  jobs: {
+    test: { steps: Step[] };
+    fallow: {
+      if: string;
+      needs: string | string[];
+      'continue-on-error': boolean;
+      steps: Step[];
+    };
+  };
 };
-type Workflow = { jobs?: Record<string, Job> };
 
 const WORKFLOW = join(import.meta.dir, '..', '.github/workflows/ci.yml');
 
@@ -60,36 +64,42 @@ test('converts line hits and function ranges from LCOV', () => {
 
 test('fallow audit consumes the pinned coverage artifact', () => {
   const workflow = Bun.YAML.parse(readFileSync(WORKFLOW, 'utf8')) as Workflow;
-  const testJob = workflow.jobs?.test;
-  const fallowJob = workflow.jobs?.fallow;
-  expect(testJob).toBeDefined();
-  expect(fallowJob).toBeDefined();
+  const { test: testJob, fallow: fallowJob } = workflow.jobs;
 
-  const upload = testJob?.steps?.find(
+  const upload = testJob.steps.find(
     (step) => step.uses === 'actions/upload-artifact@v4',
   );
-  expect(upload?.with?.name).toBe('test-results-bun-pinned');
-  expect(String(upload?.with?.path)).toContain('coverage/coverage-final.json');
-  expect(String(upload?.with?.path)).toContain('reports/junit.xml');
+  assert(upload);
+  expect(upload.with.name).toBe('test-results-bun-pinned');
+  expect(String(upload.with.path)).toContain('coverage/coverage-final.json');
+  expect(String(upload.with.path)).toContain('reports/junit.xml');
 
-  const needs = [fallowJob?.needs ?? []].flat();
-  expect(needs).toContain('test');
+  expect([fallowJob.needs].flat()).toContain('test');
 
-  const steps = fallowJob?.steps ?? [];
+  const steps = fallowJob.steps;
   const download = steps.find(
     (step) => step.uses === 'actions/download-artifact@v4',
   );
-  expect(download?.with?.name).toBe('test-results-bun-pinned');
-  expect(download?.with?.path).toBe('.');
-  expect(download?.['continue-on-error']).toBeUndefined();
-  expect(download).toBeDefined();
+  assert(download);
+  expect(download.with.name).toBe('test-results-bun-pinned');
+  expect(download.with.path).toBe('.');
+  expect(download['continue-on-error']).toBeUndefined();
 
   const auditIndex = steps.findIndex((step) =>
     step.uses?.startsWith('fallow-rs/fallow@'),
   );
-  expect(auditIndex).toBeGreaterThan(steps.indexOf(download as Step));
-  expect(steps[auditIndex]?.with?.['fail-on-issues']).toBe(false);
+  expect(auditIndex).toBeGreaterThan(steps.indexOf(download));
+  expect(steps[auditIndex].with['fail-on-issues']).toBe(false);
 
-  expect(fallowJob?.if).toBe("github.event_name == 'pull_request'");
-  expect(fallowJob?.['continue-on-error']).toBe(true);
+  const setupBunIndex = steps.findIndex(
+    (step) => step.uses === 'oven-sh/setup-bun@v2',
+  );
+  const installIndex = steps.findIndex((step) => step.run === 'bun ci');
+  expect(setupBunIndex).toBeGreaterThan(-1);
+  expect(installIndex).toBeGreaterThan(-1);
+  expect(setupBunIndex).toBeLessThan(installIndex);
+  expect(installIndex).toBeLessThan(auditIndex);
+
+  expect(fallowJob.if).toBe("github.event_name == 'pull_request'");
+  expect(fallowJob['continue-on-error']).toBe(true);
 });
