@@ -26,9 +26,8 @@ export function splitListFilter(items: readonly string[]): ListFilter {
  */
 export function matchesListFilter(
   name: string | undefined,
-  items: readonly string[],
+  { allow, deny }: ListFilter,
 ): boolean {
-  const { allow, deny } = splitListFilter(items);
   if (deny.includes('*')) return false;
   if (name === undefined) return allow.includes('*');
   if (allow.includes('*')) return !deny.includes(name);

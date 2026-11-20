@@ -9,7 +9,7 @@
  * It never reads the environment or performs IO itself.
  */
 
-import { matchesListFilter } from '../../config/list-filter';
+import { matchesListFilter, splitListFilter } from '../../config/list-filter';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 import {
   type DiagnosticLogger,
@@ -78,6 +78,8 @@ const CLOSE_RETRY_MS = 1_000;
 const MAX_CLOSE_ATTEMPTS = 4;
 
 export class PaneLifecycle {
+  private readonly agentFilter: ReturnType<typeof splitListFilter>;
+  private readonly restrictAgents: boolean;
   /** The in-process uniqueness store (FR-6), keyed by child session id. */
   private readonly panes = new Map<string, PaneRecord>();
   /** Dedup markers for FR-6; the promise tracks an actual adapter spawn. */
@@ -129,6 +131,9 @@ export class PaneLifecycle {
     private readonly config: PaneLifecycleConfig,
     private readonly logger: DiagnosticLogger = PLUGIN_LOG_SINK,
   ) {
+    this.agentFilter = splitListFilter(config.agents ?? ['*']);
+    this.restrictAgents =
+      !this.agentFilter.allow.includes('*') || this.agentFilter.deny.length > 0;
     this.displayedSessionId = config.displayedSessionId;
     this.displayedDirectory = config.directory;
   }
@@ -376,7 +381,9 @@ export class PaneLifecycle {
         await this.createPane(
           childSessionId,
           watched.parentSessionId,
-          watched.subagentType,
+          this.restrictAgents
+            ? (serverAgents.get(childSessionId) ?? watched.subagentType)
+            : watched.subagentType,
           watched.directory,
           live,
         );
@@ -389,7 +396,10 @@ export class PaneLifecycle {
       if (this.closedWatch.has(childSessionId)) continue;
       const live = statuses?.get(childSessionId);
       if (live !== 'busy' && live !== 'retry') {
-        if (statuses)
+        if (
+          statuses &&
+          matchesListFilter(serverAgents.get(childSessionId), this.agentFilter)
+        )
           this.rememberClosed(
             childSessionId,
             parentSessionId,
@@ -541,6 +551,19 @@ export class PaneLifecycle {
     if (parentSessionId !== this.displayedSessionId) return;
     if (this.config.adapter === null) return;
 
+    // Status events omit the agent. Only restrictive filters need a fresh
+    // host name; unrestricted rebuilds keep their original naming and IO.
+    if (this.restrictAgents) {
+      const displayedDirectory = this.displayedDirectory;
+      const list = await this.listSessions(directory, parentSessionId);
+      if (!this.isDisplayed(parentSessionId, displayedDirectory)) return;
+      if (!list.error) {
+        subagentType =
+          list.sessions.find((entry) => entry.sessionId === childSessionId)
+            ?.subagentType ?? subagentType;
+      }
+    }
+
     await this.createPane(
       childSessionId,
       parentSessionId,
@@ -584,7 +607,7 @@ export class PaneLifecycle {
     // Per-subagent pane filter: a filtered-out child keeps running normally,
     // only its pane is skipped. Checked before the spawn bookkeeping so the
     // child is neither tracked nor watched for rebuilds.
-    if (!matchesListFilter(subagentType, this.config.agents ?? ['*'])) {
+    if (!matchesListFilter(subagentType, this.agentFilter)) {
       logNoPane(this.logger, 'agent-filtered', {
         childSessionId,
         parentSessionId,

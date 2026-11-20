@@ -314,7 +314,8 @@ Filter which subagents get a pane with `agents`, using the same `"*"` /
 - `["oracle", "fixer"]` opens panes only for those two subagents.
 
 The filter changes panes only: a filtered-out subagent still runs as a normal
-child session; only its pane is skipped.
+child session; only its pane is skipped. Restart the OpenCode TUI after changing
+`multiplexer.agents` so it loads the new filter.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|

@@ -1227,6 +1227,28 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.clock.pendingTimers).toBe(0);
   });
 
+  test('filtered idle history does not evict an eligible historical watch', async () => {
+    const tracked: string[] = [];
+    const h = createHarness({
+      config: { agents: ['*', '!oracle'] },
+      ports: { onChildTracked: (sessionId) => tracked.push(sessionId) },
+    });
+    const excluded = Array.from({ length: 65 }, (_, i) => `excluded-${i}`);
+    h.list.sessions = [
+      { sessionId: CHILD, subagentType: 'fixer' },
+      ...excluded.map((sessionId) => ({ sessionId, subagentType: 'oracle' })),
+    ];
+
+    await h.lifecycle.onReconnect();
+
+    expect(tracked).toEqual([CHILD]);
+    expect(h.lifecycle.directoryOf(CHILD)).toBe(DIRECTORY);
+    expect(excluded.some((id) => h.lifecycle.directoryOf(id))).toBe(false);
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    expect(h.adapter.spawnCalls.map((call) => call.sessionId)).toEqual([CHILD]);
+  });
+
   test('historical backfill preserves a real idle-close watch at the 64-child bound', async () => {
     const h = createHarness();
     const history = Array.from({ length: 65 }, (_, i) => `history-${i}`);
@@ -1428,6 +1450,61 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     });
   });
 
+  for (const resume of ['reconnect', 'busy', 'busy-during-close'] as const) {
+    test(`filtered ${resume} rebuild rejects a newly excluded agent`, async () => {
+      const h = createHarness({ config: { agents: ['*', '!oracle'] } });
+      h.reader.statuses.set(CHILD, 'busy');
+      await h.lifecycle.handleEvent(createdEvent({ subagentType: 'fixer' }));
+      h.reader.statuses.set(CHILD, 'idle');
+      await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+      const close = createDeferred();
+      if (resume === 'busy-during-close') {
+        h.adapter.closeBarrier = close.promise;
+      }
+      h.clock.advance(STABLE_IDLE_MS);
+      await flushAsync();
+      h.list.sessions = [{ sessionId: CHILD, subagentType: 'oracle' }];
+      h.reader.statuses.set(CHILD, 'busy');
+
+      if (resume === 'reconnect') await h.lifecycle.onReconnect();
+      else {
+        await h.lifecycle.handleEvent(
+          lifecycleEvent('status', { status: 'busy' }),
+        );
+      }
+      close.resolve();
+      await flushAsync();
+
+      expect(h.list.calls).toEqual([
+        { directory: DIRECTORY, parentID: PARENT },
+      ]);
+      expect(h.adapter.spawnCalls).toHaveLength(1);
+      expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+      expect(noPaneReasons(h.logger)).toContain('agent-filtered');
+    });
+  }
+
+  test('filtered busy rebuild rechecks the route after its list read', async () => {
+    const h = createHarness({ config: { agents: ['*', '!oracle'] } });
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(createdEvent({ subagentType: 'fixer' }));
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    h.reader.statuses.set(CHILD, 'busy');
+    const barrier = createDeferred();
+    h.list.listBarrier = barrier.promise;
+    const rebuild = h.lifecycle.handleEvent(
+      lifecycleEvent('status', { status: 'busy' }),
+    );
+    expect(h.list.calls).toEqual([{ directory: DIRECTORY, parentID: PARENT }]);
+    h.lifecycle.setDisplayedSession('other-parent');
+    barrier.resolve();
+    await rebuild;
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+  });
+
   test('FR-11 rebuild reproduces the first creation subagent type (3.7)', async () => {
     const h = createHarness();
     h.reader.statuses.set(CHILD, 'busy');
@@ -1448,6 +1525,7 @@ describe('rebuild and reconnect backfill (2.4)', () => {
 
     expect(h.adapter.spawnCalls).toHaveLength(2);
     expect(h.adapter.spawnCalls[1]?.subagentType).toBe('oracle');
+    expect(h.list.calls).toEqual([]);
     // Every input the display name derives from is byte-identical to the
     // first spawn (same session id, same type, same encoded description), so
     // an adapter that names from these options rebuilds the same name.
@@ -1918,7 +1996,8 @@ describe('rebuild and reconnect backfill (2.4)', () => {
 
   test('rebuilds a watched child that turned busy while the stream was down', async () => {
     const h = createHarness();
-    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(createdEvent({ subagentType: 'fixer' }));
     h.reader.statuses.set(CHILD, 'idle');
     await h.lifecycle.handleEvent(lifecycleEvent('idle'));
     h.clock.advance(STABLE_IDLE_MS);
@@ -1926,7 +2005,7 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
 
     // The busy event was lost during the outage; the live status map has it.
-    h.list.setSessionIds(CHILD);
+    h.list.sessions = [{ sessionId: CHILD, subagentType: 'oracle' }];
     h.reader.statuses.set(CHILD, 'busy');
     h.adapter.spawnResult = { success: true, paneId: 'pane-2' };
 
@@ -1934,6 +2013,7 @@ describe('rebuild and reconnect backfill (2.4)', () => {
 
     expect(h.adapter.spawnCalls).toHaveLength(2);
     expect(h.lifecycle.getPane(CHILD)?.paneId).toBe('pane-2');
+    expect(h.adapter.spawnCalls[1]?.subagentType).toBe('fixer');
   });
 
   test('drops a watched child the server no longer has', async () => {

@@ -31,12 +31,13 @@ export function parseList(
     return [];
   }
 
-  const { allow } = splitListFilter(items);
+  const filter = splitListFilter(items);
+  const { allow } = filter;
   if (allow.includes('*')) {
-    return allAvailable.filter((item) => matchesListFilter(item, items));
+    return allAvailable.filter((item) => matchesListFilter(item, filter));
   }
   return allow.filter(
-    (item) => allAvailable.includes(item) && matchesListFilter(item, items),
+    (item) => allAvailable.includes(item) && matchesListFilter(item, filter),
   );
 }
 
