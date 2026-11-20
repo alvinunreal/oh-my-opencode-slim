@@ -82,7 +82,12 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 2. **Version Detection**: Reads plugin version from package.json or uses 'dev'
 3. **Config Validation**: Checks if current directory has valid plugin config
 4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
-   from `tui-state.ts`
+   from `tui-state.ts`, then reconciles the agent map against the live host
+   registry (#1943): a resolved read is reused for a minute, a failed one
+   retries after 5s, and the poll that observes a config change or directory
+   switch reads immediately. A renamed or removed agent loses its row, a
+   locally recorded model still wins (#1133), and a failed read changes
+   nothing
 5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
    advances 100ms animation frames only while agents are active; identical
    model-name refreshes do not rebuild the sidebar

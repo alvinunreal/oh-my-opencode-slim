@@ -154,6 +154,55 @@ describe('v2 sidebar config-state invalidation', () => {
     }
   });
 
+  test('an agent rename in config re-reads the registry on the next poll (#1943)', async () => {
+    writeConfig('alpha');
+    let reads = 0;
+    const ctx = {
+      ...makeContext(),
+      client: {
+        agent: {
+          async list() {
+            reads += 1;
+            return {
+              data: {
+                data: [
+                  {
+                    id: 'explorer',
+                    model: { providerID: 'openai', id: 'gpt-6' },
+                  },
+                ],
+              },
+            };
+          },
+        },
+      },
+    };
+    const cleanup = await tuiPlugin.setup(ctx as unknown as V2Context);
+
+    try {
+      // The registry read is reused for a minute; only a config edit can
+      // force one sooner. Real polling drives this test because the runtime
+      // owns its interval, so a short settle is the only observation seam.
+      await Bun.sleep(40);
+      const before = reads;
+
+      // Same gates (preset name, layout, commands): only the roster content
+      // changed, which is the #1943 rename case.
+      env.writeUserConfig({
+        preset: 'alpha',
+        presets: {
+          alpha: { explorer: { model: 'openai/gpt-6-renamed' } },
+          beta: { explorer: { model: 'anthropic/claude-sonnet-4-5' } },
+        },
+      });
+      await Bun.sleep(60);
+
+      expect(reads).toBeGreaterThan(before);
+    } finally {
+      cleanup?.();
+    }
+  });
+
   test('disposal unregisters the listener: later notifications fail honestly', async () => {
     writeConfig('alpha');
     const ctx = makeContext();

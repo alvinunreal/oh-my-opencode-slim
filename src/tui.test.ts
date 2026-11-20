@@ -14,7 +14,7 @@ import {
   compareAliasNumeric,
   createSerializedRefresh,
   createSidebarInteraction,
-  fetchRemoteAgentModels,
+  fetchRemoteAgentRegistry,
   getActiveSidebarAgentNames,
   getContrastForeground,
   getSidebarActivityIndicator,
@@ -22,11 +22,13 @@ import {
   getSidebarAgentTargets,
   getSidebarReusableTargets,
   hydrateModelNames,
+  hydrateRemoteModels,
   isRefreshCurrent,
   makeRouteNavigator,
   overlaySelectedRootModel,
   paneWiringOptions,
   readConfigState,
+  reconcileAgentModels,
   renderSidebar,
   resolveHoverBackground,
   resolveSelectedRootModel,
@@ -439,16 +441,17 @@ describe('tui sidebar agents', () => {
       },
     };
 
-    const remote = await fetchRemoteAgentModels(client, '/tmp/project');
+    const remote = await fetchRemoteAgentRegistry(client, '/tmp/project');
     expect(seen).toEqual([{ directory: '/tmp/project' }]);
-    expect(remote).toEqual({
+    expect(remote.models).toEqual({
       explorer: 'openai/gpt-6-luna',
       fixer: 'openai/gpt-6',
     });
+    expect(remote.names).toEqual(['explorer', 'fixer', 'unrelated', 'oracle']);
 
     const merged = applyRemoteAgentModels(
       createSnapshot({ agentModels: { explorer: 'local/model' } }),
-      remote,
+      remote.models,
     );
     expect(merged.agentModels).toEqual({
       explorer: 'local/model',
@@ -482,9 +485,9 @@ describe('tui sidebar agents', () => {
       },
     };
 
-    const remote = await fetchRemoteAgentModels(client, '/srv/project');
+    const remote = await fetchRemoteAgentRegistry(client, '/srv/project');
     expect(seen).toEqual([{ location: { directory: '/srv/project' } }]);
-    expect(remote).toEqual({
+    expect(remote.models).toEqual({
       explorer: 'openai/gpt-6-luna',
       fixer: 'openai/gpt-6',
     });
@@ -513,9 +516,9 @@ describe('tui sidebar agents', () => {
       },
     };
 
-    const remote = await fetchRemoteAgentModels(client, '/srv/project');
+    const remote = await fetchRemoteAgentRegistry(client, '/srv/project');
     expect(seen).toEqual([{ location: { directory: '/srv/project' } }]);
-    expect(remote).toEqual({ explorer: 'openai/gpt-6-luna' });
+    expect(remote.models).toEqual({ explorer: 'openai/gpt-6-luna' });
   });
 
   test('keeps dynamic Council seats from the remote list for the sidebar opt-in (#1672)', async () => {
@@ -545,14 +548,17 @@ describe('tui sidebar agents', () => {
       },
     };
 
-    const remote = await fetchRemoteAgentModels(client, '/srv/project');
-    expect(remote).toEqual({
+    const remote = await fetchRemoteAgentRegistry(client, '/srv/project');
+    expect(remote.models).toEqual({
       explorer: 'openai/gpt-6-luna',
       council: 'openai/gpt-6',
       'councillor-alpha': 'anthropic/claude-x',
     });
+    // The roster stays unfiltered: the sidebar prunes against it, so a
+    // marketplace agent the model filter skips keeps its row (#1943).
+    expect(remote.names).toContain('unrelated');
 
-    const snapshot = applyRemoteAgentModels(createSnapshot({}), remote);
+    const snapshot = applyRemoteAgentModels(createSnapshot({}), remote.models);
     expect(getSidebarAgentNames(snapshot)).toEqual(['explorer']);
     expect(getSidebarAgentNames(snapshot, true)).toEqual([
       'explorer',
@@ -562,10 +568,264 @@ describe('tui sidebar agents', () => {
   });
 
   test('remote model fetch is a no-op without a host client', async () => {
-    expect(await fetchRemoteAgentModels(undefined, '/tmp/project')).toEqual({});
+    expect(await fetchRemoteAgentRegistry(undefined, '/tmp/project')).toEqual({
+      models: {},
+      names: [],
+    });
     expect(applyRemoteAgentModels(createSnapshot({}), {}).agentModels).toEqual(
       {},
     );
+  });
+
+  test('prunes a renamed agent and adopts the new live key (#1943)', () => {
+    const snapshot = createSnapshot({
+      agentModels: { glm: 'openai/stale', explorer: 'openai/gpt-6' },
+      agentVariants: { glm: 'high', explorer: 'low' },
+    });
+
+    const next = reconcileAgentModels(snapshot, {
+      models: { GLM: 'anthropic/live', explorer: 'openai/gpt-6' },
+      names: ['GLM', 'explorer', 'build'],
+    });
+
+    expect(next.agentModels).toEqual({
+      explorer: 'openai/gpt-6',
+      GLM: 'anthropic/live',
+    });
+    expect(next.agentVariants).toEqual({ explorer: 'low' });
+  });
+
+  test('drops a removed agent from the sidebar map (#1943)', () => {
+    const snapshot = createSnapshot({
+      agentModels: { oracle: 'openai/gpt-6', explorer: 'openai/gpt-6' },
+    });
+
+    const next = reconcileAgentModels(snapshot, {
+      models: { explorer: 'openai/gpt-6-mini' },
+      names: ['explorer'],
+    });
+
+    expect(next.agentModels).toEqual({ explorer: 'openai/gpt-6' });
+    expect(getSidebarAgentNames(next)).toEqual(['explorer']);
+  });
+
+  test('a failed remote fetch leaves a populated map untouched (#1943)', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { glm: 'openai/stale', explorer: 'openai/gpt-6' },
+    });
+
+    const next = await hydrateRemoteModels(
+      snapshot,
+      undefined,
+      '/srv/project',
+      {},
+      { now: () => 1_000 },
+    );
+
+    expect(next).toBe(snapshot);
+    expect(next.agentModels).toEqual({
+      glm: 'openai/stale',
+      explorer: 'openai/gpt-6',
+    });
+  });
+
+  test('reconcile keeps a roster agent the sidebar model filter skips (#1943)', () => {
+    const snapshot = createSnapshot({
+      agentModels: { marketplace: 'openai/gpt-6', explorer: 'openai/gpt-6' },
+    });
+
+    const next = reconcileAgentModels(snapshot, {
+      models: { explorer: 'openai/gpt-6' },
+      names: ['marketplace', 'explorer', 'build'],
+    });
+
+    expect(next.agentModels).toEqual({
+      marketplace: 'openai/gpt-6',
+      explorer: 'openai/gpt-6',
+    });
+  });
+
+  test('a locally observed model still wins over the live default (#1133)', () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'local/observed' },
+    });
+
+    const next = reconcileAgentModels(snapshot, {
+      models: { explorer: 'openai/gpt-6' },
+      names: ['explorer'],
+    });
+
+    expect(next.agentModels).toEqual({ explorer: 'local/observed' });
+  });
+
+  test('reuses a resolved registry for the TTL and refreshes after it (#1943)', async () => {
+    let calls = 0;
+    const client = {
+      agent: {
+        async list() {
+          calls += 1;
+          return {
+            data: {
+              data: [
+                {
+                  id: 'oracle',
+                  model: { providerID: 'openai', id: 'gpt-5' },
+                },
+                {
+                  id: 'explorer',
+                  model: {
+                    providerID: 'openai',
+                    id: calls === 1 ? 'gpt-6' : 'gpt-7',
+                  },
+                },
+                ...(calls === 1
+                  ? []
+                  : [
+                      {
+                        id: 'fixer',
+                        model: { providerID: 'openai', id: 'gpt-6' },
+                      },
+                    ]),
+              ],
+            },
+          };
+        },
+      },
+    };
+    const cache = {};
+    let clock = 1_000;
+    const now = () => clock;
+    // The panel re-reads the persisted snapshot on every poll; remote fills
+    // are never written back, so each refresh starts from this map.
+    const snapshot = createSnapshot({
+      agentModels: { oracle: 'openai/gpt-6' },
+    });
+
+    const first = await hydrateRemoteModels(
+      snapshot,
+      client,
+      '/srv/project',
+      cache,
+      { now },
+    );
+    expect(calls).toBe(1);
+    expect(first.agentModels).toEqual({
+      oracle: 'openai/gpt-6',
+      explorer: 'openai/gpt-6',
+    });
+
+    clock += 30_000;
+    const cached = await hydrateRemoteModels(
+      snapshot,
+      client,
+      '/srv/project',
+      cache,
+      { now },
+    );
+    expect(calls).toBe(1);
+    expect(cached.agentModels).toEqual(first.agentModels);
+
+    clock += 30_000;
+    const refreshed = await hydrateRemoteModels(
+      snapshot,
+      client,
+      '/srv/project',
+      cache,
+      { now },
+    );
+    expect(calls).toBe(2);
+    expect(refreshed.agentModels).toEqual({
+      oracle: 'openai/gpt-6',
+      explorer: 'openai/gpt-7',
+      fixer: 'openai/gpt-6',
+    });
+  });
+
+  test('a config change forces a read and reconciles a renamed roster (#1943)', async () => {
+    const rosters = [
+      [
+        { id: 'glm', model: { providerID: 'openai', id: 'gpt-6' } },
+        { id: 'explorer', model: { providerID: 'openai', id: 'gpt-6' } },
+      ],
+      [
+        { id: 'fixer', model: { providerID: 'openai', id: 'gpt-7' } },
+        { id: 'explorer', model: { providerID: 'openai', id: 'gpt-6' } },
+      ],
+    ];
+    let calls = 0;
+    const client = {
+      agent: {
+        async list() {
+          const data = rosters[Math.min(calls, rosters.length - 1)];
+          calls += 1;
+          return { data: { data } };
+        },
+      },
+    };
+    const cache = {};
+    let clock = 1_000;
+    const now = () => clock;
+    const snapshot = createSnapshot({
+      agentModels: { glm: 'openai/gpt-6', explorer: 'openai/gpt-6' },
+    });
+
+    const before = await hydrateRemoteModels(
+      snapshot,
+      client,
+      '/srv/project',
+      cache,
+      { now },
+    );
+    expect(calls).toBe(1);
+    expect(before.agentModels).toEqual({
+      glm: 'openai/gpt-6',
+      explorer: 'openai/gpt-6',
+    });
+
+    clock += 1_000;
+    const renamed = await hydrateRemoteModels(
+      snapshot,
+      client,
+      '/srv/project',
+      cache,
+      { now, force: true },
+    );
+    expect(calls).toBe(2);
+    expect(renamed.agentModels).toEqual({
+      explorer: 'openai/gpt-6',
+      fixer: 'openai/gpt-7',
+    });
+  });
+
+  test('a failed read retries after the retry window, not the TTL (#1943)', async () => {
+    let calls = 0;
+    const client = {
+      agent: {
+        async list() {
+          calls += 1;
+          throw new Error('host down');
+        },
+      },
+    };
+    const cache = {};
+    let clock = 1_000;
+    const now = () => clock;
+    const snapshot = createSnapshot({ agentModels: { glm: 'openai/stale' } });
+
+    expect(
+      await hydrateRemoteModels(snapshot, client, '/srv/project', cache, {
+        now,
+      }),
+    ).toBe(snapshot);
+    expect(calls).toBe(1);
+
+    clock += 1_000;
+    await hydrateRemoteModels(snapshot, client, '/srv/project', cache, { now });
+    expect(calls).toBe(1);
+
+    clock += 4_000;
+    await hydrateRemoteModels(snapshot, client, '/srv/project', cache, { now });
+    expect(calls).toBe(2);
   });
 
   test('a stalled remote agent request is cancelled and later refreshes run', async () => {
@@ -590,7 +850,7 @@ describe('tui sidebar agents', () => {
     };
     let commits = 0;
     const refresh = createSerializedRefresh(async () => {
-      await fetchRemoteAgentModels(client, '/project', scheduleTimer);
+      await fetchRemoteAgentRegistry(client, '/project', scheduleTimer);
       commits++;
     });
     refresh();
@@ -3751,7 +4011,7 @@ describe('kill-all running subagents', () => {
     const aborts: string[] = [];
     const client = {
       // v1 marker: app.agents is the exclusive discriminator used by
-      // fetchRemoteAgentModels.
+      // fetchRemoteAgentRegistry.
       app: { agents: async () => ({}) },
       session: {
         abort: async (args: { path: { id: string } }) => {

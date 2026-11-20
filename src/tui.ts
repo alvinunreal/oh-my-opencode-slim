@@ -348,18 +348,38 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
   return models;
 }
 
+function agentNamesFromAgentList(response: unknown): string[] {
+  const names = new Set<string>();
+  for (const entry of unwrapAgentList(response)) {
+    const name = remoteAgentName(entry);
+    if (name) names.add(name);
+  }
+  return [...names];
+}
+
+/** One live-registry read for the sidebar. */
+export interface RemoteAgentRegistry {
+  /** Sidebar-eligible agents only; unrelated host agents stay out of rows. */
+  models: Record<string, string>;
+  /** Every agent the live registry reports, sidebar-eligible or not. */
+  names: readonly string[];
+}
+
 /**
  * Remote-attach fallback (#1133): the server-side plugin writes
  * tui-state.json on the server's filesystem, which a remote TUI cannot
  * see, so every model renders as "pending". Resolve agent models through
- * the host SDK instead. Only fills gaps — local snapshot entries win.
+ * the host SDK instead. `names` is the full live roster: the sidebar
+ * reconciles its persisted map against it so a renamed or removed agent
+ * stops rendering (#1943), while agents this filter skips (marketplace
+ * definitions) keep their snapshot row.
  *
  * v1 TUI (`api.client`, `@opencode-ai/sdk/v2`): `app.agents({ directory })`
  * with `{ name, model: { providerID, modelID } }`.
  * v2 TUI: `agent.list({ location: { directory } })` or
  * `v2.agent.list(...)` with `{ id, model: { providerID, id } }`.
  */
-export async function fetchRemoteAgentModels(
+export async function fetchRemoteAgentRegistry(
   client: unknown,
   directory: string,
   scheduleTimeout: (callback: () => void, delay: number) => () => void = (
@@ -369,7 +389,7 @@ export async function fetchRemoteAgentModels(
     const timer = setTimeout(callback, delay);
     return () => clearTimeout(timer);
   },
-): Promise<Record<string, string>> {
+): Promise<RemoteAgentRegistry> {
   const rec = client as
     | {
         app?: { agents?: unknown };
@@ -377,13 +397,13 @@ export async function fetchRemoteAgentModels(
         v2?: { agent?: { list?: unknown } };
       }
     | undefined;
-  if (!rec) return {};
+  if (!rec) return { models: {}, names: [] };
 
   const v1Agents = asFunction(rec.app?.agents);
   const v2Receiver = rec.agent ?? rec.v2?.agent;
   const receiver = v1Agents ? rec.app : v2Receiver;
   const list = v1Agents ?? asFunction(v2Receiver?.list);
-  if (!list) return {};
+  if (!list) return { models: {}, names: [] };
   const controller = new AbortController();
   let cancelTimeout: (() => void) | undefined;
   try {
@@ -398,9 +418,13 @@ export async function fetchRemoteAgentModels(
       v1Agents ? { directory } : { location: { directory } },
       { signal: controller.signal },
     );
-    return modelsFromAgentList(await Promise.race([request, timeout]));
+    const response = await Promise.race([request, timeout]);
+    return {
+      models: modelsFromAgentList(response),
+      names: agentNamesFromAgentList(response),
+    };
   } catch {
-    return {};
+    return { models: {}, names: [] };
   } finally {
     cancelTimeout?.();
   }
@@ -418,7 +442,52 @@ export function applyRemoteAgentModels(
   };
 }
 
+/** Drop rows whose agent the live registry no longer reports (#1943). */
+function pruneMissingAgents(
+  snapshot: TuiSnapshot,
+  live: ReadonlySet<string>,
+): TuiSnapshot {
+  const stale = Object.keys(snapshot.agentModels).filter(
+    (name) => !live.has(name),
+  );
+  if (stale.length === 0) return snapshot;
+  const agentModels = { ...snapshot.agentModels };
+  const agentVariants = { ...snapshot.agentVariants };
+  for (const name of stale) {
+    delete agentModels[name];
+    delete agentVariants[name];
+  }
+  return { ...snapshot, agentModels, agentVariants };
+}
+
+/**
+ * Reconcile the persisted sidebar map with the live registry (#1943):
+ * agents the registry no longer reports lose their row, missing live agents
+ * are filled in, and a locally recorded model still wins for an agent in
+ * both (#1133). An empty read is a failed/timed-out fetch and changes
+ * nothing.
+ */
+export function reconcileAgentModels(
+  snapshot: TuiSnapshot,
+  remote: RemoteAgentRegistry,
+): TuiSnapshot {
+  if (!registryResolved(remote)) return snapshot;
+  return applyRemoteAgentModels(
+    pruneMissingAgents(snapshot, new Set(remote.names)),
+    remote.models,
+  );
+}
+
+/** A read that found live agents; only those may prune or fill rows. */
+function registryResolved(registry: RemoteAgentRegistry): boolean {
+  return registry.names.length > 0 && Object.keys(registry.models).length > 0;
+}
+
+/** Retry window for a read that came back failed or empty. */
 const REMOTE_RETRY_MS = 5_000;
+
+/** Re-read interval for a resolved registry: the roster rarely changes. */
+const REMOTE_REGISTRY_TTL_MS = 60_000;
 
 const MODEL_NAMES_TTL_MS = 60_000;
 
@@ -430,36 +499,53 @@ export interface ModelNamesCache {
   at?: number;
 }
 
-interface RemoteModelCache {
+export interface RemoteModelCache {
   directory?: string;
-  models?: Record<string, string>;
+  registry?: RemoteAgentRegistry;
   at?: number;
 }
 
-async function hydrateRemoteModels(
+export interface HydrateRemoteModelsOptions {
+  /** Config edit or directory switch: read now, whatever the cache says. */
+  force?: boolean;
+  now?: () => number;
+}
+
+/**
+ * Merge the live registry into the sidebar map. A populated snapshot is not
+ * a reason to stop refreshing (#1943), but a resolved read is reused for
+ * `REMOTE_REGISTRY_TTL_MS`; a failed or empty read retries after
+ * `REMOTE_RETRY_MS` and reconciles nothing. `force` (a config change the
+ * poll observed, or a directory switch, whose cache entry cannot match
+ * anyway) reads immediately so a renamed agent is pruned on that poll.
+ */
+export async function hydrateRemoteModels(
   snapshot: TuiSnapshot,
   client: unknown,
   directory: string,
   cache: RemoteModelCache,
+  options: HydrateRemoteModelsOptions = {},
 ): Promise<TuiSnapshot> {
-  if (Object.keys(snapshot.agentModels).length > 0) return snapshot;
-  const now = Date.now();
-  const cached =
-    cache.directory === directory && cache.models !== undefined
-      ? cache.models
-      : undefined;
-  const cacheFresh =
+  const now = options.now ?? Date.now;
+  const at = now();
+  const cached = cache.directory === directory ? cache.registry : undefined;
+  const window =
+    cached !== undefined && registryResolved(cached)
+      ? REMOTE_REGISTRY_TTL_MS
+      : REMOTE_RETRY_MS;
+  if (
     cached !== undefined &&
-    (Object.keys(cached).length > 0 ||
-      (cache.at !== undefined && now - cache.at < REMOTE_RETRY_MS));
-  if (cached !== undefined && cacheFresh) {
-    return applyRemoteAgentModels(snapshot, cached);
+    cache.at !== undefined &&
+    !options.force &&
+    at - cache.at < window
+  ) {
+    return reconcileAgentModels(snapshot, cached);
   }
-  const models = await fetchRemoteAgentModels(client, directory);
+  const registry = await fetchRemoteAgentRegistry(client, directory);
   cache.directory = directory;
-  cache.models = models;
-  cache.at = now;
-  return applyRemoteAgentModels(snapshot, models);
+  cache.registry = registry;
+  cache.at = at;
+  return reconcileAgentModels(snapshot, registry);
 }
 
 /**
@@ -2228,6 +2314,10 @@ function createSidebarRuntime(
     disabledCommands: gatesRead.gates.disabledCommands,
   });
   let configRenderPending = false;
+  // Set when the config file content changed since the last read: the roster
+  // may have been renamed or trimmed, so the next refresh must not trust the
+  // registry cache. A gate-only comparison misses that (#1943).
+  let configRefreshPending = false;
   const applyConfigState = (fresh = false): boolean => {
     const read = readTuiGates(configDirectory, adapter.hostFlavor, fresh);
     if (read.readFailed) return false;
@@ -2238,6 +2328,7 @@ function createSidebarRuntime(
     ) {
       return false;
     }
+    if (read.fingerprint !== gatesRead.fingerprint) configRefreshPending = true;
     gatesRead = read;
     const next = retainLastGoodConfigState(
       {
@@ -2343,12 +2434,15 @@ function createSidebarRuntime(
         log('[v2][tui] config state read failed', String(err));
       }
     }
+    const forceRemoteRefresh = directoryChanged || configRefreshPending;
     nextSnapshot = await hydrateRemoteModels(
       nextSnapshot,
       adapter.client,
       currentDirectory,
       remoteCache,
+      { force: forceRemoteRefresh },
     );
+    if (forceRemoteRefresh) configRefreshPending = false;
     if (disposed) return;
     // Fold the live picker selection in BEFORE the change check so a new
     // selection triggers requestRender on this poll (server-side state only
@@ -2436,7 +2530,7 @@ function createSidebarRuntime(
           log('[v2][tui] config state read failed', String(err));
           return { ok: false, reason: String(err) };
         }
-        if (changed && sidebarEnabled) {
+        if ((changed || configRefreshPending) && sidebarEnabled) {
           adapter.renderer.requestRender();
           scheduleRefresh();
         }
