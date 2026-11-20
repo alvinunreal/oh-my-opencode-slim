@@ -106,6 +106,36 @@ PRs use a minimal prompt:
 
 The goal is clarity without process overhead.
 
+## Coverage in the CI audit
+
+The test job converts Bun's LCOV report into
+`coverage/coverage-final.json` with `bun run coverage:istanbul`. The
+report-only Fallow job waits for the test job, downloads
+`test-results-bun-pinned` into the checkout, and auto-detects that file for
+CRAP scoring. The audit remains non-blocking and skips when the test job
+fails.
+
+To reproduce from the repository root:
+
+```bash
+bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage
+bun run coverage:istanbul
+npx fallow@3.43.0 audit --base origin/master --no-css
+```
+
+Function coverage is a line-derived approximation. The converter uses
+ast-grep function ranges and marks a function covered when any LCOV line
+inside its range has a hit. Shared lines or nested functions can therefore
+mark an uncalled function covered. The output has binary function hits,
+one synthetic statement per LCOV line, and no branch coverage or invocation
+counts. Functions not reconstructed by ast-grep have no measured function
+coverage; Fallow can fall back to estimates for unmatched functions.
+
+Keep the artifact at `coverage/coverage-final.json`. Both CI jobs use the
+same checkout path; no `--coverage-root` override is needed. In the audit
+JSON, check `complexity.summary.istanbul_matched` is greater than zero to
+confirm measured coverage was matched rather than silently using estimates.
+
 ## Future Changes
 
 If issue volume or maintainer load changes, this document can grow to include:
