@@ -118,7 +118,7 @@ oh-my-opencode-slim/
    - Keep examples, command snippets, and feature lists in sync with the code
    - If no doc update is needed, explicitly confirm that in your final summary
 3. Run `bun run check:ci` to verify linting and formatting
-4. Run `bun run typecheck` to verify types
+4. Run `bun run typecheck` to verify types, and `bun run knip --max-issues=0` for the dead-code gate
 5. Run `bun test` to verify tests pass
 6. Commit changes. Eval outputs are ignored run artifacts; do not commit edits made by eval sessions.
 
