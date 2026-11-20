@@ -1,4 +1,5 @@
 import type { AgentName } from './constants';
+import { matchesListFilter, splitListFilter } from './list-filter';
 import type { RuntimeConfig } from './runtime';
 import type { AgentOverrideConfig } from './schema';
 import { lookupWithAliases } from './utils';
@@ -17,7 +18,10 @@ export const DEFAULT_AGENT_MCPS: Record<AgentName, string[]> = {
 };
 
 /**
- * Parse a list with wildcard and exclusion syntax.
+ * Parse a list with wildcard and exclusion syntax against the available names.
+ * The wildcard/exclusion decision lives in `matchesListFilter`, shared with the
+ * multiplexer pane filter; the result keeps the source order (the allow list's
+ * order, or the available set's order when `"*"` is present).
  */
 export function parseList(
   items: readonly string[],
@@ -27,19 +31,12 @@ export function parseList(
     return [];
   }
 
-  const allow = items.filter((i) => !i.startsWith('!'));
-  const deny = items.filter((i) => i.startsWith('!')).map((i) => i.slice(1));
-
-  if (deny.includes('*')) {
-    return [];
-  }
-
+  const { allow } = splitListFilter(items);
   if (allow.includes('*')) {
-    return allAvailable.filter((item) => !deny.includes(item));
+    return allAvailable.filter((item) => matchesListFilter(item, items));
   }
-
   return allow.filter(
-    (item) => !deny.includes(item) && allAvailable.includes(item),
+    (item) => allAvailable.includes(item) && matchesListFilter(item, items),
   );
 }
 

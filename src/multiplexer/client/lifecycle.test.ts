@@ -469,6 +469,48 @@ describe('event filtering and readiness (2.2)', () => {
     expect(h.lifecycle.getPane(CHILD)?.subagentType).toBeUndefined();
   });
 
+  test('the default ["*"] pane filter opens a pane for every subagent', async () => {
+    const h = createHarness({ config: { agents: ['*'] } });
+    h.reader.statuses.set(CHILD, 'busy');
+
+    await h.lifecycle.handleEvent(createdEvent({ subagentType: 'explorer' }));
+
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+    expect(h.lifecycle.getPane(CHILD)?.subagentType).toBe('explorer');
+  });
+
+  test('an excluded subagent opens no pane and is not tracked', async () => {
+    const h = createHarness({ config: { agents: ['*', '!explorer'] } });
+    h.reader.statuses.set(CHILD, 'busy');
+
+    await h.lifecycle.handleEvent(createdEvent({ subagentType: 'explorer' }));
+
+    expect(h.adapter.spawnCalls).toHaveLength(0);
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+    expect(noPaneReasons(h.logger)).toEqual(['agent-filtered']);
+    expect(h.logger.entries[0]?.data).toMatchObject({
+      childSessionId: CHILD,
+      parentSessionId: PARENT,
+      subagentType: 'explorer',
+    });
+  });
+
+  test('an allow list opens a pane only for the listed subagents', async () => {
+    const h = createHarness({ config: { agents: ['oracle', 'fixer'] } });
+
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(createdEvent({ subagentType: 'oracle' }));
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+
+    const excluded = 'child-2';
+    h.reader.statuses.set(excluded, 'busy');
+    await h.lifecycle.handleEvent(
+      createdEvent({ sessionId: excluded, subagentType: 'explorer' }),
+    );
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+    expect(h.lifecycle.getPane(excluded)).toBeUndefined();
+  });
+
   test('falls back to the unknown anchor without blocking creation', async () => {
     const h = createHarness();
     h.setAnchoredTarget(null);

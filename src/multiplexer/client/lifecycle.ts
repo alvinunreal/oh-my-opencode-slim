@@ -9,6 +9,7 @@
  * It never reads the environment or performs IO itself.
  */
 
+import { matchesListFilter } from '../../config/list-filter';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 import {
   type DiagnosticLogger,
@@ -58,6 +59,11 @@ export interface PaneLifecycleConfig {
     PaneSpawnOptions,
     'viewerFlavor' | 'viewerPassword' | 'viewerSurface'
   >;
+  /**
+   * Which subagents get a pane (`"*"` / `"!name"` list). Omitted means every
+   * child, matching the schema default.
+   */
+  agents?: readonly string[];
 }
 
 /** Anchor recorded when the wiring cannot resolve a native anchor. */
@@ -574,6 +580,19 @@ export class PaneLifecycle {
       this.deletedSessions.has(childSessionId)
     )
       return;
+
+    // Per-subagent pane filter: a filtered-out child keeps running normally,
+    // only its pane is skipped. Checked before the spawn bookkeeping so the
+    // child is neither tracked nor watched for rebuilds.
+    if (!matchesListFilter(subagentType, this.config.agents ?? ['*'])) {
+      logNoPane(this.logger, 'agent-filtered', {
+        childSessionId,
+        parentSessionId,
+        adapter: adapterType,
+        ...(subagentType === undefined ? {} : { subagentType }),
+      });
+      return;
+    }
 
     // Creation supersedes any pending rebuild watch for this child; the watch
     // is dropped only once the pane exists, so a failed attempt (readiness

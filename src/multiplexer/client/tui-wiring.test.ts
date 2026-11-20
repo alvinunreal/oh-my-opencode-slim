@@ -312,7 +312,12 @@ function defaultConfig(
   type: MultiplexerConfig['type'] = 'auto',
 ): LoadedPaneConfig {
   return {
-    multiplexer: { type, layout: 'main-vertical', main_pane_size: 60 },
+    multiplexer: {
+      type,
+      layout: 'main-vertical',
+      main_pane_size: 60,
+      agents: ['*'],
+    },
     invalid: false,
   };
 }
@@ -920,6 +925,7 @@ describe('project config reading (FR-12)', () => {
         layout: 'tiled',
         main_pane_size: 70,
         equalize_panes: true,
+        agents: ['*'],
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -1552,6 +1558,42 @@ describe('pane title encoding at spawn (FR-8)', () => {
     // The core never folds the type into the encoded description: adapters
     // that need a display name compute it from the options.
     expect(spawn?.description).toBe(`omosc:4242:${CHILD}`);
+  });
+
+  test('multiplexer.agents filters panes end to end', async () => {
+    const state = createClientState({
+      statuses: {
+        [CHILD]: { type: 'busy' },
+        child2: { type: 'busy' },
+      },
+    });
+    const h = await createHarness({
+      state,
+      config: {
+        multiplexer: {
+          type: 'tmux',
+          layout: 'main-vertical',
+          main_pane_size: 60,
+          agents: ['*', '!explorer'],
+        },
+        invalid: false,
+      },
+    });
+
+    h.bus.emit(
+      'session.created',
+      createdEvent(CHILD, PARENT, DIRECTORY, 'explorer'),
+    );
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(0);
+
+    h.bus.emit(
+      'session.created',
+      createdEvent('child2', PARENT, DIRECTORY, 'oracle'),
+    );
+    await flush();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(1);
+    expect(h.adapters.get('tmux')?.spawns[0]?.subagentType).toBe('oracle');
   });
 
   test('all four non-cmux adapters receive the byte-identical encoding (3.8)', async () => {

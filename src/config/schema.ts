@@ -177,15 +177,24 @@ const MultiplexerViewerSchema = z.enum(['tui', 'mini']);
 export type MultiplexerViewer = z.infer<typeof MultiplexerViewerSchema>;
 
 /**
+ * Which subagents get a pane, in the shared `"*"` / `"!name"` list syntax.
+ * `["*"]` (default) opens a pane for every child, `["*", "!explorer"]` skips
+ * the excluded ones, and `["oracle", "fixer"]` opens panes only for the
+ * listed names. The filtered-out child still runs; only its pane is skipped.
+ */
+const MultiplexerAgentsSchema = z.array(z.string());
+
+/**
  * Invalid `type` / `layout` / `main_pane_size` / `cmux_tui_binary` / `viewer` /
- * `equalize_panes` values disable pane management with one diagnostic.
+ * `equalize_panes` / `agents` values disable pane management with one
+ * diagnostic.
  */
 export const MULTIPLEXER_INVALID_VALUE_MESSAGE =
   'Invalid multiplexer config value; pane management is disabled. Expected ' +
   'type (auto|tmux|zellij|herdr|kitty|wezterm|orca|cmux-tui|none), layout ' +
   '(main-horizontal|main-vertical|tiled|even-horizontal|even-vertical), ' +
   'main_pane_size (20-80), cmux_tui_binary (non-empty string), ' +
-  'viewer (tui|mini), equalize_panes (boolean).';
+  'viewer (tui|mini), equalize_panes (boolean), agents (string array).';
 
 export const MULTIPLEXER_RENAMED_TYPE_MESSAGE =
   'multiplexer.type "cmux" was renamed to "cmux-tui"; update your config.';
@@ -257,6 +266,12 @@ function invalidMultiplexerKeys(config: Record<string, unknown>): string[] {
   ) {
     invalid.push('equalize_panes');
   }
+  if (
+    'agents' in config &&
+    !MultiplexerAgentsSchema.safeParse(config.agents).success
+  ) {
+    invalid.push('agents');
+  }
   return invalid;
 }
 
@@ -265,9 +280,9 @@ function invalidMultiplexerKeys(config: Record<string, unknown>): string[] {
  *
  * Semantics (spec "配置面"):
  * - an invalid `type` / `layout` / `main_pane_size` / `cmux_tui_binary` /
- *   `viewer` / `equalize_panes` value (or a non-object `multiplexer` value)
- *   disables pane management (`type: "none"`) with a once-per-process
- *   diagnostic instead of failing the whole plugin config;
+ *   `viewer` / `equalize_panes` / `agents` value (or a non-object
+ *   `multiplexer` value) disables pane management (`type: "none"`) with a
+ *   once-per-process diagnostic instead of failing the whole plugin config;
  * - the old `cmux` type value is a hard rename to `cmux-tui` (no alias): it
  *   goes through the same invalid-value path, plus a specific
  *   once-per-process diagnostic naming the replacement.
@@ -335,6 +350,12 @@ export const MultiplexerConfigStrictSchema = z.object({
   equalize_panes: MultiplexerEqualizePanesSchema.default(true).describe(
     'Herdr only: re-equalize the agent panes after each spawn and ' +
       'agent-pane close. Set false to keep manual pane sizes.',
+  ),
+  agents: MultiplexerAgentsSchema.default(['*']).describe(
+    'Which subagents get a pane: ["*"] (default) opens one for every child, ' +
+      '["*", "!explorer"] opens one for every child except the excluded ' +
+      'names, and ["oracle", "fixer"] opens one only for the listed names. A ' +
+      'filtered-out subagent still runs; only its pane is skipped.',
   ),
   zellij_pane_mode: z
     .never({ error: 'multiplexer.zellij_pane_mode was removed' })

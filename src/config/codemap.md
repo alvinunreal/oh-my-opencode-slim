@@ -30,6 +30,7 @@ The config system follows a layered architecture:
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
 | `AgentMcpPolicy` | Per-agent default MCP lists and wildcard/exclusion parsing | agent-mcps.ts |
+| `ListFilter` | Shared `"*"` / `"!name"` list splitter and predicate (agent skills/MCPs, multiplexer pane filter) | list-filter.ts |
 | `ProviderModelIdSchema` | Zod schema enforcing `provider/model` ID format (provider segment excludes slashes/whitespace) | model-id-schema.ts |
 | Preset resolver | Preset normalization, layered merge (`mergePresetMaps`), and depth-first named-preset resolution (`resolvePresets` atomic, `PresetResolutionError` on unresolvable refs) | presets.ts |
 | `discoverProjectLocalSkillNames` | Current and ancestor `.opencode/skills` discovery from `SKILL.md` frontmatter names, symlink-confined to each location | project-skills.ts |
@@ -242,5 +243,6 @@ Configuration loading is tested via:
 - `src/config/schema.test.ts`: Schema validation and type inference
 - `src/config/utils.test.ts`: Agent configuration utilities
 - `src/config/agent-mcps.test.ts`: MCP permission resolution
+- `src/config/list-filter.test.ts`: Shared `"*"` / `"!name"` list predicate
 - `src/config/council-schema.test.ts`: Council configuration validation
 - `src/config/runtime.test.ts`: RuntimeConfig seeding, derived getters, preset state, and host capture
