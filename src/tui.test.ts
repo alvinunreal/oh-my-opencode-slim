@@ -446,6 +446,7 @@ describe('tui sidebar agents', () => {
     expect(remote.models).toEqual({
       explorer: 'openai/gpt-6-luna',
       fixer: 'openai/gpt-6',
+      unrelated: 'x/y',
     });
     expect(remote.names).toEqual(['explorer', 'fixer', 'unrelated', 'oracle']);
 
@@ -490,6 +491,7 @@ describe('tui sidebar agents', () => {
     expect(remote.models).toEqual({
       explorer: 'openai/gpt-6-luna',
       fixer: 'openai/gpt-6',
+      unrelated: 'x/y',
     });
   });
 
@@ -553,9 +555,10 @@ describe('tui sidebar agents', () => {
       explorer: 'openai/gpt-6-luna',
       council: 'openai/gpt-6',
       'councillor-alpha': 'anthropic/claude-x',
+      unrelated: 'x/y',
     });
-    // The roster stays unfiltered: the sidebar prunes against it, so a
-    // marketplace agent the model filter skips keeps its row (#1943).
+    // Both reads retain custom identities, but unqualified foreign agents
+    // must not gain a sidebar row just because their models are available.
     expect(remote.names).toContain('unrelated');
 
     const snapshot = applyRemoteAgentModels(createSnapshot({}), remote.models);
@@ -577,22 +580,32 @@ describe('tui sidebar agents', () => {
     );
   });
 
-  test('prunes a renamed agent and adopts the new live key (#1943)', () => {
+  test('prunes a renamed agent without adopting unqualified custom rows (#1943)', () => {
     const snapshot = createSnapshot({
       agentModels: { glm: 'openai/stale', explorer: 'openai/gpt-6' },
       agentVariants: { glm: 'high', explorer: 'low' },
     });
 
     const next = reconcileAgentModels(snapshot, {
-      models: { GLM: 'anthropic/live', explorer: 'openai/gpt-6' },
-      names: ['GLM', 'explorer', 'build'],
+      models: { unrelated: 'anthropic/live', explorer: 'openai/gpt-6' },
+      names: ['unrelated', 'explorer', 'build'],
     });
 
     expect(next.agentModels).toEqual({
       explorer: 'openai/gpt-6',
-      GLM: 'anthropic/live',
     });
     expect(next.agentVariants).toEqual({ explorer: 'low' });
+  });
+
+  test('an ambiguous case-only rename does not qualify a custom row (#1943)', () => {
+    const next = reconcileAgentModels(
+      createSnapshot({ agentModels: { glm: 'local/stale' } }),
+      {
+        models: { GLM: 'remote/one', Glm: 'remote/two' },
+        names: ['GLM', 'Glm'],
+      },
+    );
+    expect(next.agentModels).toEqual({});
   });
 
   test('drops a removed agent from the sidebar map (#1943)', () => {
@@ -607,6 +620,28 @@ describe('tui sidebar agents', () => {
 
     expect(next.agentModels).toEqual({ explorer: 'openai/gpt-6' });
     expect(getSidebarAgentNames(next)).toEqual(['explorer']);
+  });
+
+  test('reconciliation reuses proven display aliases but not a new canonical ID (#1943)', () => {
+    const aliased = reconcileAgentModels(
+      createSnapshot({
+        agentModels: { 'Research Lead': 'local/observed' },
+        agentDisplayNames: { oracle: 'Research Lead' },
+      }),
+      { names: ['oracle'], models: {} },
+    );
+    expect(aliased.agentModels).toEqual({ 'Research Lead': 'local/observed' });
+    expect(aliased.agentDisplayNames).toEqual({ oracle: 'Research Lead' });
+
+    const newID = reconcileAgentModels(
+      createSnapshot({
+        agentModels: { glm: 'local/stale', GLM: 'local/current' },
+        agentDisplayNames: { glm: 'GLM' },
+      }),
+      { names: ['GLM'], models: {} },
+    );
+    expect(newID.agentModels).toEqual({ GLM: 'local/current' });
+    expect(newID.agentDisplayNames).toEqual({});
   });
 
   test('a failed remote fetch leaves a populated map untouched (#1943)', async () => {
@@ -629,20 +664,28 @@ describe('tui sidebar agents', () => {
     });
   });
 
-  test('reconcile keeps a roster agent the sidebar model filter skips (#1943)', () => {
+  test('a roster without eligible models still prunes stale rows and uses the TTL (#1943)', async () => {
     const snapshot = createSnapshot({
-      agentModels: { marketplace: 'openai/gpt-6', explorer: 'openai/gpt-6' },
+      agentModels: { marketplace: 'openai/gpt-6', stale: 'openai/gpt-6' },
     });
-
-    const next = reconcileAgentModels(snapshot, {
-      models: { explorer: 'openai/gpt-6' },
-      names: ['marketplace', 'explorer', 'build'],
+    let reads = 0;
+    const client = {
+      agent: {
+        async list() {
+          reads += 1;
+          return { data: [{ id: 'marketplace' }, { id: 'build' }] };
+        },
+      },
+    };
+    const cache = {};
+    const next = await hydrateRemoteModels(snapshot, client, '/srv', cache, {
+      now: () => 1_000,
     });
-
-    expect(next.agentModels).toEqual({
-      marketplace: 'openai/gpt-6',
-      explorer: 'openai/gpt-6',
+    expect(next.agentModels).toEqual({ marketplace: 'openai/gpt-6' });
+    await hydrateRemoteModels(snapshot, client, '/srv', cache, {
+      now: () => 6_000,
     });
+    expect(reads).toBe(1);
   });
 
   test('a locally observed model still wins over the live default (#1133)', () => {
@@ -2370,13 +2413,214 @@ describe('clickable sidebar sessions', () => {
         listeners.set(type, handlers);
         return () => handlers.delete(handler);
       },
-      emit: (type: string) => {
+      emit: (type: string, location?: { directory: string }) => {
         for (const listener of listeners.get(type) ?? []) {
-          listener({ type, data: { sessionID: 'child' } });
+          listener({ type, location, data: { sessionID: 'child' } });
         }
       },
     };
   }
+
+  for (const scenario of [
+    'observed team',
+    'new canonical label',
+    'team fill',
+    'case-only rename',
+    'removed roster',
+  ] as const) {
+    test(`live registry final rows: ${scenario} (#1943)`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-roster-'));
+      const restore = withIsolatedDataHome(root);
+      const configDir = path.join(root, '.opencode');
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(configDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({ sessionPresetRouting: true, compactSidebar: false }),
+      );
+      let mounted:
+        | Awaited<ReturnType<typeof mountClickableSidebar>>
+        | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        updateSnapshot(root, (snapshot) => {
+          snapshot.agentModels = { glm: 'openai/stale', GLM: '' };
+          if (scenario === 'team fill' || scenario === 'case-only rename')
+            delete snapshot.agentModels.GLM;
+          snapshot.agentVariants = { glm: 'stale' };
+          if (scenario === 'new canonical label') {
+            snapshot.agentDisplayNames = { glm: 'GLM' };
+          }
+          if (scenario !== 'team fill') {
+            snapshot.sessionModels = {
+              root: {
+                glm: { model: 'openai/stale-root' },
+                ...(scenario === 'case-only rename'
+                  ? {}
+                  : { GLM: { model: 'zai/glm-5.3', variant: 'high' } }),
+              },
+              child: { glm: { model: 'openai/stale-child' } },
+            };
+            snapshot.sessionParents = { child: 'root' };
+            snapshot.activeSessions = { child: 'glm' };
+          }
+        });
+        const persisted = readTuiSnapshot(root);
+        mounted = await mountClickableSidebar({
+          projectDir: root,
+          sessionID: 'root',
+          waitForInitialRefresh: true,
+          client: {
+            agent: {
+              list: async () => {
+                return {
+                  data: [
+                    ...(scenario === 'removed roster'
+                      ? []
+                      : [
+                          {
+                            id: 'GLM',
+                            name: 'GLM display',
+                            model: { providerID: 'remote', id: 'glm-live' },
+                          },
+                        ]),
+                    {
+                      id: 'foreign',
+                      name: 'Foreign agent',
+                      model: { providerID: 'remote', id: 'unrelated' },
+                    },
+                  ],
+                };
+              },
+            },
+            rpc: () => ({
+              read: async () => ({
+                sessionID: 'root',
+                status: 'bound',
+                presetName: 'saved',
+                affects: 'future-children-only',
+                team: {
+                  agentModels: {
+                    glm: 'openai/stale-team',
+                    ...(scenario === 'team fill' ? { GLM: '' } : {}),
+                  },
+                  agentVariants: {},
+                  inheritance: {},
+                },
+              }),
+            }),
+          },
+        });
+        screen = await testRender(
+          () => mounted?.slotPlugin.slots.sidebar_content() as never,
+          { width: 68, height: 24 },
+        );
+        await screen.renderOnce();
+        const frame = screen.captureCharFrame();
+        expect(frame).not.toContain('glm ');
+        expect(frame).not.toContain('stale');
+        expect(frame).not.toContain('foreign');
+        if (scenario === 'removed roster') {
+          expect(frame).not.toContain('GLM');
+          expect(frame).not.toContain('orchestrator');
+          expect(frame).not.toContain('explorer');
+        } else if (
+          scenario === 'team fill' ||
+          scenario === 'case-only rename'
+        ) {
+          expect(frame).toMatch(/• GLM\s+provider\s+remote\s+model\s+glm-live/);
+        } else {
+          expect(frame).toMatch(
+            /• GLM\s+provider\s+zai\s+model\s+glm-5\.3\s+variant\s+high/,
+          );
+        }
+        expect(readTuiSnapshot(root)).toEqual(persisted);
+      } finally {
+        screen?.renderer.destroy();
+        for (const dispose of mounted?.disposers ?? []) dispose();
+        restore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test('host catalog update repaints saved session rows with a warm cache and unchanged Slim config (#1943)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-roster-change-'));
+    const restore = withIsolatedDataHome(root);
+    const configDir = path.join(root, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(configPath, '{"sessionPresetRouting":true}');
+    const data = fakeHostData({
+      id: 'root',
+      agent: 'orchestrator',
+      time: { created: 1 },
+    });
+    let live = true;
+    let reads = 0;
+    const refreshed = Promise.withResolvers<void>();
+    let presetReads = 0;
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      updateSnapshot(root, (snapshot) => {
+        snapshot.agentModels = { explorer: 'openai/gpt-6' };
+        snapshot.sessionModels = { root: { GLM: { model: 'zai/glm-5.3' } } };
+      });
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        waitForInitialRefresh: true,
+        client: {
+          rpc: () => ({
+            read: async () => {
+              if (++presetReads === 2) refreshed.resolve();
+              return {
+                sessionID: 'root',
+                status: 'unbound',
+                presetName: null,
+                affects: 'future-children-only',
+              };
+            },
+          }),
+          agent: {
+            list: async () => {
+              reads += 1;
+              return {
+                data: [
+                  { id: 'explorer' },
+                  ...(live ? [{ id: 'GLM', name: 'Display label' }] : []),
+                ],
+              };
+            },
+          },
+        },
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 68, height: 20 },
+      );
+      await screen.renderOnce();
+      expect(screen.captureCharFrame()).toContain('glm-5.3');
+      expect(reads).toBe(1);
+      expect(data.listeners.get('agent.updated')?.size).toBe(1);
+      live = false;
+      data.emit('agent.updated', { directory: root });
+      await refreshed.promise;
+      await tick();
+      await screen.renderOnce();
+      expect(reads).toBe(2);
+      expect(screen.captureCharFrame()).not.toContain('GLM');
+      expect(screen.captureCharFrame()).toContain('gpt-6');
+      for (const dispose of mounted.disposers.splice(0)) dispose();
+      expect(data.listeners.get('agent.updated')?.size).toBe(0);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test('host overlay excludes stale rows before the first refresh completes', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-initial-'));

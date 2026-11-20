@@ -81,13 +81,14 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 1. **Plugin Registration**: TUI plugin registered with OpenCode's TUI system via `tui` export
 2. **Version Detection**: Reads plugin version from package.json or uses 'dev'
 3. **Config Validation**: Checks if current directory has valid plugin config
-4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
-   from `tui-state.ts`, then reconciles the agent map against the live host
-   registry (#1943): a resolved read is reused for a minute, a failed one
-   retries after 5s, and the poll that observes a config change or directory
-   switch reads immediately. A renamed or removed agent loses its row, a
-   locally recorded model still wins (#1133), and a failed read changes
-   nothing
+4. **Snapshot Loading**: Reads `tui-state.ts` and reconciles sidebar rows against
+   the host catalog after applying the saved session and team projections
+   (#1943). A nonempty roster is cached for a minute even if its agents have no
+   explicit models; failed or empty reads leave rows alone and retry after 5s.
+   Slim config changes, directory switches, and the v2 host's `agent.updated`
+   event (including after `/reload`) bypass the cache. Live models fill gaps
+   without replacing local selections (#1133) or adding unrelated host rows.
+   An unambiguous case-only rename carries the row, not its old model or variant.
 5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
    advances 100ms animation frames only while agents are active; identical
    model-name refreshes do not rebuild the sidebar
