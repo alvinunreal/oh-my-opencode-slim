@@ -1059,6 +1059,26 @@ describe('plugin built-in agent disabling', () => {
     }
   });
 
+  test('replaceBuiltinSubagents: false leaves the host roster untouched', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        replaceBuiltinSubagents: false,
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const hostConfig: Record<string, unknown> = { agent: {} };
+      await hooks.config?.(hostConfig);
+      const agent = hostConfig.agent as Record<string, unknown>;
+      expect(agent).not.toHaveProperty('general');
+      expect(agent).not.toHaveProperty('explore');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('#1582 overrides an injected disable shape after a user edits the entry', async () => {
     const hooks = await createHooks();
     try {
@@ -2628,6 +2648,86 @@ describe('plugin config model inheritance', () => {
     );
   }
 
+  test('native observed identities do not acquire Slim configuration-alias chains', async () => {
+    const hooks = await loadConfiguredPlugin({
+      replaceBuiltinSubagents: false,
+      liveConfigRefresh: false,
+      fallback: { maxRetries: 0 },
+      agents: {
+        explore: {
+          model: ['test/slim', 'backup/slim'],
+          displayName: 'Scout',
+        },
+      },
+      presets: { named: { explorer: { temperature: 0.2 } } },
+    });
+    try {
+      const hostConfig: { agent?: Record<string, unknown> } = {};
+      await hooks.config?.(hostConfig);
+      expect(hostConfig.agent?.explorer).toMatchObject({ model: 'test/slim' });
+      const switchModel = mock(async () => ({}));
+      const observe = async (sessionID: string, agent: string) => {
+        const output = { message: { agent } };
+        await hooks['chat.message']?.(
+          {
+            sessionID,
+            agent,
+            model: { providerID: 'test', modelID: 'slim' },
+          } as never,
+          output as never,
+        );
+        return output.message.agent;
+      };
+      const retry = (sessionID: string) =>
+        hooks['v2.session.retry']?.(
+          {
+            sessionID,
+            model: { providerID: 'test', id: 'slim' },
+            error: { type: 'provider.rate-limit', message: 'rate limit' },
+            decision: { retry: true },
+          } as never,
+          switchModel as never,
+        );
+      expect(await observe('native', 'explore')).toBe('explore');
+      await retry('native');
+      expect(switchModel).not.toHaveBeenCalled();
+      for (const options of [
+        undefined,
+        { presetName: 'named', detached: true },
+      ]) {
+        const result = await hooks['v2.refreshProfiles'](options);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error(result.reason);
+        expect(result.bundle.profiles.explore).toBeUndefined();
+        expect(result.bundle.chains.explore).toBeUndefined();
+        expect(result.bundle.chains.explorer).toEqual([
+          { id: 'test/slim' },
+          { id: 'backup/slim' },
+        ]);
+        expect(result.bundle.chains.Scout).toEqual(
+          result.bundle.chains.explorer,
+        );
+      }
+      const savedChain = [{ id: 'test/slim' }, { id: 'backup/slim' }];
+      hooks['v2.pinSessionChains']('switched', {
+        explorer: savedChain,
+        explore: savedChain,
+      });
+      expect(await observe('switched', 'Scout')).toBe('explorer');
+      expect(await observe('switched', 'explore')).toBe('explore');
+      await retry('switched');
+      expect(switchModel).not.toHaveBeenCalled();
+      expect(await observe('slim', 'Scout')).toBe('explorer');
+      await retry('slim');
+      expect(switchModel).toHaveBeenCalledWith('slim', {
+        providerID: 'backup',
+        id: 'slim',
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v2 provider fallback routes to the first healthy child entry with its variant', async () => {
     const hooks = await loadConfiguredPlugin(
       {
@@ -2950,6 +3050,46 @@ describe('plugin config model inheritance', () => {
       }
     },
   );
+
+  test('Council seat assembly uses the finalized host display name', async () => {
+    const hooks = await loadConfiguredPlugin({
+      backgroundJobs: { mode: 'off' },
+      council: {
+        presets: { default: { alpha: { model: 'test/councillor' } } },
+      },
+      agents: { council: { displayName: 'PluginJudge' } },
+    });
+    try {
+      await hooks.config?.({
+        agent: { council: { displayName: 'HostJudge' } },
+      });
+      const prompt = 'Question?\nSeats: earl-1';
+      for (const [name, expected] of [
+        [
+          'HostJudge',
+          'Question?\n\n## Seat: earl-1\n[no response — unresolved ref]',
+        ],
+        ['PluginJudge', prompt],
+        [
+          'council',
+          'Question?\n\n## Seat: earl-1\n[no response — unresolved ref]',
+        ],
+      ]) {
+        const output = { args: { subagent_type: name, prompt } };
+        await hooks['tool.execute.before']?.(
+          {
+            tool: 'task',
+            sessionID: 'ses_parent',
+            callID: `call_${name}`,
+          },
+          output,
+        );
+        expect(output.args.prompt).toBe(expected);
+      }
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
 
   test('config() keeps compaction exception after host council prompt override', async () => {
     const hooks = await loadConfiguredPlugin({

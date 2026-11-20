@@ -25,7 +25,10 @@ continuation when the switch succeeds.
   if the turn and observed model still match. An in-flight switch prevents a
   concurrent attempt for the same session.
 - Chains are pinned per session from the generation published by `src/index.ts`.
-  A known agent uses its own chain. When the agent is unknown, resolution may
+  A known agent uses its own chain. A missing agent entry adopts its live
+  chain into the existing session pin on first use, preserving models and
+  variants across later refreshes. An explicit empty entry stays disabled.
+  When the agent is unknown, resolution may
   infer a chain from the current model or merge the available chains.
 - Selection skips tried models and provider marks for the session and its
   parent. Request-scoped rejections remain excluded for the request. The last
@@ -53,7 +56,12 @@ to its parent. Host calls are bounded by timeouts.
 - `sessionModel` tracks observed models; `activeFallback` records confirmed
   switches. An external selection of a different model clears the fallback
   record and its provider marks.
-- `sessionAgent`, `sessionParent`, and pinned chains determine routing.
+- `sessionAgent`, `sessionParent`, and pinned chains determine routing. Observed
+  agent changes replace attribution; a valid current host agent hint takes
+  precedence over a stored identity, including agents without a Slim chain.
+  The registered name selects the chain. Restoration compares canonical
+  owners and drops the old restore state when the owner changes, including
+  when the existing host session lookup first sees the change.
 - `sessionTried`, `sessionRetries`, `requestRejected`, `authGrace`, and
   `chainExhaustion` track the current descent. Confirmed recovery, deletion,
   or an observed return to an eligible primary can re-arm the descent.

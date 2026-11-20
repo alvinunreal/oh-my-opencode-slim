@@ -79,6 +79,34 @@ describe('getAgentMcpList rename continuity', () => {
   });
 });
 
+describe('getAgentMcpList dynamic council seats', () => {
+  test('seats inherit the shared agents.councillor MCP list', () => {
+    const runtime = runtimeFor({
+      agents: { councillor: { mcps: ['shared-mcp'] } },
+    });
+    expect(getAgentMcpList('councillor-alpha', runtime)).toEqual([
+      'shared-mcp',
+    ]);
+    expect(getAgentMcpList('councillor-beta', runtime)).toEqual(['shared-mcp']);
+  });
+
+  test('per-seat mcps win over the shared councillor list', () => {
+    const runtime = runtimeFor({
+      agents: {
+        councillor: { mcps: ['shared-mcp'] },
+        'councillor-alpha': { mcps: ['seat-mcp'] },
+      },
+    });
+    expect(getAgentMcpList('councillor-alpha', runtime)).toEqual(['seat-mcp']);
+    expect(getAgentMcpList('councillor-beta', runtime)).toEqual(['shared-mcp']);
+  });
+
+  test('without a shared list seats keep the councillor default', () => {
+    const runtime = runtimeFor({});
+    expect(getAgentMcpList('councillor-alpha', runtime)).toEqual([]);
+  });
+});
+
 describe('getAgentMcpList pass-local agents record', () => {
   test('uses the provided record instead of deriving from the runtime', () => {
     const runtime = runtimeFor({

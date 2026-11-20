@@ -25,11 +25,7 @@ import {
 } from '../utils/agent-variant';
 import { parseModelRef } from '../v2/adapters';
 
-import {
-  createCouncilAgent,
-  ensureCouncilCompactionException,
-  ensureCouncilSynthesisReinforcement,
-} from './council';
+import { createCouncilAgent, ensureCouncilPrompt } from './council';
 import { buildCouncillorAgents, councillorSeatNames } from './council-agents';
 import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
@@ -1119,13 +1115,7 @@ function createAgentViews(
         customPrompts.appendPrompt,
       );
       if (name === 'council') {
-        // resolvePrompt above may have replaced the generated prompt with
-        // an inline or council.md override; re-apply the idempotent
-        // fallback reinforcement so the required report structure and the
-        // compaction exception survive the override.
-        agent.config.prompt = ensureCouncilCompactionException(
-          ensureCouncilSynthesisReinforcement(agent.config.prompt ?? ''),
-        );
+        agent.config.prompt = ensureCouncilPrompt(agent.config.prompt);
       }
 
       return agent;
@@ -1285,11 +1275,15 @@ function createAgentViews(
   // Each councillor becomes a dispatchable subagent with its own model,
   // so the orchestrator can delegate to them via `subagent()` with native
   // panes at depth 1.
-  // Only a *configured* color is inherited: councillor override first, then
-  // council override. No default fallback — unconfigured councillors stay
-  // colorless so the host TUI palette keeps assigning distinct colors.
+  const councillorOverride = getOverrideFromAgents(mergedAgents, 'councillor');
+  // Shared inference settings do not replace seat models or variants.
+  const seatInference = {
+    temperature: councillorOverride?.temperature,
+    options: councillorOverride?.options,
+  };
+  // No default color: unconfigured seats keep the host's distinct palette.
   const councillorColor =
-    getOverrideFromAgents(mergedAgents, 'councillor')?.color ??
+    councillorOverride?.color ??
     getOverrideFromAgents(mergedAgents, 'council')?.color;
   const councillorAgents = buildCouncillorAgents(
     runtime,
@@ -1297,6 +1291,7 @@ function createAgentViews(
     nestedDispatchEnabled,
     inferenceOnly,
   ).map((agent) => {
+    applyOverrides(agent, seatInference, inferenceOnly);
     if (!inferenceOnly) {
       if (councillorColor) agent.config.color ??= councillorColor;
       // Councillor factory maps grant the Slim AST search tool by default;
@@ -1306,7 +1301,12 @@ function createAgentViews(
         agent.config.permission,
         registeredTools,
       );
-      applyDefaultPermissions(agent, registeredTools, undefined, runtime);
+      applyDefaultPermissions(
+        agent,
+        registeredTools,
+        councillorOverride?.skills,
+        runtime,
+      );
     }
     return agent;
   });

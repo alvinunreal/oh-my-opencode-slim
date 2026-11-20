@@ -2,6 +2,7 @@ import type { SpecialistRole } from '../config/agent-roles';
 import type { AgentDefinition } from './orchestrator';
 import type { AgentPermission } from './permissions';
 import {
+  createReadOnlyAgentPermission,
   TASK_NO_NESTED_DISPATCH,
   TASK_OBSERVER_DISPATCH_ONLY,
 } from './permissions';
@@ -58,7 +59,10 @@ export const ROLE_DEFINITIONS: Readonly<
   observer: Object.freeze({
     id: 'observer',
     prompt: OBSERVER_PROMPT,
-    permission: { task: { ...TASK_NO_NESTED_DISPATCH } },
+    permission: {
+      ...createReadOnlyAgentPermission(),
+      task: { ...TASK_NO_NESTED_DISPATCH },
+    },
     description: 'Visual analysis specialist; requires a vision-capable model.',
   }),
 });

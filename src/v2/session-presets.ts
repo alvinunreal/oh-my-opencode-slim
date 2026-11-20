@@ -84,7 +84,7 @@ export type SessionPresetState = {
 };
 /** Per-call execution intent is separate from the inherited team bundle. */
 export type SessionTeamAdmission = {
-  /** Null is an explicit compatibility admission, never a missing capture. */
+  /** Null explicitly leaves execution to the host, never a missing capture. */
   bundle: SessionTeamBundle | null;
   explicitModel: boolean;
   inheritedProviderID?: string;
@@ -649,6 +649,7 @@ export function wrapSessionPresetSubagent(options: {
     const admission = await options.capture(context.id, context.sessionID);
     const { bundle } = admission;
     options.presets.checkActive(context.signal);
+    if (!bundle) return options.execute(input, rawContext);
     const args = input as Record<string, unknown>;
     const existingID =
       typeof args.sessionID === 'string' ? args.sessionID : undefined;
@@ -660,11 +661,10 @@ export function wrapSessionPresetSubagent(options: {
       : undefined;
     const agent = previous?.identity.agent;
     const sameAgent = Boolean(
-      agent && agent === args.agent && bundle?.profiles[agent],
+      agent && agent === args.agent && bundle.profiles[agent],
     );
     const changed = Boolean(
-      bundle &&
-        previous?.record?.parentID === context.sessionID &&
+      previous?.record?.parentID === context.sessionID &&
         sameAgent &&
         agent &&
         bundle.profiles[agent] &&
@@ -708,7 +708,7 @@ export function wrapSessionPresetSubagent(options: {
                   existingID,
                   context.signal,
                 );
-                if (changed && bundle && current?.record && !adopted) {
+                if (changed && current?.record && !adopted) {
                   if (
                     current.identity.parentID !== context.sessionID ||
                     current.identity.agent !== previous?.identity.agent
@@ -737,7 +737,7 @@ export function wrapSessionPresetSubagent(options: {
                     adopted,
                   );
                 }
-              } else if (bundle) {
+              } else {
                 await options.presets.bindChild(
                   update.sessionID,
                   context.sessionID,

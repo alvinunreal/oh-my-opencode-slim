@@ -320,10 +320,10 @@ describe('finalized existing-agent registry', () => {
     // fallback reinforcement — on both the effective config and the
     // visible (display-name) projection.
     expect(registry.finalAgentConfig.council?.prompt).toContain(
-      'You MUST produce: ## Council Response',
+      '## Per-Councillor Details',
     );
     expect(registry.getSdkAgentProjection().council?.prompt).toContain(
-      'You MUST produce: ## Council Response',
+      '## Per-Councillor Details',
     );
   });
 

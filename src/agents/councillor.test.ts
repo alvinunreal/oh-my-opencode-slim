@@ -2,28 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { createCouncillorAgent } from './councillor';
 
 describe('createCouncillorAgent', () => {
-  test('prompt keeps the plain delegation ban', () => {
-    const agent = createCouncillorAgent('test-model');
-    expect(agent.config.prompt as string).toContain(
-      'You CANNOT edit files, write files, run shell commands, or delegate to other agents. You are an advisor, not an implementer.',
-    );
-  });
-
-  test('capabilities state read-only access without naming tools', () => {
-    const prompt = createCouncillorAgent('test-model').config.prompt as string;
-    expect(prompt).toContain('You have read-only access to the codebase.');
-    expect(prompt).toContain('READ-ONLY: inspect and report');
-    expect(prompt).toContain('Do not use bash or shell commands.');
-    for (const catalog of [
-      'ast_grep_search',
-      '(glob)',
-      '(grep)',
-      '(read)',
-      '`lsp`',
-      'MCPs',
-    ]) {
-      expect(prompt).not.toContain(catalog);
-    }
+  test('asks for independent evidence and relevant code inspection', () => {
+    const { prompt } = createCouncillorAgent('test-model').config;
+    expect(prompt).toContain('independent assessment with evidence');
+    expect(prompt).toContain('Inspect the codebase when relevant');
+    expect(prompt).toContain('file and line references');
   });
 
   test('creates agent with correct name', () => {

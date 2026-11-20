@@ -1068,6 +1068,25 @@ describe('createV2Setup e2e', () => {
         temperature: 0.35,
         native: true,
       });
+      // Resume a bound child with a model but no agent. The public tool
+      // bridge must preserve the override through admission and retry.
+      const agentlessChild = await launch('agentless-child', 'root', {});
+      expect(
+        stored.get(`session-preset/v1/${agentlessChild}`).explicitModel,
+      ).toBe(false);
+      await launch('agentless-resume', 'root', {
+        agent: undefined,
+        sessionID: agentlessChild,
+        model: 'manual/agentless#low',
+      });
+      expect(
+        stored.get(`session-preset/v1/${agentlessChild}`).explicitModel,
+      ).toBe(true);
+      expect(nativeInputs.at(-1)?.model).toBe('manual/agentless#low');
+      const beforeAgentlessRetry = switches.length;
+      await retry(agentlessChild, 'manual', 'agentless');
+      expect(switches).toHaveLength(beforeAgentlessRetry);
+
       const explicitChild = await launch('explicit-call', 'root', {
         model: 'manual/chosen#low',
       });
@@ -1357,6 +1376,9 @@ describe('createV2Setup e2e', () => {
       });
       afterNativePrompt = undefined;
       expect(nativeInputs.at(-1)?.model).toBe('manual/resumed#low');
+      expect(stored.get('session-preset/v1/ses_child-1').explicitModel).toBe(
+        true,
+      );
       expect(
         stored.get('session-preset/v1/ses_child-1').bundle.presetName,
       ).toBe('A');
@@ -2174,10 +2196,11 @@ describe('createV2Setup e2e', () => {
     await cleanup();
   }, 20_000);
 
-  test('v2 context bridge preserves live model variant into Companion state', async () => {
+  test('v2 context bridge preserves Companion attribution and variant with sidebar disabled', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({
+        sidebar: false,
         companion: {
           enabled: true,
           binaryPath: path.join(fixtureRoot, 'missing-companion-bin'),

@@ -18,9 +18,10 @@ The sidebar keeps its 1s render poll. With `sidebar: false`, the 5s config poll
 still detects external multiplexer edits, but unchanged files are not parsed
 again. `tui: false` also stops the server-side sidebar recorder: no state-file
 writes and no parent-hydration `session.get` reads.
-`disabled_tools: ["webfetch"]` skips the enhanced implementation and its JSDOM
-startup probe. Companion request detection keeps its 250ms interval; its
-config refresh is a separate once-per-second duty.
+`disabled_tools: ["webfetch"]` skips the enhanced implementation. Even when
+enabled, its JSDOM parser stays unloaded until HTML extraction is requested.
+Companion request detection keeps its 250ms interval; its config refresh is a
+separate once-per-second duty.
 
 ## Pass-local facts
 
@@ -31,10 +32,15 @@ derivations. Health accounting comes from completed registrations.
 On v2 with session preset routing enabled, one prompt admission reuses its
 validated session identity and preset binding for profile capture; the next
 admission rechecks host identity and storage. `backgroundJobs.mode: "off"`
-constructs neither the preset store nor the child profile bridge, registers no
-session-preset RPC or server command, and leaves the native executor unchanged.
-Preset delegation, prompt and event paths perform no session reads or KV work
-in that mode; static agent inference settings still register with the host.
+defaults session-preset routing off; set `sessionPresetRouting: true` to keep
+it. With routing off, `off` constructs neither the preset store nor the child
+profile bridge, registers no session-preset RPC or server command, and leaves
+the native executor unchanged. When neither session presets, the sidebar, nor
+the native retry path consumes runtime profiles, v2 also skips the startup
+profile seed and automatic refresh; every agent keeps its startup model,
+variant, request options, and `inheritModelFrom`. Preset delegation, prompt and
+event paths perform no session reads or KV work in that mode; static agent
+inference settings still register with the host.
 Stored history is read for agent attribution only when a message lacks
 an agent. Message transforms use a request-local view of valid/user messages,
 rebuilt after structural edits, preserving phase/council anchors and the
@@ -66,8 +72,9 @@ hook, tool or utility barrels:
   uses the original manager's locking and pruning path.
 
 Fallback retains the manager required by explicit preset applications and saved
-session bindings on v2, even with the file watcher off. Disabling the
-`foreground-fallback` hook removes that implementation entirely.
+session bindings on v2, even with the file watcher off. When no preset routing,
+sidebar, or retry consumer exists, the runtime-profile seed is skipped too.
+Disabling the `foreground-fallback` hook removes that implementation entirely.
 
 Both contracts on the thin TUI entry check the environment and `tui` gate before
 loading the render stack. Public entry paths are unchanged and ESM chunks ship
@@ -92,8 +99,11 @@ locked commit. Cross-process locks, atomic
 publication, retries and per-owner disposal remain in place.
 
 The v2 event subscription freezes the union required by enabled consumers.
-Native lifecycle, usage, forms and permissions remain observed; Interview text
-streams are added only when Interview is enabled.
+Identity, move and deletion events always serve permissions and cleanup.
+Lifecycle events follow status consumers; step events follow fallback or cache
+telemetry. Forms and permission wait events follow Companion, and Interview
+adds its text streams. With the sidebar off, event fan-out also skips TUI
+snapshot batches.
 
 ## Verification
 

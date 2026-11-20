@@ -17,7 +17,7 @@ Each agent is a **prompt-driven specialist** with a factory function that create
 | **oracle** | `createOracleAgent()` | Strategic technical advisor and code reviewer | Read-only defaults | DEFAULT_MODELS.oracle |
 | **designer** | `createDesignerAgent()` | UI/UX design, review, and implementation | Read/write defaults | DEFAULT_MODELS.designer |
 | **fixer** | `createFixerAgent()` | Fast implementation specialist for bounded tasks | Read/write defaults | DEFAULT_MODELS.fixer |
-| **observer** | `createObserverAgent()` | Visual analysis specialist (images, PDFs, diagrams) | Read-only defaults; requires a vision-capable model | DEFAULT_MODELS.observer |
+| **observer** | `createObserverAgent()` | Visual analysis specialist (images, PDFs, diagrams) | Strict read-only defaults (no edit/write/shell/execute); requires a vision-capable model | DEFAULT_MODELS.observer |
 | **council** | `createCouncilAgent()` | Multi-model consensus synthesis (read-only, no tools) | Read-only (council permission) | DEFAULT_MODELS.council |
 | **councillor** | Created dynamically by `buildCouncillorAgents()` | Read-only council advisor; registered per preset seat as `councillor-<name>` | Read-only defaults | Inherited from council preset |
 
@@ -44,7 +44,7 @@ change. Shared capabilities/ID schemas do not load the full manifest graph.
 
 1. **Agent creation**: `createAgents(config)` instantiates all agents with merged configuration
 2. **Dynamic councillors**: `buildCouncillorAgents()` (`council-agents.ts`) creates one `councillor-<name>` subagent per council preset seat, attaching `_modelArray` fallback chains for multi-model councillors
-3. **Permission application**: `applyDefaultPermissions()` emits generated `allow` grants only for tools this generation registers, while preserving generated denies (the v2 base allows unmatched names). `question`, task tools, and interview submission stay primary-scoped by default — a parked child question has no headless answerer (explicit per-agent config wins). `task_report` is available to subagents by default and denied to primaries; its runtime still requires a host-confirmed parent session. Marketplace/ACP/AST grants follow their registration gates, and `disabled_tools: ["acp_run"]` also removes the wrappers that could call it. It then adds skill grants on top of each agent's map, preserving key order
+3. **Permission application**: `applyDefaultPermissions()` emits generated `allow` grants only for tools this generation registers, while preserving generated denies (the v2 base allows unmatched names). `question`, task tools, and interview submission stay primary-scoped by default — a parked child question has no headless answerer (explicit per-agent config wins). `task_report` is available to subagents by default except for agents whose factory map already denies `'*'` (Observer and councillors); its runtime still requires a host-confirmed parent session. Marketplace/ACP/AST grants follow their registration gates, and `disabled_tools: ["acp_run"]` also removes the wrappers that could call it. It then adds skill grants on top of each agent's map, preserving key order
 4. **Task-rejection instruction**: `appendTaskRejectionInstruction()` appends the "outside your role" instruction to specialist prompts (`task-rejection.ts`)
 5. **Display name injection**: Orchestrator prompt rewrites `@agent` mentions to user-configured display names
 6. **Configuration export**: `getAgentConfigs()` converts `AgentDefinition` to OpenCode SDK format with classification metadata
@@ -96,13 +96,9 @@ return [orchestrator, ...allSubAgents];
 The council agent is a synthesis-only specialist:
 - Receives raw responses from multiple councillors (different models) via orchestrator dispatch
 - Has NO tools - cannot read, glob, grep, or run shell commands
-- Follows mandatory Synthesis Process steps before producing output
-- Formats output with Council Response, Per-Councillor Details, and Council Summary sections
-- `ensureCouncilSynthesisReinforcement()` re-applies the fallback-only
-  synthesis reinforcement (compact fallback when a custom prompt override
-  dropped the report format) to the final effective prompt;
-  `ensureCouncilCompactionException()` keeps the host-template exception
-  idempotently
+- Uses one report format: Council Response, Per-Councillor Details, and Council Summary
+- `ensureCouncilPrompt()` restores that format only when an override drops it and
+  keeps the host compaction exception without duplication
 
 ### Model Resolution and Fallback
 

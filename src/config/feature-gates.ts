@@ -17,6 +17,8 @@ export interface FeatureGateConfig {
   readonly backgroundJobs?: {
     readonly mode?: BackgroundJobsMode;
   };
+  readonly sessionPresetRouting?: boolean;
+  readonly replaceBuiltinSubagents?: boolean;
   readonly tui?: boolean;
   readonly sidebar?: boolean;
   readonly interview?: {
@@ -43,8 +45,8 @@ const UNSUPPORTED_MANAGED_MODE_MESSAGE =
 
 /**
  * Validate explicit config before sanitization or schema defaults are applied.
- * Reject only positive limits that the native lifecycle cannot enforce.
- * Direct runtime seeds are also guarded by resolveFeatureGates.
+ * Reject invalid lifecycle switches and positive limits the host cannot enforce.
+ * The retired managed mode is normalized by the loader after this validation.
  */
 export function validateExplicitHostConfig(
   config: unknown,
@@ -62,6 +64,17 @@ export function validateExplicitHostConfig(
     return;
   }
   const jobs = backgroundJobs as Record<string, unknown>;
+  if (
+    Object.hasOwn(jobs, 'mode') &&
+    jobs.mode !== undefined &&
+    jobs.mode !== 'native' &&
+    jobs.mode !== 'off' &&
+    jobs.mode !== 'managed'
+  ) {
+    throw new UnsupportedHostConfigError(
+      `${source}Invalid backgroundJobs.mode ${JSON.stringify(jobs.mode)}; use "native" or "off", then run /reload.`,
+    );
+  }
   const unsupported: string[] = [];
   const collectLimit = (key: string, value: unknown) => {
     if (typeof value === 'number' && value > 0) {
@@ -101,6 +114,7 @@ export function validateExplicitHostConfig(
 export interface FeatureGates {
   readonly backgroundJobsMode: BackgroundJobsMode;
   readonly presetRouting: boolean;
+  readonly replaceBuiltinSubagents: boolean;
   readonly tui: boolean;
   readonly sidebar: boolean;
   readonly interview: boolean;
@@ -121,6 +135,7 @@ export function resolveFeatureGates(
   if (config.backgroundJobs?.mode === 'managed') {
     throw new UnsupportedHostConfigError(UNSUPPORTED_MANAGED_MODE_MESSAGE);
   }
+  validateExplicitHostConfig(config, 'v2');
   const backgroundJobsMode = config.backgroundJobs?.mode ?? 'native';
   const tui = config.tui !== false;
   // User-edited config can be malformed despite the declared type; treat a
@@ -130,7 +145,9 @@ export function resolveFeatureGates(
     : [];
   return Object.freeze({
     backgroundJobsMode,
-    presetRouting: backgroundJobsMode !== 'off',
+    presetRouting:
+      config.sessionPresetRouting ?? backgroundJobsMode === 'native',
+    replaceBuiltinSubagents: config.replaceBuiltinSubagents !== false,
     tui,
     sidebar: tui && config.sidebar !== false,
     interview: config.interview?.enabled !== false,

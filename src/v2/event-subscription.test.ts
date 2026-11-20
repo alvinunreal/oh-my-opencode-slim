@@ -3,94 +3,115 @@
  * The union is pinned to the names the production v2 pump actually
  * consumes (verified live against the pinned host surface; the
  * compile-time membership guard lives in `mirror-conformance.ts`).
- * Complete text events are included only when `/interview` is enabled.
+ * Identity events are always observed: the permission-rules bridge and
+ * cleanup need them before any optional consumer exists.
  */
 import { describe, expect, test } from 'bun:test';
 import { buildV2EventSubscriptionTypes } from './event-subscription';
 
-/** Source event types the production pipeline consumes, independent of
- *  the implementation list (names verified against the pinned host
- *  `OpenCodeEvent` union). */
-const PRODUCTION_REQUIRED = [
-  // Identity + lifecycle: permission-rules bridge (created/agent.
-  // selected/deleted), profile prewarm + preset removal (created/
-  // deleted), event-directory scope + foreign task observation (moved).
+const IDENTITY = [
   'session.created',
   'session.deleted',
   'session.agent.selected',
   'session.moved',
-  // Native run lifecycle: mapV2EventToV1 → v1 busy/idle/error shapes
-  // (task-session-manager, orchestrator-wake, foreground fallback); the
-  // raw events are also consumed by the interview bridge and the
-  // foreground fallback directly.
+] as const;
+
+const LIFECYCLE = [
   'session.execution.started',
   'session.execution.succeeded',
   'session.execution.failed',
   'session.execution.interrupted',
-  // v1 status/idle consumers read the native passthrough too.
   'session.status',
   'session.idle',
-  // Content-filter failover (foreground-fallback reads the raw events);
-  // step.ended is also per-request telemetry → completed-assistant
-  // message.updated (cache-monitor).
+] as const;
+
+const STEPS = [
   'session.step.started',
   'session.step.failed',
   'session.step.ended',
-  // Form flow → v1 question.* (input-wait tracker, companion, wake).
+] as const;
+
+const INPUTS = [
   'form.created',
   'form.replied',
   'form.cancelled',
-  // Permission asks/replies: raw-first delivery + v1 shape synthesis.
   'permission.asked',
   'permission.replied',
 ] as const;
 
-const INTERVIEW_TEXT_STREAM = ['session.text.ended'] as const;
+const off = {
+  sidebar: false,
+  fallback: false,
+  companion: false,
+  cacheMonitor: false,
+  toolLoopGuard: false,
+  interview: false,
+} as const;
 
 describe('buildV2EventSubscriptionTypes', () => {
-  test('includes every production-required source event type', () => {
-    const types = buildV2EventSubscriptionTypes();
-    for (const name of PRODUCTION_REQUIRED) {
-      expect(types).toContain(name);
-    }
-    expect(types.length).toBe(PRODUCTION_REQUIRED.length);
+  test('keeps only identity events when no optional consumer exists', () => {
+    expect(buildV2EventSubscriptionTypes(off)).toEqual([...IDENTITY]);
   });
 
-  test('omits stream text events when the interview consumer is disabled', () => {
-    const types = buildV2EventSubscriptionTypes({ interview: false });
+  test('adds lifecycle events for every status consumer', () => {
+    for (const consumer of [
+      'sidebar',
+      'fallback',
+      'companion',
+      'toolLoopGuard',
+      'interview',
+    ] as const) {
+      const types = buildV2EventSubscriptionTypes({ ...off, [consumer]: true });
+      for (const name of LIFECYCLE) expect(types).toContain(name);
+    }
+  });
+
+  test('steps follow fallback, telemetry follows the cache monitor', () => {
+    const fallback = buildV2EventSubscriptionTypes({
+      ...off,
+      fallback: true,
+    });
+    for (const name of STEPS) expect(fallback).toContain(name);
+
+    const cache = buildV2EventSubscriptionTypes({
+      ...off,
+      cacheMonitor: true,
+    });
+    expect(cache).toEqual([...IDENTITY, 'session.step.ended']);
+  });
+
+  test('forms and permissions follow Companion only', () => {
+    const companion = buildV2EventSubscriptionTypes({
+      ...off,
+      companion: true,
+    });
+    for (const name of INPUTS) expect(companion).toContain(name);
+
+    const noCompanion = buildV2EventSubscriptionTypes({
+      ...off,
+      sidebar: true,
+      fallback: true,
+    });
+    for (const name of INPUTS) expect(noCompanion).not.toContain(name);
+  });
+
+  test('interview adds its failed-step refusal and text stream', () => {
+    const types = buildV2EventSubscriptionTypes({
+      ...off,
+      interview: true,
+    });
+    expect(types).toContain('session.step.failed');
+    expect(types).toContain('session.text.ended');
     expect(types).not.toContain('session.text.delta');
-    expect(types).not.toContain('session.text.started');
-    expect(types).not.toContain('session.text.ended');
-    // No synthetic/legacy names leak into the native filter: those arrive
-    // synthesized (mapV2EventToV1) or are host-side only.
     expect(types).not.toContain('server.connected');
-    expect(types).not.toContain('message.updated');
-    expect(types).not.toContain('message.part.updated');
-    expect(types).not.toContain('session.error');
-    expect(types).not.toContain('question.asked');
-    expect(types).not.toContain('step-finish');
-    expect(types).not.toContain('server.instance.disposed');
-  });
-
-  test('includes interview stream text events when enabled', () => {
-    const types = buildV2EventSubscriptionTypes({ interview: true });
-    expect(types).not.toContain('session.text.started');
-    expect(types).not.toContain('session.text.delta');
-    for (const name of INTERVIEW_TEXT_STREAM) {
-      expect(types).toContain(name);
-    }
-    expect(types.length).toBe(
-      PRODUCTION_REQUIRED.length + INTERVIEW_TEXT_STREAM.length,
-    );
   });
 
   test('the union is frozen once built — no per-request surface changes', () => {
-    const types = buildV2EventSubscriptionTypes();
+    const types = buildV2EventSubscriptionTypes(off);
     expect(Object.isFrozen(types)).toBe(true);
     expect(() => {
       (types as Array<string>).push('session.forked');
     }).toThrow();
-    const again = buildV2EventSubscriptionTypes();
-    expect(Object.isFrozen(again)).toBe(true);
+    expect(buildV2EventSubscriptionTypes(off)).toEqual([...IDENTITY]);
   });
 });

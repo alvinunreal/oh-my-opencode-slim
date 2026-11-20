@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import * as agentFactory from '../agents';
 import * as configWatch from './config-watch';
 import { sessionPresetRpc } from './preset-rpc';
 import { createV2Setup } from './setup';
@@ -35,12 +36,16 @@ function makeCtx(
   },
 ) {
   const commandAdds: Array<{ name: string }> = [];
+  const removedAgents: string[] = [];
   const toolUpdates: Array<{ id: string; description?: unknown }> = [];
   const beforeHooks: Array<(event: never) => Promise<void>> = [];
   const subagentTools: Array<Record<string, unknown>> = [];
   const hooks: string[] = [];
   const skillCallbacks = new Set<(draft: unknown) => void>();
   const contextHooks: Array<(event: never) => Promise<void>> = [];
+  const promptHooks: Array<(event: never) => Promise<void>> = [];
+  const toolAdds: string[] = [];
+  const eventTypes: string[][] = [];
   const storageCalls = { get: 0, set: 0, remove: 0, scan: 0 };
   const rpcHandlers: Array<Record<string, unknown>> = [];
   const rpcDefinitions: unknown[] = [];
@@ -93,7 +98,9 @@ function makeCtx(
             commandAdds.length;
             fn({});
           },
-          remove: () => {},
+          remove: (id: string) => {
+            removedAgents.push(id);
+          },
         });
         return reg('agent.transform');
       },
@@ -123,7 +130,7 @@ function makeCtx(
             });
           },
           get: (id: string) => (id === 'subagent' ? subagentTool : undefined),
-          add: () => {},
+          add: (definition: { name: string }) => toolAdds.push(definition.name),
         });
         return reg('tool.transform');
       },
@@ -167,6 +174,7 @@ function makeCtx(
       hook: async (name: string, cb: (event: never) => Promise<void>) => {
         hooks.push(`session:${name}`);
         if (name === 'context') contextHooks.push(cb);
+        if (name === 'prompt') promptHooks.push(cb);
         return reg(`session.hook:${name}`);
       },
     },
@@ -187,12 +195,15 @@ function makeCtx(
       // Synchronously-exhausted stream: the pump registers but no events
       // are ever delivered, so per-event bridge work is observable only
       // through the registrations above.
-      subscribe: () => ({
-        [Symbol.asyncIterator]: () => ({
-          next: () => Promise.resolve({ value: undefined, done: true }),
-          return: () => Promise.resolve({ value: undefined, done: true }),
-        }),
-      }),
+      subscribe: (options: { types: string[] }) => {
+        eventTypes.push(options.types);
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => Promise.resolve({ value: undefined, done: true }),
+            return: () => Promise.resolve({ value: undefined, done: true }),
+          }),
+        };
+      },
     },
     generate: {
       text: async (input: { prompt: string }) => ({
@@ -214,11 +225,15 @@ function makeCtx(
   return {
     ctx,
     commandAdds,
+    removedAgents,
     toolUpdates,
     beforeHooks,
     subagentTools,
     hooks,
     contextHooks,
+    promptHooks,
+    toolAdds,
+    eventTypes,
     storageCalls,
     rpcHandlers,
     rpcDefinitions,
@@ -380,6 +395,206 @@ describe('v2 setup feature gates', () => {
     try {
       expect(hooks).toContain('tool:execute.before');
       expect(hooks).toContain('tool:execute.after');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('replaceBuiltinSubagents: false keeps the host roster', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      replaceBuiltinSubagents: false,
+    });
+    const { ctx, removedAgents } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(removedAgents).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('retained native agents bypass preset work on launch and continuation', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+      sessionPresetRouting: true,
+      replaceBuiltinSubagents: false,
+      liveConfigRefresh: false,
+      agents: {
+        explorer: {
+          model: ['test/slim', 'backup/slim'],
+          temperature: 0.3,
+          options: { reasoning: 'slim' },
+        },
+      },
+    });
+    const { ctx, beforeHooks, subagentTools, storageCalls } =
+      makeCtx(projectDir);
+    const get = spyOn(ctx.session, 'get');
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const before = beforeHooks[0];
+      const execute = subagentTools.at(-1)?.execute as
+        | ((input: unknown, context: unknown) => Promise<unknown>)
+        | undefined;
+      if (!before || !execute) throw new Error('native hooks not captured');
+      get.mockClear();
+      const initialStorage = { ...storageCalls };
+      for (const agent of ['explore', 'general']) {
+        for (const sessionID of [undefined, 'native-child']) {
+          const input = {
+            agent,
+            description: 'native probe',
+            prompt: 'Work',
+            ...(sessionID ? { sessionID, model: 'manual/native#high' } : {}),
+          };
+          const event = {
+            ...delegationEvent(),
+            id: `${agent}-${sessionID ?? 'new'}`,
+            input: { ...input },
+          };
+          await before(event as never);
+          expect(event.input).toEqual(input);
+          await execute(event.input, {
+            sessionID: event.sessionID,
+            id: event.id,
+            signal: new AbortController().signal,
+            progress: async () => {},
+          });
+        }
+      }
+      expect(get).not.toHaveBeenCalled();
+      expect(storageCalls).toEqual(initialStorage);
+      const slim = delegationEvent();
+      await before(slim as never);
+      expect(slim.input).toMatchObject({ model: 'test/slim' });
+      expect(get).toHaveBeenCalled();
+    } finally {
+      await cleanup();
+      get.mockRestore();
+    }
+  }, 20_000);
+
+  test('replaceBuiltinSubagents defaults to hiding general and explore', async () => {
+    await writeProjectConfig({ companion: { enabled: false } });
+    const { ctx, removedAgents } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(removedAgents).toEqual(['general', 'explore']);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('sessionPresetRouting true re-enables routing while task controls stay off', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+      sessionPresetRouting: true,
+    });
+    const { ctx, commandAdds, rpcDefinitions, toolAdds } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(commandAdds.map((command) => command.name)).toContain('preset');
+      expect(rpcDefinitions).toContain(sessionPresetRpc);
+      expect(toolAdds.filter((name) => name.startsWith('task_'))).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('sessionPresetRouting false leaves native delegation unwrapped and unbound', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'native' },
+      sessionPresetRouting: false,
+    });
+    const { ctx, commandAdds, rpcDefinitions, toolUpdates } =
+      makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(commandAdds.map((command) => command.name)).not.toContain(
+        'preset',
+      );
+      expect(rpcDefinitions).not.toContain(sessionPresetRpc);
+      expect(toolUpdates.filter((tool) => tool.id === 'subagent')).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('off with no preset, sidebar or retry consumer skips the profile seed', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+      tui: false,
+      disabled_hooks: ['foreground-fallback'],
+    });
+    const inferenceViews = spyOn(agentFactory, 'createAgentInferenceViews');
+    const { ctx, promptHooks } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const prompt = promptHooks[0];
+      if (!prompt) throw new Error('session:prompt hook not captured');
+      await prompt({
+        sessionID: 'ses_no_profile_consumer',
+        messageID: 'msg_no_profile_consumer',
+        prompt: { text: 'hello' },
+      } as never);
+      expect(inferenceViews).not.toHaveBeenCalled();
+    } finally {
+      await cleanup();
+      inferenceViews.mockRestore();
+    }
+  }, 20_000);
+
+  test('a sidebar consumer keeps the profile seed', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+      disabled_hooks: ['foreground-fallback'],
+    });
+    const inferenceViews = spyOn(agentFactory, 'createAgentInferenceViews');
+    const { ctx, promptHooks } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const prompt = promptHooks[0];
+      if (!prompt) throw new Error('session:prompt hook not captured');
+      await prompt({
+        sessionID: 'ses_sidebar_profile_consumer',
+        messageID: 'msg_sidebar_profile_consumer',
+        prompt: { text: 'hello' },
+      } as never);
+      expect(inferenceViews).toHaveBeenCalled();
+    } finally {
+      await cleanup();
+      inferenceViews.mockRestore();
+    }
+  }, 20_000);
+
+  test('consumer-specific event filters exclude unused event families', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+      tui: false,
+      disabled_hooks: [
+        'foreground-fallback',
+        'cache-monitor',
+        'tool-loop-guard',
+      ],
+      interview: { enabled: false },
+    });
+    const { ctx, eventTypes } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const subscribed = eventTypes[0];
+      expect(subscribed).toEqual([
+        'session.created',
+        'session.deleted',
+        'session.agent.selected',
+        'session.moved',
+      ]);
     } finally {
       await cleanup();
     }

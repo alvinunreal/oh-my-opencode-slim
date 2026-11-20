@@ -140,7 +140,8 @@ type MirrorSessionHookNames =
   | 'context'
   | 'prompt'
   | 'model.request'
-  | 'compaction';
+  | 'compaction'
+  | 'generate';
 
 /** The official names the mirror's `session.hook` signature accepts.
  * `cb: never` neutralizes callback contravariance so only the name

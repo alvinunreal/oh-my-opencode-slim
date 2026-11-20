@@ -569,7 +569,7 @@ describe('v2 tui preset plugin', () => {
 
       expect(rpc).not.toHaveBeenCalled();
       expect(stub.toasts).toHaveLength(1);
-      expect(stub.toasts[0]).toContain('backgroundJobs.mode is "off"');
+      expect(stub.toasts[0]).toContain('Session preset routing is disabled');
       expect(stub.toasts[0]).toContain('bare /preset');
     });
 

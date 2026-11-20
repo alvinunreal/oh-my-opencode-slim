@@ -27,10 +27,7 @@ import {
   type PermissionCeilings,
 } from '../v2/permissions';
 import type { V2PermissionRule } from '../v2/types';
-import {
-  ensureCouncilCompactionException,
-  ensureCouncilSynthesisReinforcement,
-} from './council';
+import { ensureCouncilPrompt } from './council';
 import {
   applyModelInheritanceToConfig,
   createAgents,
@@ -950,12 +947,6 @@ function followsSessionWithoutScalar(
   );
 }
 
-function fixupCouncilPrompt(prompt: string): string {
-  return ensureCouncilCompactionException(
-    ensureCouncilSynthesisReinforcement(prompt),
-  );
-}
-
 function fillMcpPermissionKeys(
   permission: Record<string, unknown>,
   mcps: readonly string[],
@@ -1527,7 +1518,7 @@ export function buildResolvedAgentRegistry(
       if (modelOverride?.variant === undefined) delete entry.variant;
     }
     if (name === 'council' && typeof entry.prompt === 'string')
-      entry.prompt = fixupCouncilPrompt(entry.prompt);
+      entry.prompt = ensureCouncilPrompt(entry.prompt);
     const scalars = effectiveScalars(entry);
     effective[name] = scalars;
     const displayModel = followsSession
@@ -1697,7 +1688,7 @@ export function buildResolvedAgentRegistry(
         definition.name === 'council' &&
         typeof visibleConfig.prompt === 'string'
       ) {
-        visibleConfig.prompt = fixupCouncilPrompt(visibleConfig.prompt);
+        visibleConfig.prompt = ensureCouncilPrompt(visibleConfig.prompt);
       }
       let visiblePermission = normalizePermission(visibleConfig.permission);
       const visibleMcps = (visibleConfig.mcps as string[] | undefined) ?? [];

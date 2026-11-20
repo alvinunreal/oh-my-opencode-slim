@@ -74,10 +74,6 @@ export const WRITABLE_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 export const READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 - READ-ONLY: inspect and report; do not modify files.`;
 
-export const NO_SHELL_READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
-- READ-ONLY: inspect and report; do not modify files.
-- Do not use bash or shell commands.`;
-
 // Toast duration (ms) used by all OMOS toasts
 export const TOAST_DURATION_MS = 10_000;
 

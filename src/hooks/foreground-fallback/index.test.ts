@@ -3504,6 +3504,33 @@ describe('ForegroundFallbackManager chain generation pins', () => {
       }),
     );
 
+  test.each([true, false])(
+    'a native agent switch stops using the old agent chain (retry hint: %p)',
+    async (hinted) => {
+      createMockClient();
+      const manager = makeGenerationManager({ explorer: ['test/a', 'test/b'] });
+      const switchModel = mock(async () => {});
+      const sessionID = 'switched-child';
+      try {
+        manager.registerSessionAgent(sessionID, 'explorer');
+        if (!hinted) manager.registerSessionAgent(sessionID, 'explore');
+        const decision = { retry: true, delay: 123 };
+        const event = {
+          sessionID,
+          ...(hinted ? { agent: 'explore' } : {}),
+          model: { providerID: 'test', id: 'a' },
+          error: { message: 'Rate limit exceeded' },
+          decision,
+        };
+        await manager.handleV2Retry(event, switchModel);
+        expect(switchModel).not.toHaveBeenCalled();
+        expect(event.decision).toBe(decision);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
   test('durable team chains override an early event pin and isolate new A/B children from global refresh', async () => {
     createMockClient();
     const chains = {
@@ -3686,6 +3713,129 @@ describe('ForegroundFallbackManager chain generation pins', () => {
       providerID: 'test',
       id: 'y',
     });
+  });
+
+  test('a pinned snapshot without a chain for the agent falls back to the live chain table (#1927)', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = {
+      orchestrator: ['test/a', 'test/b'],
+      designer: ['glm/glm-5.3', 'kimi/kimi-k2.8-preview'],
+    };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    try {
+      // Scalar-era frozen bundle: the snapshot predates fallback chains, so
+      // it carries no entry for designer at all. Unlike disableChain, which
+      // keeps an explicit empty entry, a missing key means "never configured
+      // when this snapshot was taken".
+      manager.pinSessionChains('stale-parent', {
+        orchestrator: ['test/a', 'test/b'],
+      });
+
+      // The frozen model goes down: failover must engage the live chain
+      // instead of erroring on every request with no fallback.
+      await manager.handleV2Retry(
+        {
+          sessionID: 'stale-parent',
+          agent: 'designer',
+          model: { providerID: 'kimi', id: 'kimi-k2.8-preview' },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+      expect(switchModel).toHaveBeenCalledWith('stale-parent', {
+        providerID: 'glm',
+        id: 'glm-5.3',
+      });
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  test('an adopted live chain keeps its models and variants across refresh', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = {
+      designer: [
+        'first/a',
+        { id: 'second/b', variant: 'high' },
+        { id: 'third/c', variant: 'low' },
+      ],
+    };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    const fail = (providerID: string, id: string, variant?: string) =>
+      manager.handleV2Retry(
+        {
+          sessionID: 'stale-descent',
+          agent: 'designer',
+          model: { providerID, id, ...(variant ? { variant } : {}) },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+    try {
+      manager.pinSessionChains('stale-descent', {});
+      await fail('first', 'a');
+      expect(switchModel).toHaveBeenLastCalledWith('stale-descent', {
+        providerID: 'second',
+        id: 'b',
+        variant: 'high',
+      });
+
+      chains.designer = [{ id: 'second/b', variant: 'new-variant' }];
+      await fail('second', 'b', 'high');
+      expect(switchModel).toHaveBeenCalledTimes(2);
+      expect(switchModel).toHaveBeenLastCalledWith('stale-descent', {
+        providerID: 'third',
+        id: 'c',
+        variant: 'low',
+      });
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  test('an explicitly disabled chain stays disabled even when the live table has a chain (#1927)', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = {
+      orchestrator: ['test/a', 'test/b'],
+      designer: ['glm/glm-5.3', 'kimi/kimi-k2.8-preview'],
+    };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    try {
+      // Same stale snapshot as above, but the agent's chain was explicitly
+      // disabled afterwards: the empty entry must keep failover off.
+      manager.pinSessionChains('stale-parent', {
+        orchestrator: ['test/a', 'test/b'],
+      });
+      manager.disableChain('designer');
+
+      await manager.handleV2Retry(
+        {
+          sessionID: 'stale-parent',
+          agent: 'designer',
+          model: { providerID: 'kimi', id: 'kimi-k2.8-preview' },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+      expect(switchModel).not.toHaveBeenCalled();
+    } finally {
+      manager.dispose();
+    }
   });
 });
 
@@ -4181,7 +4331,10 @@ describe('fallback restoration', () => {
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     chain?: string[];
     retryDelayMs?: number;
+    agent?: string;
+    resolveAgentName?: ForegroundFallbackOptions['resolveAgentName'];
   }) {
+    const agent = options?.agent ?? 'orchestrator';
     const info: {
       model:
         | typeof origin
@@ -4190,7 +4343,7 @@ describe('fallback restoration', () => {
       parentID?: string;
     } = {
       model: { ...origin },
-      agent: 'orchestrator',
+      agent,
       parentID: options?.parentID,
     };
     const { client, session, mocks } = createMockClient({
@@ -4205,11 +4358,12 @@ describe('fallback restoration', () => {
     const changed = mock();
     const manager = timedManager({
       chains: {
-        orchestrator: options?.chain ?? ['primary/a', 'backup/b', 'third/c'],
+        [agent]: options?.chain ?? ['primary/a', 'backup/b', 'third/c'],
       },
       v2RetryEnabled: true,
       maxRetries: 0,
       retryDelayMs: options?.retryDelayMs ?? 0,
+      resolveAgentName: options?.resolveAgentName,
       input: {
         directory: '/test',
         hostFlavor: 'v2',
@@ -4220,7 +4374,7 @@ describe('fallback restoration', () => {
     });
     const retry = (model = origin, error: unknown = rejection) =>
       manager.handleV2Retry(
-        { sessionID: sid, agent: 'orchestrator', model, error },
+        { sessionID: sid, agent, model, error },
         switchModel,
       );
     const refuse = async (
@@ -4232,7 +4386,7 @@ describe('fallback restoration', () => {
         data: {
           sessionID: sid,
           assistantMessageID: id,
-          agent: 'orchestrator',
+          agent,
           model,
         },
       });
@@ -4847,6 +5001,50 @@ describe('fallback restoration', () => {
     await clock.advance(1);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
+
+  test.each(['context', 'retry', 'restore lookup', 'display name'] as const)(
+    'fallback restoration respects the current agent (%s)',
+    async (observation) => {
+      const f = fixture({
+        agent: 'explorer',
+        parentID: 'parent',
+        resolveAgentName: (name) => (name === 'Scout' ? 'explorer' : name),
+      });
+      try {
+        await f.retry(origin, outage);
+        expect(f.info.model).toEqual(backup);
+        await f.manager.handleEvent(idle());
+        expect(clock.pending()).toBe(1);
+
+        const sameAgent = observation === 'display name';
+        const agent = sameAgent ? 'Scout' : 'explore';
+        // The host can change the agent without changing the model pin.
+        f.info.agent = agent;
+        if (observation === 'context') {
+          f.manager.registerSessionAgent(sid, agent);
+        } else if (observation === 'retry' || sameAgent) {
+          await f.manager.handleV2Retry(
+            {
+              sessionID: sid,
+              agent,
+              model: backup,
+              error: { status: 400, message: 'bad request' },
+            },
+            f.switchModel,
+          );
+        }
+        expect(clock.pending()).toBe(
+          sameAgent || observation === 'restore lookup' ? 1 : 0,
+        );
+        await clock.advance(ttl);
+        expect(f.info.model).toEqual(sameAgent ? origin : backup);
+        expect(f.switchModel).toHaveBeenCalledTimes(sameAgent ? 2 : 1);
+        expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+      } finally {
+        f.manager.dispose();
+      }
+    },
+  );
 
   test('T6: v2 preserves a manually changed fallback variant', async () => {
     const f = fixture();

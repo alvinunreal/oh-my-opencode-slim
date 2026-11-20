@@ -23,7 +23,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 - **Child Transcript** (`child-transcript.ts`): Extracts transcripts and classifies rounds through `classifyAssistantTurnEvidence`, `classifyCurrentDeliveredRound`, and `classifyMigratedV1Round`. A marker-free migrated v1 history retains its v1 closure for untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it. Diagnostic tails enforce UTF-8 budgets in one pass.
 - **Host Transcript Attribution** (`child-transcript.ts`, `attributeHostRoundToTranscript`): Validates parsed host terminal evidence against assistant creation/completion after the latest delivered input; newer activity stays pending and unreadable timestamps stay unknown. Recovery and untracked reads retain the shared host-round parser/composer.
 - **TestTimers** (`test-timers.ts`): Test-only deterministic timer harness (manual clock, injected `setTimeout`/`clearTimeout` seams, zero-duration `tick` drain); wire into timer-seam components, see AGENTS.md "Test Time"
-- **JSDOM Probe** (`jsdom.ts`): JSDOM runtime detection without making it a prerequisite
+- **JSDOM loader** (`jsdom.ts`): loads the parser on first HTML extraction
 - **Redact** (`redact.ts`): Shape-based secret redaction for logging
 
 ### Session & Task Utilities
@@ -129,7 +129,7 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 | `session-metadata.ts` | Bounded session → agent/directory store |
 | `session-runtime-status.ts` | Bounded live session-status map reads; on-demand host round-state verdicts from the session info projection, with transcript text bound to the host idle |
 | `child-transcript.ts` | Child session transcript evidence extraction; migrated v1 history classification and on-demand v2 binding of latest input and assistant text to the host idle (malformed entries fail closed) |
-| `jsdom.ts` | JSDOM runtime detection without prerequisite |
+| `jsdom.ts` | Lazy JSDOM loader for HTML extraction |
 | `redact.ts` | Shape-based secret redaction for logging |
 | `logger.ts` | Process-wide file logging (pid-suffixed) |
 | `event-directory-scope.ts` | Per-location event scope for multi-instance hosts |

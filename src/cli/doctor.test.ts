@@ -178,6 +178,30 @@ describe('runDoctorCheck', () => {
     );
   });
 
+  test('v2 reports an invalid explicit mode instead of silently enabling native controls', () => {
+    const bin = path.join(tempDir, 'bin');
+    const project = path.join(tempDir, 'project');
+    const configDir = path.join(project, '.opencode');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(
+      path.join(bin, 'opencode'),
+      '#!/bin/sh\necho opencode v2.3.2\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ backgroundJobs: { mode: 'of' } }),
+    );
+    const result = runDoctorCheck(project);
+    expect(result.ok).toBe(false);
+    expect(
+      result.configs.find((config) => config.scope === 'project')?.error
+        ?.message,
+    ).toContain('Invalid backgroundJobs.mode');
+  });
+
   test('interpolates environment values before validating presets', () => {
     const configDir = path.join(tempDir, 'project', '.opencode');
     fs.mkdirSync(configDir, { recursive: true });
