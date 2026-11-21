@@ -78,6 +78,10 @@ const QUOTA_BILLING_PATTERNS = [
   /\bpersonal-team-blocked\b/i,
   /\bspending.?limit\b/i,
   /\b(?:ran|run) out of credits\b/i,
+  // Account-credit refusal (issue #1935): a deterministic billing 400, not a
+  // malformed request, so the chain must advance. Narrow by design: the
+  // adapter's own wording only, never generic "credit"/"billing" text.
+  /insufficient credits|purchase more credits/i,
   // Quoted Zhipu codes also cover non-English JSON error bodies.
   /"1113"/,
   /"1308"/,
