@@ -81,9 +81,7 @@ const DEFAULT_MULTIPLEXER: MultiplexerConfig =
 const DEFAULT_FALLBACK: FailoverConfig = {
   enabled: true,
   maxRetries: 3,
-  initialRetryDelayMs: 0,
   retryDelayMs: 500,
-  continuationPolicy: 'retry-primary',
 };
 
 /** Shared frozen empty projection so no-ACP generations return one ref. */

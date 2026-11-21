@@ -596,9 +596,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.fallback).toEqual({
       enabled: true,
       maxRetries: 3,
-      initialRetryDelayMs: 0,
       retryDelayMs: 500,
-      continuationPolicy: 'retry-primary',
     });
     expect(runtime.featureGates.webfetch).toBe(true);
     expect(runtime.acpAgents).toEqual({});

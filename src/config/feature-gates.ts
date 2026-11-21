@@ -45,7 +45,7 @@ const UNSUPPORTED_MANAGED_MODE_MESSAGE =
 
 /**
  * Validate explicit config before sanitization or schema defaults are applied.
- * Reject invalid lifecycle switches and positive limits the host cannot enforce.
+ * Reject retired fallback keys, invalid lifecycle switches and unenforced limits.
  * The retired managed mode is normalized by the loader after this validation.
  */
 export function validateExplicitHostConfig(
@@ -55,7 +55,19 @@ export function validateExplicitHostConfig(
 ): void {
   if (hostFlavor !== 'v2' || !config || typeof config !== 'object') return;
   const source = sourcePath ? `${sourcePath}: ` : '';
-  const backgroundJobs = (config as Record<string, unknown>).backgroundJobs;
+  const raw = config as Record<string, unknown>;
+  const fallback = raw.fallback;
+  if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) {
+    const removed = ['continuationPolicy', 'initialRetryDelayMs'].filter(
+      (key) => Object.hasOwn(fallback, key),
+    );
+    if (removed.length > 0) {
+      throw new UnsupportedHostConfigError(
+        `${source}Removed ${removed.map((key) => `fallback.${key}`).join(', ')} on OpenCode v2. Remove the retired ${removed.length === 1 ? 'key' : 'keys'}, then run /reload.`,
+      );
+    }
+  }
+  const backgroundJobs = raw.backgroundJobs;
   if (
     !backgroundJobs ||
     typeof backgroundJobs !== 'object' ||

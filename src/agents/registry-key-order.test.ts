@@ -148,15 +148,15 @@ function serialize(registry: ReturnType<typeof build>) {
 const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
   default: {
     keys: ['orchestrator', 'explorer', 'oracle', 'designer', 'fixer'],
-    sha256: '0ffbb77d1549ebb725419c9685745d8914e165f9500b93d5981a5eb6c7caf027',
+    sha256: '157f9a302bcda21d1d4976f062f15e7b051d697cbf55e3560696cf4b9fdc3dfa',
   },
   'host override': {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],
-    sha256: '787cb6140275257d97da3083acb6e6dd347b4deb68f31f44052ab1ffaa08a8ec',
+    sha256: 'ff1ca89153286d7cfa15f7a338d7f757f88559ea06f68be63e93cbca27a7e1c5',
   },
   preset: {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],
-    sha256: 'acdd96deceb769d9735819940e5ec318dac161151debba5245a664c1dc380b6c',
+    sha256: '465ef29e7f47739fb3a2186fe9b634dd5b33e58e778dd7f3e73585d2757258d1',
   },
   'marketplace orchestrator': {
     keys: [
@@ -167,7 +167,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'fixer',
       'orchestrator-agent',
     ],
-    sha256: '0adb9239949e240a627fbf21d8b912b5e98d1c2c7cbc4fde0b2ba0acb15711a5',
+    sha256: '227da58db5cc2b8b031b15df421e0a4e3e40cdeff68c2c0511426040e19f3db6',
   },
   'marketplace builtin': {
     keys: [
@@ -179,7 +179,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'fixer',
       'writer-agent',
     ],
-    sha256: 'c2bc2d6139ab58deed5e4ac4c9e9dec002b32e80faee4b6325d92ce80fe83264',
+    sha256: '5d7b3b7dfcfe4e7b21419ade0073029f204a1f417c48cc92f92ada06973dee80',
   },
   'orchestrator display alias': {
     keys: [
@@ -191,7 +191,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'orchestrator-agent',
       'Lead',
     ],
-    sha256: '5223497bf9b41bbf67588d0cf3a82e63294fda981ea00654d2cc373ce1a2a4f8',
+    sha256: 'e8bfba8a3ae0d5080911f9a71d62fe028bd1c891f4cb0355ce03731cad1ab4c4',
   },
   'session follow': {
     keys: [
@@ -202,7 +202,7 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'fixer',
       'follows-session',
     ],
-    sha256: '022ca433c7a2e23fcb58224c696d03e7781fe0206e6e9228849edd0b8541a587',
+    sha256: '3caa730009dddd737567f5cdd53deab9add821dacd44dce2c2db28da2574b592',
   },
   'aliased council': {
     keys: [
@@ -216,11 +216,11 @@ const EXPECTED: Record<string, { keys: string[]; sha256: string }> = {
       'councillor-alpha',
       'panel',
     ],
-    sha256: '207de4c45004390c0a61157819973767e622d1ff91f1f5773f6b864cbe4659c8',
+    sha256: 'a0d6daf421b8976daa083d92a27dc5253150359c7f011dbfdce44a752b60363c',
   },
   'empty host model': {
     keys: ['explorer', 'orchestrator', 'oracle', 'designer', 'fixer'],
-    sha256: '7e7ec35a459cc39a78a5451d9f3640ff35acacfa4dda5b5a49248b53f2b9a17c',
+    sha256: '0b8b0b4cd85f08e2ac40dc6ba92fbc714a97ba4e81f136c115f79b620f785901',
   },
 };
 

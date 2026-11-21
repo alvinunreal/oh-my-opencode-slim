@@ -542,13 +542,6 @@ describe('createPhaseReminderHook', () => {
     await hook['experimental.chat.messages.transform']({}, output);
 
     expect(output.messages[0].parts[1].text).toBe(PHASE_REMINDER);
-    // Guards accidental edits to the constant: the exact bytes pinned here
-    // must match (the cache-payload snapshot owns the same value).
-    expect(output.messages[0].parts[1].text).toBe(
-      '<system-reminder>\n' +
-        '!IMPORTANT! Scheduler workflow: pick the lightest workflow that fits. Direct work: execute and verify proportionately. Otherwise: plan lanes → dispatch background specialists → track task IDs → await hook-driven completion → reconcile terminal results → verify. !END!\n' +
-        '</system-reminder>',
-    );
   });
 
   test('fork edge: mixed sessionIDs anchor on the first message matching the latest session, deterministically', async () => {

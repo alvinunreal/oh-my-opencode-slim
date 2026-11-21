@@ -49,10 +49,10 @@ describe('delegationWording', () => {
 });
 
 describe('buildOrchestratorPrompt delegation vocabulary', () => {
-  test('v2 hostFlavor preserves the resume-only channel without v1 wake copy', () => {
+  test('v2 leaves completion mechanics to native tool descriptions', () => {
     const prompt = buildOrchestratorPrompt({ hostFlavor: 'v2' });
 
-    expect(prompt).toContain('completion notifications resume you');
+    expect(prompt).not.toContain('completion notifications resume you');
     expect(prompt).not.toContain('wake scheduler resume you');
     expect(prompt).not.toContain('`subagent` calls in one message');
     expect(prompt).not.toContain('subagent_type');
@@ -60,10 +60,10 @@ describe('buildOrchestratorPrompt delegation vocabulary', () => {
     expect(prompt).not.toContain('task_id');
   });
 
-  test('defaults to host completion notifications', () => {
+  test('the default prompt does not repeat host completion guidance', () => {
     const prompt = buildOrchestratorPrompt();
 
-    expect(prompt).toContain('completion notifications resume you');
+    expect(prompt).not.toContain('completion notifications resume you');
     expect(prompt).not.toContain('`task` calls in one message');
     expect(prompt).not.toContain('subagent(');
   });

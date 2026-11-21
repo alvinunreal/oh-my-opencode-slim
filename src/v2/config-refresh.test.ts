@@ -488,6 +488,42 @@ describe('v2 profile refresh hook', () => {
     });
   });
 
+  test('removed fallback settings refuse refresh and retain last-good profiles', async () => {
+    env.writeUserConfig(CHEAP_DEEPSEEK);
+    await withFactory(
+      async ({ refresh, hooks }) => {
+        const initialAgent = JSON.stringify(hooks.agent?.explorer);
+        for (const fallback of [
+          { continuationPolicy: 'retry-primary' },
+          { initialRetryDelayMs: 0 },
+        ]) {
+          env.writeUserConfig({
+            preset: 'changed',
+            presets: {
+              changed: { explorer: { model: 'openai/gpt-5-mini' } },
+            },
+            backgroundJobs: { mode: 'off' },
+            disabled_hooks: ['foreground-fallback'],
+            fallback,
+          });
+          const result = await refresh();
+          expect(result.ok).toBe(false);
+          if (result.ok) throw new Error('expected removed setting rejection');
+          expect(result.reason).toContain(env.userConfigPath);
+          for (const key of Object.keys(fallback)) {
+            expect(result.reason).toContain(`fallback.${key}`);
+          }
+          expect(sidebarModels().explorer).toBe(
+            'opencode-go/deepseek-v4.1-flash',
+          );
+          expect(JSON.stringify(hooks.agent?.explorer)).toBe(initialAgent);
+        }
+      },
+      {},
+      'v2',
+    );
+  });
+
   test('warning-only kinds (missing preset) do not fail the refresh', async () => {
     env.writeUserConfig(CHEAP_DEEPSEEK);
 

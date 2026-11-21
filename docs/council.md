@@ -406,7 +406,7 @@ Council responses include:
 ### Removed `master` fields
 
 The `council.master*` keys were removed: ignored with a warning (see
-[Removed config keys](configuration.md#removed-config-keys)).
+[Retired settings](configuration.md#invalid-or-retired-settings)).
 
 Prefer this instead:
 
