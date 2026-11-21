@@ -45,7 +45,9 @@ type ModelRequest = {
   model: string;
   temperature?: number;
   messages: Array<{ role: string; content?: unknown }>;
-  tools?: Array<{ function?: { name?: string; parameters?: unknown } }>;
+  tools?: Array<{
+    function?: { name?: string; description?: string; parameters?: unknown };
+  }>;
 };
 type Action =
   | { text: string; hold?: string; finish?: string }
@@ -1636,7 +1638,7 @@ async function councilAndObserver(
   const host = new Host(root, model);
   const config: RecordValue = {
     ...pluginConfig('off'),
-    disabled_agents: ['explorer', 'oracle', 'designer', 'fixer'],
+    disabled_agents: ['explorer', 'designer', 'fixer'],
     disabled_hooks: pluginConfig('off').disabled_hooks.filter(
       (name) => name !== 'council-inject',
     ),
@@ -1657,7 +1659,19 @@ async function councilAndObserver(
     },
   };
   await host.configure(installed, 'off', config);
-  const nativeConfig = hostConfig(installed, model);
+  const nativeConfig = {
+    ...hostConfig(installed, model),
+    agents: {
+      orchestrator: {
+        permissions: [
+          { action: 'subagent', resource: '*', effect: 'deny' },
+          ...['judge', 'observer', 'councillor-alpha', 'councillor-beta'].map(
+            (resource) => ({ action: 'subagent', resource, effect: 'allow' }),
+          ),
+        ],
+      },
+    },
+  };
   const models = nativeConfig.providers.capture.models as Record<
     string,
     { capabilities: Record<string, unknown> }
@@ -1670,6 +1684,45 @@ async function councilAndObserver(
   );
   try {
     await host.start();
+    await checkCase(
+      results,
+      'off: native delegation permissions filter the roster and enforce denial',
+      async () => {
+        const parent = await host.create('Native delegation policy');
+        const offset = model.requests.length;
+        const messages = await host.runTools(
+          parent.id,
+          [subagent('Must not execute', { agent: 'oracle' })],
+          'DENIED_DELEGATION_FINISHED',
+        );
+        const [denied] = toolParts(messages, 'subagent');
+        assert.equal(denied?.state?.status, 'error');
+        assert.equal(denied?.state?.input?.agent, 'oracle');
+        assert.equal(object(denied?.state?.error).type, 'permission.rejected');
+        assert.equal(host.children(parent.id).length, 0);
+        const request = model.requests
+          .slice(offset)
+          .find((entry) => entry.body.model === 'parent' && entry.plan)?.body;
+        assert(request);
+        const description = request.tools?.find(
+          (tool) => tool.function?.name === 'subagent',
+        )?.function?.description;
+        assert(description);
+        assert.match(description, /Available subagents:/);
+        assert.match(description, /\n- observer: .*full file path/);
+        assert.match(description, /\n- judge: /);
+        assert.doesNotMatch(description, /\n- (oracle|councillor-[^:]+): /);
+        const system = JSON.stringify(
+          request.messages.filter(({ role }) => role === 'system'),
+        );
+        assert.doesNotMatch(system, /<Agents>/);
+        assert.match(system, /Seats: councillor-alpha, councillor-beta/);
+        return {
+          nativeRosterUsesDescriptions: true,
+          deniedAgentCannotSpawn: true,
+        };
+      },
+    );
     await checkCase(
       results,
       'off: renamed Council receives both native seat bodies',

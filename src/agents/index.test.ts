@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
 import {
   AgentOverrideConfigSchema,
@@ -22,7 +22,6 @@ import {
   mergeHostAgentConfigs,
   projectAgentRuntimeState,
 } from './index';
-import { TASK_NO_NESTED_DISPATCH } from './permissions';
 import { TASK_REJECTION_INSTRUCTION } from './task-rejection';
 
 const TEST_DIRECTORY = 'runtime-test-agents-index';
@@ -1704,22 +1703,6 @@ test('pointer stays roster-only — the block dispatch clause never leaks into t
   expect(prompt).not.toContain('preset models');
 });
 
-test('routingBlock: false strips <Agents> from the v2 orchestrator prompt', () => {
-  const agents = createAgents(runtimeFor({ routingBlock: false }), {
-    hostFlavor: 'v2',
-  });
-  const orchestrator = agents.find((a) => a.name === 'orchestrator');
-  expect(orchestrator?.config.prompt).not.toContain('<Agents>');
-
-  const defaultAgents = createAgents(runtimeFor({}), {
-    hostFlavor: 'v2',
-  });
-  const defaultOrchestrator = defaultAgents.find(
-    (a) => a.name === 'orchestrator',
-  );
-  expect(defaultOrchestrator?.config.prompt).toContain('<Agents>');
-});
-
 test('orchestrator prompt excludes the council pointer when no councillors', () => {
   const agents = createAgents(runtimeFor());
   const orchestrator = agents.find((a) => a.name === 'orchestrator');
@@ -1856,202 +1839,38 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('subagents on a custom specialist warns and is ignored', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const runtime = runtimeFor({
-        disabled_agents: [],
-        agents: {
-          reviewer: { model: 'test/reviewer-model', subagents: ['fixer'] },
-        },
-      });
-      const agents = createAgents(runtime, { hostFlavor: 'v2' });
-      const scopeWarns = warnSpy.mock.calls.filter((call) =>
-        String(call[0]).includes('.subagents is ignored'),
-      );
-      expect(scopeWarns).toHaveLength(1);
-      expect(String(scopeWarns[0]?.[0])).toContain('agents.reviewer.subagents');
-
-      const reviewer = agents.find((a) => a.name === 'reviewer');
-      const permission = (
-        reviewer as { config: { permission: Record<string, unknown> } }
-      ).config.permission;
-      expect(permission.task).toEqual({ ...TASK_NO_NESTED_DISPATCH });
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test('orchestrator subagents scope its task stance and <Agents> catalog', () => {
-    const runtime = runtimeFor({
-      disabled_agents: [],
-      agents: {
-        orchestrator: { subagents: ['fixer'] },
-      },
-    });
-    const agents = createAgents(runtime, { hostFlavor: 'v2' });
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    const permission = (
-      orchestrator as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    expect(permission.task).toEqual({ '*': 'deny', fixer: 'allow' });
-    expect(orchestrator?.config.prompt).toContain('@fixer');
-    expect(orchestrator?.config.prompt).not.toContain('@oracle');
-    expect(orchestrator?.config.prompt).not.toContain('@explorer');
-  });
-
-  test('orchestrator scope renders in-scope custom specialists', () => {
-    const runtime = runtimeFor({
-      disabled_agents: [],
-      agents: {
-        orchestrator: { subagents: ['fixer', 'writer'] },
-        writer: {
-          model: 'test/writer-model',
-          description: 'Writing specialist',
-        },
-      },
-    });
-    const agents = createAgents(runtime, { hostFlavor: 'v2' });
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(orchestrator?.config.prompt).toContain('@fixer');
-    expect(orchestrator?.config.prompt).toContain('@writer');
-    expect(orchestrator?.config.prompt).toContain('Writing specialist');
-    expect(orchestrator?.config.prompt).not.toContain('@oracle');
-  });
-
-  test('scoped orchestrator omits out-of-scope council seats', () => {
-    const agents = createAgents(
-      runtimeFor({
-        council: councilConfig(),
-        agents: {
-          orchestrator: { subagents: ['fixer'] },
-        },
-      }),
-      { hostFlavor: 'v2' },
-    );
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(orchestrator?.config.prompt).toContain('@fixer');
-    expect(orchestrator?.config.prompt).not.toContain('councillor-');
-    // The procedure ends by delegating synthesis to `council`, which this
-    // scope denies: advertising seats would prescribe a dead end.
-    expect(orchestrator?.config.prompt).not.toContain('## Council');
-  });
-
-  test('scoped orchestrator keeps the council block when synthesis and a seat are in scope', () => {
-    const agents = createAgents(
-      runtimeFor({
-        council: councilConfig(),
-        agents: {
-          orchestrator: {
-            subagents: ['fixer', 'council', 'councillor-alpha'],
-          },
-        },
-      }),
-      { hostFlavor: 'v2' },
-    );
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    expect(orchestrator?.config.prompt).toContain('## Council');
-    expect(orchestrator?.config.prompt).toContain('councillor-alpha');
-  });
-
-  test('subagents accepts configured ACP wrappers and real council seats', () => {
-    const agents = createAgents(
-      runtimeFor({
-        disabled_agents: [],
-        council: councilConfig(),
-        acpAgents: { bridge: { command: 'bridge-acp' } },
-        agents: {
-          orchestrator: {
-            subagents: ['bridge', 'councillor-alpha'],
-          },
-        },
-      }),
-      { hostFlavor: 'v2' },
-    );
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    const permission = (
-      orchestrator as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    expect(permission.task).toEqual({
-      '*': 'deny',
-      bridge: 'allow',
-      'councillor-alpha': 'allow',
-    });
-  });
-
   describe('ACP wrapper availability projection', () => {
     const promptOf = (agents: ReturnType<typeof createAgents>, name: string) =>
       (agents.find((agent) => agent.name === name)?.config.prompt ??
         '') as string;
 
-    test('disabled acp_run tool omits wrapper, catalog, scope and profile entries', () => {
-      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-      try {
-        const runtime = runtimeFor({
-          disabled_tools: ['acp_run'],
-          acpAgents: { bridge: { command: 'bridge-acp' } },
-          agents: {
-            orchestrator: { subagents: ['bridge'] },
-          },
-        });
-        const agents = createAgents(runtime);
-        expect(agents.some((agent) => agent.name === 'bridge')).toBe(false);
-        expect(promptOf(agents, 'orchestrator')).not.toContain('@bridge');
-        // The primary allow default is dropped for a tool that is not
-        // registered; the generic deny for non-primaries stays.
-        expect(
-          Object.hasOwn(permissionsOf(agents, 'orchestrator'), 'acp_run'),
-        ).toBe(false);
-
-        // Scope validation drops the wrapper: it is not a known specialist,
-        // so the compiled stance keeps only the wildcard deny.
-        expect(permissionsOf(agents, 'orchestrator').task).toEqual({
-          '*': 'deny',
-        });
-        const drops = warnSpy.mock.calls.filter((call) =>
-          String(call[0]).includes(
-            "entry 'bridge' does not match a known agent",
-          ),
-        );
-        expect(drops).toHaveLength(1);
-        expect(getAgentConfigs(runtime).bridge).toBeUndefined();
-      } finally {
-        warnSpy.mockRestore();
-      }
+    test('disabled acp_run omits the wrapper and its guidance', () => {
+      const runtime = runtimeFor({
+        disabled_tools: ['acp_run'],
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+      });
+      const agents = createAgents(runtime);
+      expect(promptOf(agents, 'orchestrator')).not.toContain('@bridge');
+      expect(permissionsOf(agents, 'orchestrator')).not.toHaveProperty(
+        'acp_run',
+      );
+      expect(getAgentConfigs(runtime).bridge).toBeUndefined();
     });
 
-    test('disabled ACP wrapper agent omits wrapper, catalog, scope and profile entries', () => {
-      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-      try {
-        const runtime = runtimeFor({
-          disabled_agents: ['bridge'],
-          acpAgents: { bridge: { command: 'bridge-acp' } },
-          agents: {
-            orchestrator: { subagents: ['bridge'] },
-          },
-        });
-        const agents = createAgents(runtime);
-        expect(agents.some((agent) => agent.name === 'bridge')).toBe(false);
-        expect(promptOf(agents, 'orchestrator')).not.toContain('@bridge');
-        expect(permissionsOf(agents, 'orchestrator').task).toEqual({
-          '*': 'deny',
-        });
-        const drops = warnSpy.mock.calls.filter((call) =>
-          String(call[0]).includes(
-            "entry 'bridge' does not match a known agent",
-          ),
-        );
-        expect(drops).toHaveLength(1);
-        expect(getAgentConfigs(runtime).bridge).toBeUndefined();
-      } finally {
-        warnSpy.mockRestore();
-      }
+    test('disabled wrapper agents are absent from registration and guidance', () => {
+      const runtime = runtimeFor({
+        disabled_agents: ['bridge'],
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+      });
+      expect(promptOf(createAgents(runtime), 'orchestrator')).not.toContain(
+        '@bridge',
+      );
+      expect(getAgentConfigs(runtime).bridge).toBeUndefined();
     });
 
-    test('active wrappers keep the catalog, scope allow, profile and role prompt', () => {
+    test('active wrappers keep their role prompt and inner selector guidance', () => {
       const runtime = runtimeFor({
         acpAgents: { bridge: { command: 'bridge-acp' } },
-        agents: { orchestrator: { subagents: ['bridge'] } },
       });
       const agents = createAgents(runtime);
       expect(agents.some((agent) => agent.name === 'bridge')).toBe(true);
@@ -2070,10 +1889,6 @@ describe('createAgents', () => {
       expect(orchestratorPrompt).toContain(
         'Include an explicitly requested inner ACP selector in the delegation brief',
       );
-      expect(permissionsOf(agents, 'orchestrator').task).toEqual({
-        '*': 'deny',
-        bridge: 'allow',
-      });
       expect(permissionsOf(agents, 'orchestrator').acp_run).toBe('allow');
       expect(getAgentConfigs(runtime).bridge).toBeDefined();
     });
@@ -2101,106 +1916,6 @@ describe('createAgents', () => {
       expect(orchestratorPrompt).toContain('Custom ACP routing contract.');
       expect(orchestratorPrompt).not.toContain('Inner ACP selector:');
     });
-  });
-
-  test('phantom councillor seats warn and are dropped', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const agents = createAgents(
-        runtimeFor({
-          disabled_agents: [],
-          council: councilConfig(),
-          agents: {
-            orchestrator: {
-              subagents: ['councillor-alpha', 'councillor-ghost'],
-            },
-          },
-        }),
-        { hostFlavor: 'v2' },
-      );
-      const orchestrator = agents.find((a) => a.name === 'orchestrator');
-      const permission = (
-        orchestrator as { config: { permission: Record<string, unknown> } }
-      ).config.permission;
-      expect(permission.task).toEqual({
-        '*': 'deny',
-        'councillor-alpha': 'allow',
-      });
-      const drops = warnSpy.mock.calls.filter((call) =>
-        String(call[0]).includes('does not match a known agent'),
-      );
-      expect(drops).toHaveLength(1);
-      expect(String(drops[0]?.[0])).toContain('councillor-ghost');
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test('scoped stance admits in-scope display names', () => {
-    const agents = createAgents(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          orchestrator: { subagents: ['oracle'] },
-          oracle: { displayName: 'Advisor' },
-        },
-      }),
-      { hostFlavor: 'v2' },
-    );
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    const permission = (
-      orchestrator as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    // The catalog advertises '@Advisor' (the prompt rewrite), so the host
-    // must accept both spellings.
-    expect(permission.task).toEqual({
-      '*': 'deny',
-      oracle: 'allow',
-      Advisor: 'allow',
-    });
-    expect(orchestrator?.config.prompt).toContain('@Advisor');
-    expect(orchestrator?.config.prompt).not.toContain('@oracle');
-  });
-
-  test('unknown subagents entries warn and are dropped', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const runtime = runtimeFor({
-        disabled_agents: [],
-        agents: {
-          orchestrator: {
-            subagents: ['fixer', 'typo-specialist'],
-          },
-        },
-      });
-      const agents = createAgents(runtime, { hostFlavor: 'v2' });
-      const orchestrator = agents.find((a) => a.name === 'orchestrator');
-      const permission = (
-        orchestrator as { config: { permission: Record<string, unknown> } }
-      ).config.permission;
-      expect(permission.task).toEqual({ '*': 'deny', fixer: 'allow' });
-      expect(orchestrator?.config.prompt).not.toContain('@typo-specialist');
-      const drops = warnSpy.mock.calls.filter((call) =>
-        String(call[0]).includes('does not match a known agent'),
-      );
-      expect(drops).toHaveLength(1);
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test('subagents rejects whitespace-only entries', () => {
-    expect(() =>
-      createAgents(
-        runtimeFor({
-          agents: {
-            orchestrator: {
-              subagents: ['   '],
-            },
-          },
-        }),
-      ),
-    ).toThrow(/empty specialist name/);
   });
 
   test('creates exactly 5 agents by default (observer and council disabled)', () => {

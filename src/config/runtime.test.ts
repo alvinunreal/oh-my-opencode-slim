@@ -239,7 +239,6 @@ describe('RuntimeConfig', () => {
     expect(runtime.preset).toBeUndefined();
     expect(runtime.updateCheckerEnabled).toBe(true);
     expect(runtime.stripOrchestratorModel).toBe(false);
-    expect(runtime.routingBlock).toBe(true);
     expect(runtime.setDefaultAgent).toBe(true);
     expect(runtime.compactSidebar).toBe(true);
     expect(runtime.sidebarEnabled).toBe(true);
@@ -595,9 +594,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.fallback).toEqual({
       enabled: true,
       maxRetries: 3,
-      initialRetryDelayMs: 0,
       retryDelayMs: 500,
-      continuationPolicy: 'retry-primary',
     });
     expect(runtime.featureGates.webfetch).toBe(true);
     expect(runtime.acpAgents).toEqual({});
@@ -625,7 +622,6 @@ describe('RuntimeConfig', () => {
     const runtime = RuntimeConfig.init(DIRECTORY, {
       autoUpdate: false,
       stripOrchestratorModel: true,
-      routingBlock: false,
       setDefaultAgent: false,
       compactSidebar: false,
       sidebar: false,
@@ -642,7 +638,6 @@ describe('RuntimeConfig', () => {
     });
     expect(runtime.updateCheckerEnabled).toBe(false);
     expect(runtime.stripOrchestratorModel).toBe(true);
-    expect(runtime.routingBlock).toBe(false);
     expect(runtime.setDefaultAgent).toBe(false);
     expect(runtime.compactSidebar).toBe(false);
     expect(runtime.sidebarEnabled).toBe(false);

@@ -30,8 +30,7 @@ export function createV1InterviewSessionRuntime(
     async notify(sessionID, text) {
       // `noReply` suppresses the model turn but NOT the agent rewrite: an
       // agent-less body still makes OpenCode resolve its default primary and
-      // durably re-home the session to `build`
-      // (docs/agents/build-agent-empty-input-diagnosis.md, probe A2).
+      // change the session's agent.
       // Resolve the agent the session is actually running under — newest USER
       // message wins, so a native compaction/summary turn can never be
       // mistaken for it. A fallback is accepted only after a usable session

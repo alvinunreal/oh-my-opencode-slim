@@ -1,312 +1,200 @@
 # Installation Guide
 
-Slim requires OpenCode **2.3.0 or newer**. Update an older installation with
-`npm install -g @opencode/cli@latest` or your OpenCode package manager.
-
-## Table of Contents
-
-- [For Humans](#for-humans)
-- [For LLM Agents](#for-llm-agents)
-- [Troubleshooting](#troubleshooting)
-- [Uninstallation](#uninstallation)
-
----
+The current source requires **OpenCode 2.3.0 or newer**. Published npm tags can
+lag `master`; use a local checkout when testing unreleased changes.
 
 ## For Humans
 
 ### Quick Install
 
-Run the interactive installer:
-
 ```bash
 bunx oh-my-opencode-slim@latest install
-```
-
-Or use non-interactive mode:
-
-```bash
+# Non-interactive installer:
 bunx oh-my-opencode-slim@latest install --no-tui
 ```
 
-### Configuration Options
+The CLI is Node-compatible; `npx` also works. `--no-tui` selects the installer
+interface, not the runtime `tui: false` setting.
 
-Run `bunx oh-my-opencode-slim@latest install --help` for the full flag list.
-Common options: `--preset=<openai|opencode-go>` (default `openai`),
-`--no-tui`, `--dry-run`, `--reset`.
+Use `install --help` for all flags. Common options are
+`--preset=<openai|opencode-go>` (default `openai`), `--dry-run` and `--reset`.
+The installer generates both named presets; see the
+[OpenAI](presets/openai-preset.md) and [OpenCode Go](presets/opencode-go-preset.md)
+guides for current model mappings. OpenCode Go installation also enables a
+vision-capable Observer because its default Orchestrator is text-only.
 
-When invoked through `bunx` with a tag other than `latest` or an exact version,
-the installer pins the resolved package version in OpenCode's configuration.
-`npx` does not expose that request in its cache path, so its entry is unpinned.
+Existing Slim configuration is retained unless you explicitly use `--reset`.
+Reset writes a `.bak` before replacing it; it is not a repair command for one
+incorrect field. The installer adds the plugin in `opencode.json[c]`, generates
+Slim configuration in the same user directory, and enables LSP only when the
+host has no explicit `lsp` setting. `OPENCODE_CONFIG_DIR` selects that directory.
 
-### Non-Destructive Behavior
+A `bunx` invocation using an exact version or a non-`latest` tag pins the resolved
+package version in the host configuration. `npx` does not expose the original
+request in its cache path, so its installer entry is unpinned.
 
-By default, the installer is non-destructive. If an `oh-my-opencode-slim.json` configuration file already exists, the installer will **not** overwrite it. Instead, it will display a message:
+### Authenticate and verify
 
-```
-[i] Configuration already exists at ~/.config/opencode/oh-my-opencode-slim.json. Use --reset to overwrite.
-```
-
-To force overwrite of your existing configuration, use the `--reset` flag:
-
-```bash
-bunx oh-my-opencode-slim@latest install --reset
-```
-
-**Note:** When using `--reset`, the installer creates a `.bak` backup file before overwriting, so your previous configuration is preserved.
-
-### After Installation
-
-The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using variant-aware GPT-6 models, including `gpt-6.1-sol` at `medium` for Orchestrator, `high` for Oracle, and `low` for Fixer, and `gpt-6-luna` variants for Explorer and Designer). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. That preset uses Minimax-M3 for Orchestrator, so the installer also enables Observer with `opencode-go/mimo-v2.5` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
-
-OpenCode registers bundled skills in-process at plugin load. Nothing is copied to the user skill directory,
-and plugin updates apply on the next OpenCode restart. Skills listed in
-`disabled_skills` are not registered. A same-named skill directory under
-`~/.config/opencode/skills/` overrides the bundled version (directory sources
-take precedence over plugin registrations).
-
-Then:
+Provider authentication is a user-interactive step:
 
 ```bash
 opencode auth login
-# Select your provider and complete OAuth flow
-```
-
-```bash
+opencode auth list
 opencode models
 ```
 
+Inspect `oh-my-opencode-slim.json[c]`, choose models you actually have access to,
+then start OpenCode. `/plugins` shows plugin activation errors. Ask the
+Orchestrator to run a small delegation to verify your chosen agent/model rather
+than relying on registration alone.
 
-Open your generated config at `~/.config/opencode/oh-my-opencode-slim.json`
-and adjust models if needed.
+Bundled skills register in-process; they are not copied to your skills directory.
+`disabled_skills` omits selected bundled skills, and a same-named user directory
+skill overrides a bundled registration. See [Skills](skills.md).
 
-Then run OpenCode and verify the agents:
+Native `general`/`explore` replacement is a runtime choice. Set
+`replaceBuiltinSubagents: false` to retain them; the installer does not need a
+second agent-removal mechanism.
+
+### Run from a checkout
+
+```bash
+git clone https://github.com/alvinunreal/oh-my-opencode-slim.git
+cd oh-my-opencode-slim
+bun install
+bun run build
+bun dist/cli/index.js install
+```
+
+Register the complete package directory, not a single `dist` file: builds use
+relative ESM chunks and optional dependencies. Update with `git pull`,
+`bun install` and `bun run build`, then restart/reload OpenCode.
+
+### Ask another coding agent
 
 ```text
-ping all agents
+Install and configure oh-my-opencode-slim using its Installation Guide:
+https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/docs/installation.md
 ```
-
-> **💡 Tip: Models are fully customizable.** The installer sets sensible defaults, but you can assign *any* model to *any* agent. Edit `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc` for comments support) to override models, adjust reasoning effort, or disable agents entirely.
-
-### Alternative: Ask Any Coding Agent
-
-Paste this into Claude Code, AmpCode, Cursor, or any coding agent:
-
-```
-Install and configure by following the instructions here:
-https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/refs/heads/master/README.md
-```
-
----
 
 ## For LLM Agents
 
-If you're an LLM Agent helping set up oh-my-opencode-slim, follow these steps.
+1. Check `opencode --version` against the required host floor.
+2. Read existing configuration; use `--dry-run` when needed and do not reset
+   customized configuration without approval.
+3. Run the installer with the requested preset/interface.
+4. Give the user concrete authentication steps. Do not run an interactive login
+   or expose stored credentials on their behalf.
+5. Run `oh-my-opencode-slim doctor` from the project and verify a small native
+   delegation with an available model.
 
-### Step 1: Check OpenCode Installation
+Model lineups, feature disables, permissions and prompt overrides belong in
+[Configuration](configuration.md), not a second installer-specific schema.
+
+## Upgrading
+
+Upgrade OpenCode before loading a source version that requires a newer host:
 
 ```bash
+npm install -g @opencode/cli@latest
 opencode --version
 ```
 
-If not installed, direct the user to https://opencode.ai/docs first.
+Use the equivalent command from your package manager when appropriate. Current
+Slim code has no OpenCode 1 runtime; finish managed work before changing to the
+native lifecycle.
 
-### Step 2: Run the Installer
+Review **every inherited configuration layer**, including `OPENCODE_CONFIG_DIR`,
+JSONC files that take precedence, ancestor `.opencode` directories and
+`~/.opencode` for projects under `$HOME`. Run `oh-my-opencode-slim doctor` from
+each project. The [discovery rules](configuration.md#config-files) apply to both
+runtime and diagnostics.
 
-The installer generates OpenAI and OpenCode Go presets, with OpenAI active by default:
+OpenCode now owns child execution, same-session continuation, steering, durable
+Jobs, restart recovery and completion notifications. Slim has no job board,
+short aliases, reusable-session pool, periodic idle TODO scheduler or managed
+limits. The default task mode is `native`; `off` removes Slim task tools and
+session-preset routing by default. `sessionPresetRouting` remains independently
+selectable.
 
-```bash
-bunx oh-my-opencode-slim@latest install --no-tui
+| Older setting | Current behavior |
+|---|---|
+| `backgroundJobs.mode: "managed"` | Existing loader applies `native` with a warning; choose `off` if no Slim task controls are wanted |
+| `backgroundJobs.enabled: false` without `mode` | Existing loader preserves the opt-out as `off`, with a warning |
+| Positive `backgroundJobs.concurrency` limits | Startup refused: Slim cannot enforce them on the native host |
+| Positive `backgroundJobs.wallClockTimeoutMs` | Startup refused for the same reason |
+| Old board/reuse/wake/deadline settings | Removed; no equivalent plugin mechanism is created |
+| Root `webfetch` block | Removed; use `disabled_tools: ["webfetch"]` to retain native fetch only |
+| Disabled `auto-update-checker` hook | Removed; use `autoUpdate: false` |
+| `fallback.continuationPolicy`, `fallback.initialRetryDelayMs` | Startup refused: neither controls native V2 fallback; remove the keys, even with task mode/hook off |
+| `routingBlock` | Remove the key. Native `subagent` lists the permitted agents and their descriptions; Slim no longer renders a separate `<Agents>` block |
+| Slim `agents.<name>.subagents` and preset equivalents | Replace required restrictions with [native subagent permissions](configuration.md#native-delegation-permissions), then remove the key. Loading fails rather than dropping the layer and loosening permissions |
+
+Explicit host limits are checked before merging, even if a closer layer selects
+`off`. Errors name the source file and setting. For example:
+
+```text
+<config path>: Unsupported backgroundJobs.concurrency.providerConcurrency.openai = 2 on OpenCode v2: Slim no longer enforces this limit. Remove the key or set it to 0, then run /reload.
 ```
 
-**Examples:**
-```bash
-# Interactive install
-bunx oh-my-opencode-slim@latest install
+When activation is refused, use `/plugins` → view error or `doctor`, correct the
+named file and `/reload`. Disabled features and invalid limits are different:
+a nearer override must not conceal an unenforceable promise.
 
-# Non-interactive
-bunx oh-my-opencode-slim@latest install --no-tui
+### Existing work and recovery
 
-# Make the generated OpenCode Go preset active
-bunx oh-my-opencode-slim@latest install --preset=opencode-go
+Old Slim board/delivery records are left unread and unchanged. The plugin does
+not import them into native Jobs or delete them. Exact host sessions remain in
+OpenCode; continue a known child with native `subagent(sessionID, prompt)`.
+Old aliases are not native session IDs.
 
-# Force overwrite existing configuration
-bunx oh-my-opencode-slim@latest install --reset
-```
-
-The installer automatically:
-- Adds the plugin to `opencode.json` or `opencode.jsonc` in
-  `$OPENCODE_CONFIG_DIR` when set, otherwise `~/.config/opencode`
-- Disables default OpenCode agents
-- Enables OpenCode LSP integration when no explicit `lsp` setting exists
-- Generates agent model mappings in the same OpenCode config directory as
-  `oh-my-opencode-slim.json` (or `.jsonc`)
-
-### Step 3: Authenticate with Providers
-
-Ask user to run the following command. Don't run it yourself, it requires user interaction.
-
-```bash
-opencode auth login
-# Select your provider and complete OAuth flow
-```
-
-### Step 4: Verify Installation
-
-Ask the user to:
-
-1. Authenticate: `opencode auth login`
-2. List available models with `opencode models`.
-3. Start OpenCode with `opencode`.
-4. Run: `ping all agents`
-
-Verify all agents respond successfully.
-
-**Crucial Advice for the User:**
-- They can easily assign **different models to different agents** by editing `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`).
-- If they want to add a different provider later (OpenCode Go, Kimi, GitHub Copilot, ZAI), they can update this file manually. See **[Configuration Reference](configuration.md)** and the preset docs for examples.
-- Read the generated `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`) file to understand the current configuration.
-
----
+Host recovery is **at-least-once**, not exactly-once for external side effects.
+An uncertain submission can still have landed; do not blindly resend it.
+Standalone embeddings that do not run the host recovery sweep do not gain one
+from Slim. See [Background Orchestration](background-orchestration.md).
 
 ## Troubleshooting
 
-### Installer Fails
+| Symptom | Check |
+|---|---|
+| Installer failure | `install --help`, writable configuration paths and dependency installation |
+| Existing configuration message | Keep it, or explicitly choose `--reset`; do not confuse it with activation failure |
+| Agent does not answer | `opencode auth list`, available models, `/plugins`, and project `doctor` output |
+| Missing Slim task tools | Host floor, `backgroundJobs.mode`, and `disabled_tools`; native subagents work in `off` too |
+| Local build loads but HTML extraction fails | Optional `jsdom` dependency must resolve from the package directory |
+| Panes do not open | Use the shared service or an explicit `--server`; `--standalone` does not support Slim panes |
 
-Check the expected config format:
-```bash
-bunx oh-my-opencode-slim@latest install --help
-```
+For pane deployment, authentication and backend setup use
+[Multiplexer Integration](multiplexer-integration.md), not old `--port` or
+background-subagent environment recipes.
 
-Then manually create the config files at:
-- `~/.config/opencode/oh-my-opencode-slim.json` (or `.jsonc`)
-
-### Configuration Already Exists
-
-If the installer reports that the configuration already exists, you have two options:
-
-1. **Keep existing config**: The installer will skip the configuration step and continue with other operations (like adding the plugin).
-
-2. **Reset configuration**: Use `--reset` to overwrite:
-   ```bash
-   bunx oh-my-opencode-slim@latest install --reset
-   ```
-   A `.bak` backup file will be created automatically.
-
-### Agents Not Responding
-
-1. Check your authentication:
-   ```bash
-   opencode auth status
-   ```
-
-2. From your project root, verify your config file exists and is valid:
-   ```bash
-   bunx oh-my-opencode-slim@latest doctor
-   ```
-
-3. Check that your provider is configured in `~/.config/opencode/opencode.json`
-
-### Missing Background Task Tools
-
-Run `opencode --version` and update to 2.3.0 or newer. OpenCode runs subagents
-in the background by default. Slim's task controls are available in
-`backgroundJobs.mode: "native"`, the default.
-
-### Authentication Issues
-
-If providers are not working:
-
-1. Check your authentication status:
-   ```bash
-   opencode auth status
-   ```
-
-2. Re-authenticate if needed:
-   ```bash
-   opencode auth login
-   ```
-
-3. Verify your config file has the correct provider configuration:
-   ```bash
-   cat ~/.config/opencode/oh-my-opencode-slim.json
-   ```
-
-### Editor Validation
-
-Add a `$schema` reference to your config for autocomplete and inline validation:
+Editor autocomplete uses the version-appropriate generated schema:
 
 ```jsonc
 {
-  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json",
-  // your config...
+  "$schema": "https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json"
 }
 ```
 
-Works in VS Code, Neovim (with `jsonls`), and any editor that supports JSON Schema. Catches typos and wrong nesting immediately.
-
-### Tmux Integration Not Working
-
-Make sure you're running OpenCode with the `--port` flag and the port matches your `OPENCODE_PORT` environment variable:
-
-```bash
-tmux
-export OPENCODE_PORT=4096
-opencode --port 4096
-```
-
-See the [Multiplexer Integration Guide](multiplexer-integration.md) for more details.
-
----
+For an unreleased checkout, use its local generated schema instead of an older
+published tag. For consumed host contracts and verification, see the
+[OpenCode 2 adapter](../src/v2/codemap.md).
 
 ## Uninstallation
 
-### Required
+1. Remove Slim from native `opencode.json[c]` `plugins` and, if separately
+   registered, from `tui.json` `plugins`. Honor `OPENCODE_CONFIG_DIR`.
+2. Remove Slim configuration only if no longer needed. Review `.jsonc`, `.json`
+   and backups rather than deleting customized data indiscriminately.
+3. Bundled skills disappear with the plugin. Review any old copied skills under
+   the user skills directory; remove only copies you no longer use.
+4. Older installers may have written `agent.general`/`agent.explore` disables
+   or shell exports for `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` and
+   `OPENCODE_ENABLE_EXA`. Remove installer-owned entries if no longer wanted.
+   Runtime replacement stops when the plugin is absent.
+5. Remove optional Companion assets only if unwanted; see
+   [Companion](companion.md) for its paths. Leave shared host session storage
+   and credentials alone.
 
-1. Remove the plugin from your OpenCode config:
-
-   Edit `~/.config/opencode/opencode.json` and remove the Slim entry from `plugins`. If the installer enabled LSP (it only does so when no explicit `lsp` setting exists), set `"lsp": false` or remove the `"lsp"` key.
-
-2. Remove the TUI badge:
-
-   Edit `~/.config/opencode/tui.json` and remove the Slim entry from `plugins`.
-
-### Optional Cleanup
-
-3. Re-enable default agents:
-
-   In `~/.config/opencode/opencode.json`, remove any `disable: true` entries under `agent.explore` and `agent.general` (older installers added these). The plugin disables those built-in subagents at runtime, with or without installer entries. To keep an agent enabled, declare an entry under its name under `agents.<name>` that does not itself set `disable`/`disabled: true`.
-
-4. Remove the environment variable:
-
-   The installer may have added an export to your shell startup file. Remove the `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` line from your shell config:
-   - `${ZDOTDIR:-$HOME}/.zshrc` (Zsh)
-   - `~/.bashrc` (Bash)
-   - `~/.config/fish/conf.d/opencode-background-subagents.fish` (Fish) — also remove `set -gx OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS true`
-
-   The installer also writes `OPENCODE_ENABLE_EXA=1` to the same startup files (and `set -gx OPENCODE_ENABLE_EXA 1` in the Fish conf); remove those lines too.
-
-   Restart your terminal or `source` the file.
-
-5. Clear the plugin cache:
-   ```bash
-   rm -rf ~/.cache/opencode/packages/oh-my-opencode-slim@*
-   ```
-
-6. Remove configuration files:
-   ```bash
-   rm -f ~/.config/opencode/oh-my-opencode-slim.json
-   rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
-   ```
-
-7. Bundled skills are provided by the plugin and disappear when it is removed. For legacy copies under `~/.config/opencode/skills/`, review the files and remove only those you no longer need; removing the plugin prevents its migration cleanup from running.
-
-8. Remove the desktop companion binary (if installed):
-
-   The companion is optional and not installed by default. If you installed it:
-   ```bash
-   rm -rf ~/.local/share/opencode/storage/oh-my-opencode-slim
-   ```
-
-### Verify
-
-Run `opencode auth status` and confirm oh-my-opencode-slim agents no longer appear.
+Restart OpenCode and verify that Slim is no longer listed in `/plugins` and its
+agents/commands are absent. Authentication status is not a plugin inventory.

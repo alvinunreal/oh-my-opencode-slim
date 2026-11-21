@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { ROLE_ROUTING_SLIM_LINES } from '../agents/role-routing';
+import { SPECIALIST_DESCRIPTIONS } from '../agents/role-descriptions';
 import { SUPPORTED_SPECIALIST_ROLES } from '../config/agent-roles';
 import { renderMarketplaceAutoDelegationBlock } from './routing';
 import type {
@@ -31,14 +31,14 @@ const manifest: MarketplacePackageManifest = {
 };
 
 describe('marketplace routing renderer', () => {
-  test('preserves built-in routing bytes and substitutes the agent name', () => {
+  test('uses the native built-in role description with the package name', () => {
     for (const builtin of SUPPORTED_SPECIALIST_ROLES) {
       const extended = {
         ...manifest,
         extends: { builtin, promptMode: 'append' },
       } as MarketplacePackageManifest;
       expect(renderMarketplaceAutoDelegationBlock(extended)).toBe(
-        `${ROLE_ROUTING_SLIM_LINES[builtin].replaceAll(`@${builtin}`, '@routing-agent')}\n\n- Lane: Package routing description.\n- **Delegate when:** The task matches this package.`,
+        `@routing-agent — ${SPECIALIST_DESCRIPTIONS[builtin]}\n\n- Lane: Package routing description.\n- **Delegate when:** The task matches this package.`,
       );
     }
   });
@@ -51,7 +51,7 @@ describe('marketplace routing renderer', () => {
 
   test('resolves a raw legacy librarian extension to the explorer role block', () => {
     // Stored manifests are byte-faithful: raw manifests can still carry
-    // `librarian`, which has no slim-lines entry — render, don't throw, and
+    // `librarian`, which has no specialist description entry. Render and
     // produce exactly the bytes the resolved manifest would produce.
     const v3Base = {
       ...manifest,
@@ -97,7 +97,7 @@ describe('marketplace routing renderer', () => {
     );
   });
 
-  test('includes v3 extension capabilities after the unchanged role block', () => {
+  test('includes v3 extension capabilities after the shared role description', () => {
     const v3Extension: MarketplacePackageManifestV3 = {
       ...manifest,
       schemaVersion: 3,
@@ -112,10 +112,7 @@ describe('marketplace routing renderer', () => {
       mcps: ['server-a'],
       extends: { builtin: 'explorer', promptMode: 'append' },
     };
-    const roleBlock = ROLE_ROUTING_SLIM_LINES.explorer.replaceAll(
-      '@explorer',
-      '@routing-agent',
-    );
+    const roleBlock = `@routing-agent — ${SPECIALIST_DESCRIPTIONS.explorer}`;
 
     expect(renderMarketplaceAutoDelegationBlock(v3Extension)).toBe(
       `${roleBlock}\n\n- Lane: Focused routing.\n- Capabilities: Tools: read, grep; Skills: skill-a; MCPs: server-a\n- Stats: Fast • Bounded\n- **Delegate when:** The task is bounded.\n- **Avoid:** Architecture decisions`,
@@ -134,10 +131,7 @@ describe('marketplace routing renderer', () => {
       },
       extends: { builtin: 'explorer', promptMode: 'append' },
     };
-    const roleBlock = ROLE_ROUTING_SLIM_LINES.explorer.replaceAll(
-      '@explorer',
-      '@routing-agent',
-    );
+    const roleBlock = `@routing-agent — ${SPECIALIST_DESCRIPTIONS.explorer}`;
 
     expect(renderMarketplaceAutoDelegationBlock(v3Extension)).toBe(
       `${roleBlock}\n\n- Lane: Focused routing.\n- Stats: Fast\n- **Delegate when:** The task is bounded.\n- **Avoid:** Architecture decisions`,

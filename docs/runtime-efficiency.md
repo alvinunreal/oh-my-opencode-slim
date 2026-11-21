@@ -16,8 +16,10 @@ project reads.
 
 The sidebar keeps its 1s render poll. With `sidebar: false`, the 5s config poll
 still detects external multiplexer edits, but unchanged files are not parsed
-again. `tui: false` also stops the server-side sidebar recorder: no state-file
-writes and no parent-hydration `session.get` reads.
+again. `OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS` overrides the interval (minimum
+10 ms); leave this test knob unset in normal use. `tui: false` also stops the
+server-side sidebar recorder: no state-file writes or parent-hydration
+`session.get` reads.
 `disabled_tools: ["webfetch"]` skips the enhanced implementation. Even when
 enabled, its JSDOM parser stays unloaded until HTML extraction is requested.
 Companion request detection keeps its 250ms interval; its config refresh is a
@@ -41,8 +43,10 @@ profile seed and automatic refresh; every agent keeps its startup model,
 variant, request options, and `inheritModelFrom`. Preset delegation, prompt and
 event paths perform no session reads or KV work in that mode; static agent
 inference settings still register with the host.
-Stored history is read for agent attribution only when a message lacks
-an agent. Message transforms use a request-local view of valid/user messages,
+Stored history is read for agent attribution only when a user message lacks
+an agent. Native completion notices do not trigger a separate timestamp read
+or projection; the retired managed-delivery observer has no replacement in
+Slim. Message transforms use a request-local view of valid/user messages,
 rebuilt after structural edits, preserving phase/council anchors and the
 trailing goal pointer byte-for-byte.
 
@@ -87,10 +91,14 @@ fresh host process to measure the full memory benefit of a smaller feature set.
 
 ## Prompt size
 
-Default agent prompts retain role, routing and workflow constraints without
-repeating tool catalogs, argument syntax or tool-selection instructions. Tool
-descriptions own those details, so disabling a tool or MCP does not leave stock
-usage advice advertising it. User-authored prompt overrides remain untouched.
+Default agent prompts retain roles, routing and workflow constraints without
+repeating native delegation syntax, continuation or completion mechanics. The
+native `subagent` tool renders permitted, visible IDs with their descriptions
+and routing criteria. OpenCode owns Skill access; Council separately exposes its
+exact hidden seat IDs. The phase reminder stays
+on the first eligible message, not the latest turn. Stock prose cuts do not
+change user-authored prompt composition or injection placement. See
+[Cache Verification](cache-verification.md).
 
 ## State and events
 

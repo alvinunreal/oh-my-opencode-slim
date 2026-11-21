@@ -4,7 +4,7 @@ This project does not try to hide the "Failed to send command" toast that the Op
 
 ## Why this is out of scope
 
-On OpenCode v2 the plugin returns a command result by throwing an error. The host has no non-error channel for command output, so every call ends in an error toast, including successful ones. The behavior is deliberate and documented in `docs/opencode-v2-compatibility.md`.
+On OpenCode v2 the plugin returns a command result by throwing an error. The host has no non-error channel for command output, so every call ends in an error toast, including successful ones. The behavior is deliberate and documented in [`src/v2/codemap.md`](../src/v2/codemap.md#session-presets-and-tui).
 
 A quieter fix means the plugin would need another result path. A synthetic inbox item is delivered into the model context on the next turn, which breaks the rule that `/preset` adds nothing to the context. An extra model turn costs more tokens than the toast.
 

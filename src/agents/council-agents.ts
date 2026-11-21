@@ -22,17 +22,6 @@ function activeSeats(
   return preset ? Object.entries(preset) : [];
 }
 
-/** Dispatchable seat agent names for the active council preset; the same
- * derivation `buildCouncillorAgents` uses, for scope validation. */
-export function councillorSeatNames(
-  runtime: RuntimeConfig,
-  disabled: ReadonlySet<string>,
-): string[] {
-  return activeSeats(runtime, disabled).map(
-    ([seat]) => `${COUNCILLOR_AGENT_PREFIX}${seat}`,
-  );
-}
-
 /**
  * Build dynamic councillor agents from council config presets.
  * Each councillor gets its own agent (name + model) so the orchestrator

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { ROLE_ROUTING_SLIM_LINES } from '../agents/role-routing';
+import { SPECIALIST_DESCRIPTIONS } from '../agents/role-descriptions';
 import type { MarketplacePackageManifest } from '../marketplace/schemas';
 import {
   createMarketplaceRegistryEntry,
@@ -54,10 +54,7 @@ describe('marketplace contract routing export', () => {
   });
 
   test('exports the same authoritative default extension block', () => {
-    const expected = `${ROLE_ROUTING_SLIM_LINES.explorer.replaceAll(
-      '@explorer',
-      '@contract-agent',
-    )}\n\n- Lane: Contract routing description.\n- **Delegate when:** The contract task matches.`;
+    const expected = `@contract-agent — ${SPECIALIST_DESCRIPTIONS.explorer}\n\n- Lane: Contract routing description.\n- **Delegate when:** The contract task matches.`;
 
     expect(renderDefaultMarketplaceAutoDelegationBlock(manifest)).toBe(
       expected,
