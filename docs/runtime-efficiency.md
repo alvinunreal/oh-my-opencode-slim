@@ -41,8 +41,10 @@ profile seed and automatic refresh; every agent keeps its startup model,
 variant, request options, and `inheritModelFrom`. Preset delegation, prompt and
 event paths perform no session reads or KV work in that mode; static agent
 inference settings still register with the host.
-Stored history is read for agent attribution only when a message lacks
-an agent. Message transforms use a request-local view of valid/user messages,
+Stored history is read for agent attribution only when a user message lacks
+an agent. Native completion notices do not trigger a separate timestamp read
+or projection; the retired managed-delivery observer has no replacement in
+Slim. Message transforms use a request-local view of valid/user messages,
 rebuilt after structural edits, preserving phase/council anchors and the
 trailing goal pointer byte-for-byte.
 
