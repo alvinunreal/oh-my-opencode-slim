@@ -154,6 +154,126 @@ describe('v2 sidebar config-state invalidation', () => {
     }
   });
 
+  test('changed config content with unchanged gates forces a registry read on notification (#1943)', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+    writeConfig('alpha');
+    const beforeConfig = readConfigState(env.projectDir);
+    const initialPass = Promise.withResolvers<void>();
+    const changedPass = Promise.withResolvers<void>();
+    let passes = 0;
+    let reads = 0;
+    const base = makeContext();
+    const ctx = {
+      ...base,
+      ui: {
+        ...base.ui,
+        model: {
+          current() {
+            if (++passes === 1) initialPass.resolve();
+            if (passes === 2) changedPass.resolve();
+          },
+        },
+      },
+      client: {
+        agent: {
+          async list() {
+            reads += 1;
+            return {
+              data: {
+                data: [
+                  {
+                    id: 'explorer',
+                    model: { providerID: 'openai', id: 'gpt-6' },
+                  },
+                ],
+              },
+            };
+          },
+        },
+      },
+    };
+    const cleanup = await tuiPlugin.setup(ctx as unknown as V2Context);
+
+    try {
+      await initialPass.promise;
+      expect(reads).toBe(1);
+
+      // This changes an inference field, not an agent identity. The unchanged
+      // label/layout gates must not hide a changed config fingerprint.
+      env.writeUserConfig({
+        preset: 'alpha',
+        presets: {
+          alpha: { explorer: { model: 'openai/gpt-6-renamed' } },
+          beta: { explorer: { model: 'anthropic/claude-sonnet-4-5' } },
+        },
+      });
+      expect(readConfigState(env.projectDir)).toEqual(beforeConfig);
+      expect(await notifyConfigChanged(env.projectDir, '/preset')).toEqual({
+        ok: true,
+      });
+      await changedPass.promise;
+      expect(reads).toBe(2);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test('a config notification during a forced registry read triggers another read (#1943)', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+    writeConfig('alpha');
+    const initialPass = Promise.withResolvers<void>();
+    const forcedRead = Promise.withResolvers<void>();
+    const releaseForcedRead = Promise.withResolvers<void>();
+    const trailingPass = Promise.withResolvers<void>();
+    let reads = 0;
+    let passes = 0;
+    const base = makeContext();
+    const ctx = {
+      ...base,
+      ui: {
+        ...base.ui,
+        model: {
+          current() {
+            passes += 1;
+            if (passes === 1) initialPass.resolve();
+            if (passes === 3) trailingPass.resolve();
+          },
+        },
+      },
+      client: {
+        agent: {
+          async list() {
+            reads += 1;
+            if (reads === 2) {
+              forcedRead.resolve();
+              await releaseForcedRead.promise;
+            }
+            return { data: [{ id: 'explorer' }] };
+          },
+        },
+      },
+    };
+    const cleanup = await tuiPlugin.setup(ctx as unknown as V2Context);
+    try {
+      await initialPass.promise;
+      writeConfig('beta');
+      expect(await notifyConfigChanged(env.projectDir, '/preset')).toEqual({
+        ok: true,
+      });
+      await forcedRead.promise;
+      writeConfig('alpha');
+      expect(await notifyConfigChanged(env.projectDir, '/preset')).toEqual({
+        ok: true,
+      });
+      releaseForcedRead.resolve();
+      await trailingPass.promise;
+      expect(reads).toBe(3);
+    } finally {
+      releaseForcedRead.resolve();
+      cleanup?.();
+    }
+  });
+
   test('disposal unregisters the listener: later notifications fail honestly', async () => {
     writeConfig('alpha');
     const ctx = makeContext();

@@ -3323,7 +3323,10 @@ describe('v2 tui preset plugin', () => {
         cleanup = (await tui2Plugin.setup(
           stub.ctx as unknown as V2TuiPluginContext,
         )) as (() => void) | undefined;
-        expect([...subscriptions.keys()].sort()).toEqual(expectedEvents);
+        expect([...subscriptions.keys()].sort()).toEqual([
+          'agent.updated',
+          ...expectedEvents,
+        ]);
 
         // Disabling panes must dispose the live wiring instead of leaving it
         // creating panes for the rest of the process lifetime.
@@ -3342,6 +3345,7 @@ describe('v2 tui preset plugin', () => {
         cleanup?.();
         cleanup = undefined;
       }
+      expect(unsubscribed).toContain('agent.updated');
     });
 
     test('disposes the pane wiring on hot reload with the sidebar disabled', async () => {

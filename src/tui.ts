@@ -299,8 +299,8 @@ function unwrapAgentList(response: unknown): unknown[] {
 function remoteAgentName(entry: unknown): string | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
   const rec = entry as { name?: unknown; id?: unknown };
-  if (typeof rec.name === 'string') return rec.name;
   if (typeof rec.id === 'string') return rec.id;
+  if (typeof rec.name === 'string') return rec.name;
   return undefined;
 }
 
@@ -334,32 +334,50 @@ function isRemoteSidebarAgent(name: string): boolean {
 }
 
 function modelsFromAgentList(response: unknown): Record<string, string> {
-  const models: Record<string, string> = {};
+  const models = new Map<string, string>();
   for (const entry of unwrapAgentList(response)) {
     const name = remoteAgentName(entry);
     const model = remoteModelId(
       (entry as { model?: unknown } | undefined)?.model,
     );
     if (!name || !model) continue;
-    if (isRemoteSidebarAgent(name)) {
-      models[name] = model;
-    }
+    models.set(name, model);
   }
-  return models;
+  return Object.fromEntries(models);
+}
+
+function agentNamesFromAgentList(response: unknown): string[] {
+  const names = new Set<string>();
+  for (const entry of unwrapAgentList(response)) {
+    const name = remoteAgentName(entry);
+    if (name) names.add(name);
+  }
+  return [...names];
+}
+
+/** One live-registry read for the sidebar. */
+export interface RemoteAgentRegistry {
+  /** Models keyed by host identity; custom agents only fill existing rows. */
+  models: Record<string, string>;
+  /** Every agent the live registry reports, sidebar-eligible or not. */
+  names: readonly string[];
 }
 
 /**
  * Remote-attach fallback (#1133): the server-side plugin writes
  * tui-state.json on the server's filesystem, which a remote TUI cannot
  * see, so every model renders as "pending". Resolve agent models through
- * the host SDK instead. Only fills gaps — local snapshot entries win.
+ * the host SDK instead. `names` is the full live roster: the sidebar
+ * reconciles its persisted map against it so a renamed or removed agent
+ * stops rendering (#1943). Custom host agents only fill qualified rows;
+ * the host does not identify which plugin owns an agent.
  *
  * v1 TUI (`api.client`, `@opencode-ai/sdk/v2`): `app.agents({ directory })`
  * with `{ name, model: { providerID, modelID } }`.
  * v2 TUI: `agent.list({ location: { directory } })` or
  * `v2.agent.list(...)` with `{ id, model: { providerID, id } }`.
  */
-export async function fetchRemoteAgentModels(
+export async function fetchRemoteAgentRegistry(
   client: unknown,
   directory: string,
   scheduleTimeout: (callback: () => void, delay: number) => () => void = (
@@ -369,7 +387,7 @@ export async function fetchRemoteAgentModels(
     const timer = setTimeout(callback, delay);
     return () => clearTimeout(timer);
   },
-): Promise<Record<string, string>> {
+): Promise<RemoteAgentRegistry> {
   const rec = client as
     | {
         app?: { agents?: unknown };
@@ -377,13 +395,13 @@ export async function fetchRemoteAgentModels(
         v2?: { agent?: { list?: unknown } };
       }
     | undefined;
-  if (!rec) return {};
+  if (!rec) return { models: {}, names: [] };
 
   const v1Agents = asFunction(rec.app?.agents);
   const v2Receiver = rec.agent ?? rec.v2?.agent;
   const receiver = v1Agents ? rec.app : v2Receiver;
   const list = v1Agents ?? asFunction(v2Receiver?.list);
-  if (!list) return {};
+  if (!list) return { models: {}, names: [] };
   const controller = new AbortController();
   let cancelTimeout: (() => void) | undefined;
   try {
@@ -398,9 +416,13 @@ export async function fetchRemoteAgentModels(
       v1Agents ? { directory } : { location: { directory } },
       { signal: controller.signal },
     );
-    return modelsFromAgentList(await Promise.race([request, timeout]));
+    const response = await Promise.race([request, timeout]);
+    return {
+      models: modelsFromAgentList(response),
+      names: agentNamesFromAgentList(response),
+    };
   } catch {
-    return {};
+    return { models: {}, names: [] };
   } finally {
     cancelTimeout?.();
   }
@@ -411,14 +433,109 @@ export function applyRemoteAgentModels(
   snapshot: TuiSnapshot,
   remote: Record<string, string>,
 ): TuiSnapshot {
-  if (Object.keys(remote).length === 0) return snapshot;
-  return {
-    ...snapshot,
-    agentModels: { ...remote, ...snapshot.agentModels },
-  };
+  const missing: Array<[string, string]> = [];
+  for (const [name, model] of Object.entries(remote)) {
+    const current = Object.hasOwn(snapshot.agentModels, name)
+      ? snapshot.agentModels[name]
+      : undefined;
+    if (
+      (current !== undefined || isRemoteSidebarAgent(name)) &&
+      (!current || current === 'Unknown')
+    )
+      missing.push([name, model]);
+  }
+  return missing.length === 0
+    ? snapshot
+    : {
+        ...snapshot,
+        agentModels: {
+          ...snapshot.agentModels,
+          ...Object.fromEntries(missing),
+        },
+      };
 }
 
+/** Drop rows whose agent the live registry no longer reports (#1943). */
+function pruneMissingAgents(
+  snapshot: TuiSnapshot,
+  live: ReadonlySet<string>,
+): TuiSnapshot {
+  const { canonicalName } = createTeamDisplayIdentity(
+    snapshot.agentDisplayNames,
+  );
+  const isLive = (name: string) =>
+    live.has(name) || live.has(canonicalName(name));
+  const stale = Object.keys(snapshot.agentModels).filter(
+    (name) => !isLive(name),
+  );
+  // Stale display aliases must not turn a genuinely new canonical ID back
+  // into its removed predecessor during the team projection.
+  const agentDisplayNames = Object.fromEntries(
+    Object.entries(snapshot.agentDisplayNames).filter(([name]) => isLive(name)),
+  );
+  if (
+    stale.length === 0 &&
+    Object.keys(agentDisplayNames).length ===
+      Object.keys(snapshot.agentDisplayNames).length
+  )
+    return snapshot;
+  const agentModels = { ...snapshot.agentModels };
+  const agentVariants = { ...snapshot.agentVariants };
+  for (const name of stale) {
+    delete agentModels[name];
+    delete agentVariants[name];
+  }
+  return { ...snapshot, agentModels, agentVariants, agentDisplayNames };
+}
+
+/**
+ * Reconcile the persisted sidebar map with the live registry (#1943):
+ * agents the registry no longer reports lose their row, missing live agents
+ * are filled in, and a locally recorded model still wins for an agent in
+ * both (#1133). An empty read is a failed/timed-out fetch and changes
+ * nothing.
+ */
+export function reconcileAgentModels(
+  snapshot: TuiSnapshot,
+  remote: RemoteAgentRegistry,
+): TuiSnapshot {
+  if (!registryResolved(remote)) return snapshot;
+  const pruned = pruneMissingAgents(snapshot, new Set(remote.names));
+  const removed = Object.keys(snapshot.agentModels).filter(
+    (name) => !Object.hasOwn(pruned.agentModels, name),
+  );
+  let next = applyRemoteAgentModels(pruned, remote.models);
+  for (const name of removed) {
+    // A unique case-only rename inherits the row, not its old model or variant.
+    const matches = remote.names.filter(
+      (live) => live.toLowerCase() === name.toLowerCase(),
+    );
+    const renamed = matches[0];
+    if (matches.length !== 1 || Object.hasOwn(next.agentModels, renamed))
+      continue;
+    const model = Object.hasOwn(remote.models, renamed)
+      ? remote.models[renamed]
+      : undefined;
+    if (model) {
+      next = {
+        ...next,
+        agentModels: { ...next.agentModels, [renamed]: model },
+      };
+    }
+  }
+  return next;
+}
+
+/** A read that found live agents; only those may prune or fill rows. */
+function registryResolved(registry: RemoteAgentRegistry): boolean {
+  return registry.names.length > 0;
+}
+
+/** Retry window for a read that came back failed or empty. */
 const REMOTE_RETRY_MS = 5_000;
+
+/** Re-read interval for a resolved registry: the roster rarely changes. */
+const REMOTE_REGISTRY_TTL_MS = 60_000;
 
 const MODEL_NAMES_TTL_MS = 60_000;
 
@@ -430,36 +547,53 @@ export interface ModelNamesCache {
   at?: number;
 }
 
-interface RemoteModelCache {
+export interface RemoteModelCache {
   directory?: string;
-  models?: Record<string, string>;
+  registry?: RemoteAgentRegistry;
   at?: number;
 }
 
-async function hydrateRemoteModels(
+export interface HydrateRemoteModelsOptions {
+  /** Config edit or directory switch: read now, whatever the cache says. */
+  force?: boolean;
+  now?: () => number;
+}
+
+/**
+ * Merge the live registry into the sidebar map. A populated snapshot is not
+ * a reason to stop refreshing (#1943), but a resolved read is reused for
+ * `REMOTE_REGISTRY_TTL_MS`; a failed or empty read retries after
+ * `REMOTE_RETRY_MS` and reconciles nothing. `force` (a config change the
+ * poll observed, or a directory switch, whose cache entry cannot match
+ * anyway) reads immediately so a renamed agent is pruned on that poll.
+ */
+export async function hydrateRemoteModels(
   snapshot: TuiSnapshot,
   client: unknown,
   directory: string,
   cache: RemoteModelCache,
+  options: HydrateRemoteModelsOptions = {},
 ): Promise<TuiSnapshot> {
-  if (Object.keys(snapshot.agentModels).length > 0) return snapshot;
-  const now = Date.now();
-  const cached =
-    cache.directory === directory && cache.models !== undefined
-      ? cache.models
-      : undefined;
-  const cacheFresh =
+  const now = options.now ?? Date.now;
+  const at = now();
+  const cached = cache.directory === directory ? cache.registry : undefined;
+  const window =
+    cached !== undefined && registryResolved(cached)
+      ? REMOTE_REGISTRY_TTL_MS
+      : REMOTE_RETRY_MS;
+  if (
     cached !== undefined &&
-    (Object.keys(cached).length > 0 ||
-      (cache.at !== undefined && now - cache.at < REMOTE_RETRY_MS));
-  if (cached !== undefined && cacheFresh) {
-    return applyRemoteAgentModels(snapshot, cached);
+    cache.at !== undefined &&
+    !options.force &&
+    at - cache.at < window
+  ) {
+    return reconcileAgentModels(snapshot, cached);
   }
-  const models = await fetchRemoteAgentModels(client, directory);
+  const registry = await fetchRemoteAgentRegistry(client, directory);
   cache.directory = directory;
-  cache.models = models;
-  cache.at = now;
-  return applyRemoteAgentModels(snapshot, models);
+  cache.registry = registry;
+  cache.at = at;
+  return reconcileAgentModels(snapshot, registry);
 }
 
 /**
@@ -1554,9 +1688,15 @@ export function projectSidebarTeam(
   const models = projectValues(team.agentModels);
   const variants = projectValues(team.agentVariants);
   const inherited = projectValues(team.inheritance);
+  const existingModels = projectValues(snapshot.agentModels);
+  const existingVariants = projectValues(snapshot.agentVariants);
+  for (const [name, variant] of Object.entries(existingVariants)) {
+    if (!models[name] && !inherited[name] && variants[name] === undefined)
+      variants[name] = variant;
+  }
   // Applying a team preset does not change the main agent's live model.
-  const rootModel = projectValues(snapshot.agentModels).orchestrator;
-  const rootVariant = projectValues(snapshot.agentVariants).orchestrator;
+  const rootModel = existingModels.orchestrator;
+  const rootVariant = existingVariants.orchestrator;
   if (rootVariant === undefined) delete variants.orchestrator;
   else variants.orchestrator = rootVariant;
   const names = new Set(
@@ -1578,7 +1718,7 @@ export function projectSidebarTeam(
           ? (rootModel ?? 'Unknown')
           : inherited[name]
             ? `Inherits ${inherited[name]}`
-            : (models[name] ?? 'Unknown'),
+            : models[name] || existingModels[name] || 'Unknown',
       ]),
     ),
     agentVariants: variants,
@@ -1640,7 +1780,11 @@ export function renderSidebar(
   resolveSessionTitle?: (sessionID: string) => string | undefined,
   /** `sidebarShowHiddenAgents`: include internal Council agents as rows. */
   showHiddenAgents = false,
+  registry?: RemoteAgentRegistry,
 ): JSX.Element {
+  // Session observations and saved teams are candidates, not authority for
+  // roster membership. Reconcile only after both have projected their rows.
+  if (registry) snapshot = reconcileAgentModels(snapshot, registry);
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
   const hoverBackground = resolveHoverBackground({
     background: theme.background,
@@ -1656,7 +1800,17 @@ export function renderSidebar(
       )
     : null;
   const activeAgents = getActiveSidebarAgentNames(snapshot, visibleRootID);
-  const sidebarAgentNames = getSidebarAgentNames(snapshot, showHiddenAgents);
+  const live =
+    registry && registryResolved(registry)
+      ? new Set(registry.names)
+      : undefined;
+  const { canonicalName } = createTeamDisplayIdentity(
+    snapshot.agentDisplayNames,
+  );
+  const sidebarAgentNames = getSidebarAgentNames(
+    snapshot,
+    showHiddenAgents,
+  ).filter((name) => !live || live.has(name) || live.has(canonicalName(name)));
   const targetsByAgent = new Map(
     getSidebarAgentTargets(snapshot, visibleRootID).map((group) => [
       group.agentName,
@@ -1994,7 +2148,7 @@ interface V2TuiSlotClaim {
 }
 
 interface V2TuiContext extends V2PresetManagerContext {
-  location?: { directory: string };
+  location?: { directory: string; workspaceID?: string };
   client?: unknown;
   data?: V2PresetManagerContext['data'] & {
     on?: (type: string, handler: (event: unknown) => void) => unknown;
@@ -2091,6 +2245,7 @@ interface SidebarRuntimeAdapter {
   ) => { model: string; variant?: string | undefined } | undefined;
   getHostSessions?: () => HostSessionViews | undefined;
   subscribeSessionChanges?: (handler: () => void) => () => void;
+  subscribeAgentChanges?: (handler: () => void) => (() => void) | undefined;
   /** v2 hosts only: synchronous session-title lookup against the
    * in-memory session store. Expanded subagent rows prefer the title
    * over the board alias; absent/blank titles keep the alias fallback. */
@@ -2228,6 +2383,8 @@ function createSidebarRuntime(
     disabledCommands: gatesRead.gates.disabledCommands,
   });
   let configRenderPending = false;
+  // Config content changes and host catalog updates bypass the registry TTL.
+  let registryRefreshPending = false;
   const applyConfigState = (fresh = false): boolean => {
     const read = readTuiGates(configDirectory, adapter.hostFlavor, fresh);
     if (read.readFailed) return false;
@@ -2238,6 +2395,8 @@ function createSidebarRuntime(
     ) {
       return false;
     }
+    if (read.fingerprint !== gatesRead.fingerprint)
+      registryRefreshPending = true;
     gatesRead = read;
     const next = retainLastGoodConfigState(
       {
@@ -2291,6 +2450,10 @@ function createSidebarRuntime(
   let disposed = false;
   let unregisterConfigListener = () => {};
   const remoteCache: RemoteModelCache = {};
+  const [remoteRegistry, setRemoteRegistry] = createSignal<{
+    directory: string;
+    registry?: RemoteAgentRegistry;
+  }>();
   const modelNamesCache: ModelNamesCache = { names: new Map() };
   const [modelNames, setModelNames] = createSignal<ReadonlyMap<string, string>>(
     modelNamesCache.names,
@@ -2343,11 +2506,16 @@ function createSidebarRuntime(
         log('[v2][tui] config state read failed', String(err));
       }
     }
+    const forceRemoteRefresh = directoryChanged || registryRefreshPending;
+    // Consume this change before awaiting so a newer notification can queue
+    // another forced read.
+    registryRefreshPending = false;
     nextSnapshot = await hydrateRemoteModels(
       nextSnapshot,
       adapter.client,
       currentDirectory,
       remoteCache,
+      { force: forceRemoteRefresh },
     );
     if (disposed) return;
     // Fold the live picker selection in BEFORE the change check so a new
@@ -2404,6 +2572,19 @@ function createSidebarRuntime(
         stateChanged = true;
       }
     }
+    const previousRegistry = remoteRegistry();
+    if (
+      previousRegistry?.directory !== currentDirectory ||
+      (previousRegistry.registry !== remoteCache.registry &&
+        JSON.stringify(previousRegistry.registry) !==
+          JSON.stringify(remoteCache.registry))
+    ) {
+      setRemoteRegistry({
+        directory: currentDirectory,
+        registry: remoteCache.registry,
+      });
+      stateChanged = true;
+    }
     const snapshotChanged =
       directoryChanged || !snapshotSectionsEqual(nextSnapshot, snapshot());
     if (!snapshotChanged && !stateChanged) {
@@ -2423,6 +2604,12 @@ function createSidebarRuntime(
   const unsubscribeSessionChanges = sidebarEnabled
     ? adapter.subscribeSessionChanges?.(scheduleRefresh)
     : undefined;
+  const unsubscribeAgentChanges = sidebarEnabled
+    ? adapter.subscribeAgentChanges?.(() => {
+        registryRefreshPending = true;
+        scheduleRefresh();
+      })
+    : undefined;
   const bindConfigListener = () => {
     unregisterConfigListener();
     if (!adapter.subscribeConfigChanges) return;
@@ -2436,7 +2623,7 @@ function createSidebarRuntime(
           log('[v2][tui] config state read failed', String(err));
           return { ok: false, reason: String(err) };
         }
-        if (changed && sidebarEnabled) {
+        if ((changed || registryRefreshPending) && sidebarEnabled) {
           adapter.renderer.requestRender();
           scheduleRefresh();
         }
@@ -2489,6 +2676,7 @@ function createSidebarRuntime(
           const visible = adapter.getVisibleSession();
           const currentSnapshot = snapshot();
           const projection = sessionPreset();
+          const registry = remoteRegistry();
           const isCurrentProjection =
             projection?.directory === adapter.getDirectory() &&
             projection.sessionID === visible;
@@ -2536,6 +2724,9 @@ function createSidebarRuntime(
             modelNames(),
             adapter.resolveSessionTitle,
             showHiddenAgents,
+            registry?.directory === adapter.getDirectory()
+              ? registry.registry
+              : undefined,
           );
         }),
       )
@@ -2554,6 +2745,7 @@ function createSidebarRuntime(
       disposed = true;
       unregisterConfigListener();
       unsubscribeSessionChanges?.();
+      unsubscribeAgentChanges?.();
       disposeSlot?.();
       if (renderTimer !== undefined) clearInterval(renderTimer);
       if (animationTimer !== undefined) clearInterval(animationTimer);
@@ -2722,6 +2914,21 @@ async function setup(
       }),
       subscribeSessionChanges: (handler) =>
         subscribeV2SessionEvents(ctx.data, handler),
+      subscribeAgentChanges: (handler) => {
+        // A replacement location announces its catalog after /reload.
+        const off = ctx.data?.on?.('agent.updated', (event) => {
+          const location = (event as { location?: V2TuiContext['location'] })
+            ?.location;
+          if (
+            location?.directory ===
+              (ctx.location?.directory ?? process.cwd()) &&
+            location.workspaceID === ctx.location?.workspaceID
+          ) {
+            handler();
+          }
+        });
+        return typeof off === 'function' ? (off as () => void) : undefined;
+      },
       resolveSessionTitle: (sessionID) => {
         const session = ctx.data?.session;
         // get() reads the same in-memory store as list(); scan list() only
