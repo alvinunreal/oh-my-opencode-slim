@@ -9,6 +9,7 @@ const BASE_CONFIG: Omit<MultiplexerConfig, 'type'> = {
   layout: 'main-vertical',
   main_pane_size: 60,
   equalize_panes: true,
+  agents: ['*'],
 };
 
 const PANE_ENV_KEYS = [

@@ -297,9 +297,30 @@ inside that pane).
 }
 ```
 
+Filter which subagents get a pane with `agents`, using the same `"*"` /
+`"!name"` list syntax as agent `skills` and `mcps`:
+
+```jsonc
+{
+  "multiplexer": {
+    "type": "tmux",
+    "agents": ["*", "!explorer", "!librarian"]
+  }
+}
+```
+
+- `["*"]` (the default) opens a pane for every subagent.
+- `["*", "!explorer"]` opens a pane for every subagent except `explorer`.
+- `["oracle", "fixer"]` opens panes only for those two subagents.
+
+The filter changes panes only: a filtered-out subagent still runs as a normal
+child session; only its pane is skipped. Restart the OpenCode TUI after changing
+`multiplexer.agents` so it loads the new filter.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"cmux-tui"`, `"kitty"`, `"wezterm"`, `"orca"`, or `"none"` |
+| `agents` | string[] | `["*"]` | Which subagents get a pane, using the same `"*"` / `"!name"` list syntax as agent `skills` and `mcps`: `["*"]` opens a pane for every child, `["*", "!explorer"]` opens one for every child except the excluded names, and `["oracle", "fixer"]` opens one only for the listed names. A filtered-out subagent still runs normally — only its pane is skipped |
 | `layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression; cmux-tui has no layout expression and ignores it, and Orca only maps it to a split direction at spawn time (see [Layouts](#layouts)). Herdr builds an agent area for both `main-*` layouts and re-equalizes only its agent panes after each spawn/close |
 | `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts, and by Herdr (first agent-area split of the `main-*` layouts; the agent panes in the resulting column or row are then re-equalized after each spawn/close while the main pane keeps this share) and WezTerm (first agent split); ignored by Zellij, kitty, cmux-tui, and Orca |
 | `equalize_panes` | boolean | `true` | Herdr only: after each spawn and agent-pane close, equalize the `main-*` agent panes and re-assert the main pane's `main_pane_size` share through Herdr's socket API. Set `false` to keep manual pane sizes |
@@ -432,6 +453,7 @@ a structured, distinguishable reason:
 | `admission-mismatch` | An explicit adapter is configured but the client is inside a different one |
 | `admission-unavailable` | `auto` detected no supported multiplexer, or the config was invalid |
 | `not-our-child` | The child's `parentID` is not the session this client currently displays |
+| `agent-filtered` | The child's subagent type is excluded by `multiplexer.agents`; the child keeps running, only its pane is skipped |
 | `host-unreachable` | Embedded host (no listener / sentinel URL) or the server probe failed |
 | `readiness-timeout` | The child appeared neither in the directory's newest session page nor in the running set within the bounded retry budget |
 | `adapter-unavailable` | The adapter cannot run here (binary missing, old version, protocol self-check failed, no control plane, or the platform/shell cannot support the viewer-secret bridge) |

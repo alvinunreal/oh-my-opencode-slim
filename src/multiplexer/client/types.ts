@@ -78,6 +78,7 @@ export const NO_PANE_REASONS = [
   'admission-mismatch',
   'admission-unavailable',
   'not-our-child',
+  'agent-filtered',
   'host-unreachable',
   'host-unsupported',
   'readiness-timeout',
