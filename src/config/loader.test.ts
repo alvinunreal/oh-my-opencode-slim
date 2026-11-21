@@ -50,6 +50,24 @@ describe('loadPluginConfig', () => {
     expect(config).toEqual({});
   });
 
+  test('a nearer layer cannot silently discard an inherited delegation restriction', () => {
+    const ancestor = path.join(tempDir, 'ancestor');
+    const projectDir = path.join(ancestor, 'repo');
+    const file = writeProjectConfig(ancestor, {
+      presets: { old: { agents: { orchestrator: { subagents: ['fixer'] } } } },
+    });
+    writeProjectConfig(projectDir, {
+      backgroundJobs: { mode: 'off' },
+      preset: 'new',
+      presets: { new: {} },
+    });
+    const load = () =>
+      loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true });
+    expect(load).toThrow(UnsupportedHostConfigError);
+    expect(load).toThrow(`${file}: presets.old.agents.orchestrator.subagents`);
+    expect(load).toThrow('agents.<id>.permissions in opencode.json[c]');
+  });
+
   describe('removed native fallback settings', () => {
     const cases = [
       ['continuationPolicy', 'retry-primary'],
@@ -1351,31 +1369,6 @@ describe('onWarning callback', () => {
         variant: 'high',
       },
     ]);
-  });
-
-  test('routingBlock never derives a v2 default (no boardInjection-style flip)', () => {
-    const projectDir = path.join(tempDir, 'project');
-    // Unset on v2 stays unset: the native subagent roster carries agent
-    // identity only, and the block's Delegate/Don't routing criteria have
-    // no native equivalent — a derived false would be a silent routing
-    // downgrade dressed up as deduplication.
-    const v2Config = loadPluginConfig(projectDir, {
-      silent: true,
-      hostFlavor: 'v2',
-    });
-    expect(v2Config.routingBlock).toBeUndefined();
-
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({ routingBlock: false }),
-    );
-    const explicitOff = loadPluginConfig(projectDir, {
-      silent: true,
-      hostFlavor: 'v2',
-    });
-    expect(explicitOff.routingBlock).toBe(false);
   });
 
   test('deleted board tuning keys load with one removed warning each, unmigrated', () => {

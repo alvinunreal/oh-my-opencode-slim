@@ -43,9 +43,8 @@ Configure `agents.<agent>.skills`, including agent entries in a preset:
 | `["simplify"]` | Only that skill |
 | `[]` or `["!*"]` | None |
 
-Exclusions win. The stock Orchestrator routing block shows each specialist's
-actual grant summary so it does not delegate an unavailable skill. Disabling
-`routingBlock` removes that summary, not the native permission rules.
+Exclusions win. OpenCode filters each agent's skill guidance and tool access
+using its own permissions, not a second catalog in the Orchestrator prompt.
 
 ### Adding or removing skills on top of an inherited list
 

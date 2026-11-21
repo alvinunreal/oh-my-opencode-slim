@@ -10,7 +10,8 @@
  * `foreground-fallback` hook differ on v2 (the former keeps retry bookkeeping
  * alive for a live per-session enable; the latter removes the hook entirely).
  */
-import type { BackgroundJobsMode } from './schema';
+import { isRecord } from '../utils/guards';
+import { AgentOverrideConfigSchema, type BackgroundJobsMode } from './schema';
 
 /** Structural slice of the plugin config the gates depend on. */
 export interface FeatureGateConfig {
@@ -43,20 +44,52 @@ export class UnsupportedHostConfigError extends Error {
 const UNSUPPORTED_MANAGED_MODE_MESSAGE =
   'Unsupported backgroundJobs.mode "managed" on OpenCode v2; use "native" or "off".';
 
-/**
- * Validate explicit config before sanitization or schema defaults are applied.
- * Reject retired fallback keys, invalid lifecycle switches and unenforced limits.
- * The retired managed mode is normalized by the loader after this validation.
- */
+function retiredSubagentScope(agents: unknown): string | undefined {
+  if (!isRecord(agents)) return;
+  return Object.keys(agents).find((name) => {
+    const override = agents[name];
+    // The wrapper can itself contain a custom agent named "subagents".
+    return isRecord(override) && Array.isArray(override.subagents);
+  });
+}
+
+/** Reject unsupported settings before a layer can be skipped or merged. */
 export function validateExplicitHostConfig(
   config: unknown,
   hostFlavor?: string,
   sourcePath?: string,
 ): void {
-  if (hostFlavor !== 'v2' || !config || typeof config !== 'object') return;
+  if (!isRecord(config)) return;
   const source = sourcePath ? `${sourcePath}: ` : '';
-  const raw = config as Record<string, unknown>;
-  const fallback = raw.fallback;
+  if (Object.hasOwn(config, 'routingBlock')) {
+    throw new UnsupportedHostConfigError(
+      `${source}routingBlock was removed. Remove the key, then run /reload.`,
+    );
+  }
+  const rejectScope = (path: string): never => {
+    throw new UnsupportedHostConfigError(
+      `${source}${path}.subagents was removed. Use native subagent rules in agents.<id>.permissions in opencode.json[c], remove the old key, then run /reload.`,
+    );
+  };
+  const root = retiredSubagentScope(config.agents);
+  if (root !== undefined) rejectScope(`agents.${root}`);
+  if (isRecord(config.presets)) {
+    for (const [name, preset] of Object.entries(config.presets)) {
+      if (!isRecord(preset)) continue;
+      const flat = retiredSubagentScope(preset);
+      if (flat !== undefined) rejectScope(`presets.${name}.${flat}`);
+      const wrapped = retiredSubagentScope(preset.agents);
+      // A flat preset may instead define a custom agent named "agents".
+      if (
+        wrapped !== undefined &&
+        !AgentOverrideConfigSchema.safeParse(preset.agents).success
+      ) {
+        rejectScope(`presets.${name}.agents.${wrapped}`);
+      }
+    }
+  }
+  if (hostFlavor !== 'v2') return;
+  const fallback = config.fallback;
   if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) {
     const removed = ['continuationPolicy', 'initialRetryDelayMs'].filter(
       (key) => Object.hasOwn(fallback, key),
@@ -67,7 +100,7 @@ export function validateExplicitHostConfig(
       );
     }
   }
-  const backgroundJobs = raw.backgroundJobs;
+  const backgroundJobs = config.backgroundJobs;
   if (
     !backgroundJobs ||
     typeof backgroundJobs !== 'object' ||

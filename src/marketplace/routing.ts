@@ -1,7 +1,5 @@
-import {
-  ROLE_ROUTING_SLIM_LINES,
-  renderRoleRoutingBlock,
-} from '../agents/role-routing.js';
+import { SPECIALIST_DESCRIPTIONS } from '../agents/role-descriptions.js';
+import type { SpecialistRole } from '../config/agent-roles.js';
 import {
   type MarketplacePackageManifest,
   type MarketplacePackageManifestV2,
@@ -15,9 +13,11 @@ import {
  */
 function extensionBuiltin(
   manifest: MarketplacePackageManifest,
-): string | undefined {
+): SpecialistRole | undefined {
   const builtin = manifest.extends?.builtin;
-  return builtin === undefined ? undefined : resolveMarketplaceBuiltin(builtin);
+  return builtin === undefined
+    ? undefined
+    : (resolveMarketplaceBuiltin(builtin) as SpecialistRole);
 }
 
 function renderV2PackageSuffix(manifest: MarketplacePackageManifestV2): string {
@@ -85,40 +85,24 @@ export function renderMarketplaceAutoDelegationBlock(
   runtimeName = manifest.agentName,
   standaloneLaneDescription?: string,
 ): string {
+  const roleId = extensionBuiltin(manifest);
+  const role = roleId
+    ? `@${runtimeName} — ${SPECIALIST_DESCRIPTIONS[roleId]}`
+    : undefined;
   if (manifest.schemaVersion === 2) {
-    const roleId = extensionBuiltin(manifest);
-    const base = roleId
-      ? renderRoleRoutingBlock(
-          ROLE_ROUTING_SLIM_LINES[roleId],
-          roleId,
-          runtimeName,
-        )
-      : [
-          `@${runtimeName}`,
-          `- Lane: ${standaloneLaneDescription ?? manifest.description}`,
-        ].join('\n');
-
+    const base =
+      role ??
+      `@${runtimeName}\n- Lane: ${standaloneLaneDescription ?? manifest.description}`;
     return `${base}\n\n${renderV2PackageSuffix(manifest)}`;
   }
-
-  const roleId = extensionBuiltin(manifest);
-  const base = roleId
-    ? renderRoleRoutingBlock(
-        ROLE_ROUTING_SLIM_LINES[roleId],
-        roleId,
-        runtimeName,
-      )
-    : [
-        `@${runtimeName}`,
-        `- Lane: ${standaloneLaneDescription ?? manifest.routing.lane}`,
-        `- Role: ${manifest.description}`,
-        renderV3Capabilities(manifest),
-      ]
-        .filter(Boolean)
-        .join('\n');
-
-  if (!roleId) {
-    return `${base}\n${renderV3RoutingDetails(manifest)}`;
-  }
-  return `${base}\n\n${renderV3ExtensionSuffix(manifest)}`;
+  if (role) return `${role}\n\n${renderV3ExtensionSuffix(manifest)}`;
+  const base = [
+    `@${runtimeName}`,
+    `- Lane: ${standaloneLaneDescription ?? manifest.routing.lane}`,
+    `- Role: ${manifest.description}`,
+    renderV3Capabilities(manifest),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return `${base}\n${renderV3RoutingDetails(manifest)}`;
 }

@@ -1097,20 +1097,15 @@ describe('PluginConfigSchema removed legacy keys', () => {
   });
 });
 
-describe('AgentOverrideConfigSchema.subagents', () => {
-  it('accepts a delegation-scope allowlist', () => {
-    const result = PluginConfigSchema.safeParse({
-      agents: {
-        orchestrator: { model: 'x/y', subagents: ['fixer', '@writer'] },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects the reserved * wildcard as a specialist name', () => {
-    const result = PluginConfigSchema.safeParse({
-      agents: { orchestrator: { model: 'x/y', subagents: ['fixer', '*'] } },
-    });
-    expect(result.success).toBe(false);
+describe('retired config keys', () => {
+  it('does not advertise routingBlock or agent subagents', () => {
+    const schema = z.toJSONSchema(PluginConfigSchema, { io: 'input' });
+    expect(schema.properties).not.toHaveProperty('routingBlock');
+    expect(PluginConfigSchema.parse({ routingBlock: false })).toEqual({});
+    expect(
+      PluginConfigSchema.safeParse({
+        agents: { orchestrator: { model: 'x/y', subagents: ['fixer'] } },
+      }).success,
+    ).toBe(false);
   });
 });

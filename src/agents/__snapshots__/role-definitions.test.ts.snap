@@ -3,27 +3,27 @@
 exports[`specialist role definitions matches golden factory prompts and descriptions 1`] = `
 [
   {
-    "description": "Fast codebase search and external docs/web research.",
+    "description": "Read-only codebase recon, parallel searches, official docs, current APIs and tricky bugs. Do known-file reads and use facts already in context directly.",
     "name": "explorer",
     "promptSha256": "26114d217ba616b7e38027bc29f39407d2ac14297e9abab7edb353da1072ad39",
   },
   {
-    "description": "Strategic technical advisor.",
+    "description": "Escalate major architecture, high-risk trade-offs, simplification, or debugging after two failed fixes. Not for routine verification.",
     "name": "oracle",
     "promptSha256": "d548d97c6c50e7f2474745e2aebaffd2e0a0ab401cf0f90cc96a3e34a9280637",
   },
   {
-    "description": "UI/UX design, review, and implementation.",
+    "description": "Delegate all UI/UX: layout, hierarchy, motion, styling and responsive behavior. Review user-facing copy separately without changing visuals.",
     "name": "designer",
     "promptSha256": "53491f1bb9e628055341991c94e205bb64825c4697cf9c19824abc33e8264e50",
   },
   {
-    "description": "Fast implementation specialist.",
+    "description": "Use for bounded multi-file or mechanical edits. Not for investigation, design judgment, small clear fixes, or context-heavy writing.",
     "name": "fixer",
     "promptSha256": "f3a4a8f3e58e5a5c258f82880b71c11e30768498056077583c87919cd662c601",
   },
   {
-    "description": "Visual analysis specialist; requires a vision-capable model.",
+    "description": "Analyze images, PDFs or diagrams, not plain text. Send the full file path and goal; requires a vision-capable model.",
     "name": "observer",
     "promptSha256": "4df7fb0b68260916ecadb5b6ee57cb7c8f43a45424260392d4108554082963cb",
   },

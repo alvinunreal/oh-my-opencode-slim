@@ -198,6 +198,29 @@ describe('runDoctorCheck', () => {
     }
   });
 
+  test('reports the retired allowlist with its file and native replacement', () => {
+    const configDir = path.join(tempDir, 'project', '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    const file = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      file,
+      '{"agents":{"orchestrator":{"subagents":["fixer"]}}}',
+    );
+    const result = runDoctorCheck(path.dirname(configDir));
+    expect(result.ok).toBe(false);
+    expect(result.configs).toContainEqual(
+      expect.objectContaining({
+        path: file,
+        ok: false,
+        error: {
+          kind: 'unsupported-host',
+          message: expect.stringContaining('agents.orchestrator.subagents'),
+        },
+      }),
+    );
+    expect(formatJsonDoctorResult(result)).toContain('opencode.json[c]');
+  });
+
   test('checks all inherited layers and resolves presets across them', () => {
     const workspace = path.join(tempDir, 'workspace');
     const projectDir = path.join(workspace, 'repo');
