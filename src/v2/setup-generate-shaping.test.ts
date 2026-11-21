@@ -232,7 +232,8 @@ describe('createV2Setup generate hook shaping', () => {
       // Both paths took the orchestrator branch (prompt injected, array
       // collapsed to the host core's single system message).
       expect(contextEvent.system.length).toBe(1);
-      expect(contextEvent.system[0]?.text).toContain('<Agents>');
+      expect(contextEvent.system[0]?.text).toContain('<Workflow>');
+      expect(contextEvent.system[0]?.text).not.toContain('<Agents>');
     } finally {
       await cleanup();
     }
@@ -255,7 +256,7 @@ describe('createV2Setup generate hook shaping', () => {
       expect(event.system).toEqual([
         { type: 'text', text: '<env>fixture</env>\n\nhost system rules' },
       ]);
-      expect(event.system[0]?.text).not.toContain('<Agents>');
+      expect(event.system[0]?.text).not.toContain('<Workflow>');
     } finally {
       await cleanup();
     }

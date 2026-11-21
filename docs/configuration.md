@@ -125,7 +125,6 @@ active, or as an explicit veto against a nearer layer enabling that feature.
 | `sidebarShowHiddenAgents` | `false` | Show Council internals as sidebar rows; registration and native agent visibility are unchanged |
 | `liveConfigRefresh` | `true` | Watch configuration candidates for inference-profile refresh; no watcher is created without a consumer |
 | `stripOrchestratorModel` | `false` | Omit the configured Orchestrator model/variant so native session selection can win; an explicitly selected preset model is retained |
-| `routingBlock` | `true` | Include stock `<Agents>` routing criteria; disabling leaves the native roster but removes Delegate/Don't guidance |
 | `autoUpdate` | `true` | Enable Slim TUI update checks and notices; host package management is separate |
 | `questionTimeoutMs` | Unset/`0` | Opt-in automatic answer for eligible unanswered questions; enabled range 60,000–2,147,483,647 ms |
 | `image_routing` | Observer-dependent | `auto` relays supported attachments when native vision is unavailable; `direct` leaves them inline |
@@ -179,13 +178,12 @@ presets when it should vary by lineup; root `agents` overrides every preset.
 | `inheritModelFrom` | `session` or `orchestrator`; follow the live model instead of a configured primary |
 | `prompt` | Nonempty inline replacement; wins over a prompt file |
 | `orchestratorPrompt` | Additional routing guidance for a non-Orchestrator specialist |
-| `description` | Short native roster description; custom agents get a generated default |
+| `description` | Short description of when to delegate, shown in the native `subagent` roster |
 | `displayName` | Unique user-facing alias, not a new canonical agent name |
 | `color` | Six-digit hex or `primary`, `secondary`, `accent`, `success`, `warning`, `error`, `info` |
 | `skills`, `skills_add`, `skills_remove`, `skills_include_local` | Native skill grants and inherited-list adjustments; see [Skills](skills.md#skills-assignment) |
 | `mcps` | Plugin MCP selection (`*`, `!name`, explicit list); not a native agent property |
 | `permission` | Ordered permission map or scalar action; see [Agent Permissions](#agent-permissions) |
-| `subagents` | Built-in Orchestrator only: specialist allowlist compiled into delegation permissions |
 
 ### Preset inheritance
 
@@ -298,17 +296,16 @@ guidance. Slim does not rewrite delegation vocabulary. Display-name substitution
 is separate: it rewrites `@<internalName>` mentions in the final Orchestrator
 prompt and routing snippets.
 
-Keep routing **deltas**, not another agent directory. The native subagent tool
-already lists available IDs/descriptions. Stock `<Agents>` adds Delegate/Don't
-criteria and effective skill grants, which the native roster does not supply.
-`routingBlock: false` removes that stock block, not the native roster.
+Put role-specific delegation criteria in the agent's `description`. OpenCode
+includes it in the native `subagent` roster. Slim separately identifies hidden
+Council seats, which are not in that roster.
 
 ### Custom Routing Guidance (`orchestratorPrompt`)
 
 Non-Orchestrator agents can add routing guidance under a project-specific
-section of the Orchestrator prompt. It is omitted for disabled agents and does
-not replace stock routing. Begin custom-agent guidance with `@<agent-name>` so
-its target is explicit. Setting `orchestratorPrompt` on Orchestrator is rejected.
+section of the Orchestrator prompt. Use this for cross-agent policy rather than
+repeating `description`. It is omitted for disabled agents. Start the guidance
+with `@<agent-name>`; setting it on Orchestrator is rejected.
 
 ## Custom Agents
 
@@ -320,7 +317,7 @@ Unknown safe names under `agents` create specialist agents, not new primaries:
     "reviewer": {
       "model": "provider/model",
       "prompt": "Review the named code; report evidence and risks, do not edit.",
-      "orchestratorPrompt": "@reviewer — use for focused code-risk reviews.",
+      "description": "Use for focused code-risk reviews, not routine edits.",
       "permission": { "*": "deny", "read": "allow", "glob": "allow", "grep": "allow" }
     }
   }
@@ -332,12 +329,6 @@ reserved Council-seat identities. Missing models are reported and skipped.
 `librarian` remains a reserved alias for Explorer: explicit Explorer fields win;
 use `explorer` in new configuration. Legacy generated MCP-pair repairs are
 reported by `doctor`; customized permissions are not inferred or rewritten.
-
-Orchestrator `subagents` accepts canonical names, display names or `@` mentions.
-Configured ACP wrappers and active seat names are valid; Marketplace agents are
-not known at that early resolution step. Unknown, disabled and primary names
-are dropped with warnings; `*` is reserved. An explicit `permission.task`
-overrides this allowlist and suppresses its scoped stock catalog.
 
 ## Agent Permissions
 
@@ -386,6 +377,29 @@ apply at their own execution seams.
 Use Skills/MCP arrays for those selections and permission rules for file,
 shell, delegation and other actions. See [MCPs](mcps.md) and
 [Marketplace](marketplace.md#customize-an-installed-agent) for their ceilings.
+
+### Native Delegation Permissions
+
+Set ordered `subagent` rules in **OpenCode's** `opencode.json[c]`. For example,
+permit only `fixer` when the active agent is `orchestrator`:
+
+```jsonc
+{
+  "agents": {
+    "orchestrator": {
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "fixer", "effect": "allow" }
+      ]
+    }
+  }
+}
+```
+
+Use the exact registered IDs, including a configured visible alias where used.
+To keep Council under a restrictive policy, allow its synthesis agent and the
+configured `councillor-<seat>` IDs as well. OpenCode enforces the rules even for
+hidden seats. Existing Slim `permission.task` maps still project to native rules.
 
 ## Model fallback
 

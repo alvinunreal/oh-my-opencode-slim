@@ -127,6 +127,8 @@ selectable.
 | Root `webfetch` block | Removed; use `disabled_tools: ["webfetch"]` to retain native fetch only |
 | Disabled `auto-update-checker` hook | Removed; use `autoUpdate: false` |
 | `fallback.continuationPolicy`, `fallback.initialRetryDelayMs` | Startup refused: neither controls native V2 fallback; remove the keys, even with task mode/hook off |
+| `routingBlock` | Remove the key. Native `subagent` lists the permitted agents and their descriptions; Slim no longer renders a separate `<Agents>` block |
+| Slim `agents.<name>.subagents` and preset equivalents | Replace required restrictions with [native subagent permissions](configuration.md#native-delegation-permissions), then remove the key. Loading fails rather than dropping the layer and loosening permissions |
 
 Explicit host limits are checked before merging, even if a closer layer selects
 `off`. Errors name the source file and setting. For example:

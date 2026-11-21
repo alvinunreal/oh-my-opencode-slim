@@ -30,10 +30,9 @@ A user `skills/<name>/SKILL.md` can shadow a bundled skill.
   `agents.<name>` for settings shared across lineups. Explain spend changes.
 - Use `skills` and `mcps` lists for grants (`[]`, named grants, `*`, `!name`).
   Grant only what the job needs; tools have separate `permission` rules.
-- Create a custom specialist only for a recurring job not covered above. Set
-  its model, focused `prompt`, and `orchestratorPrompt` with explicit delegate
-  and don't-delegate criteria. Built-ins also support inline `prompt`;
-  `orchestratorPrompt` is for non-Orchestrator agents only.
+- Add a specialist only for recurring work. Set its model, focused `prompt`
+  and `description` with when to delegate. Use `orchestratorPrompt` only for
+  cross-agent guidance. Built-ins also support inline `prompt`.
 - Tune prompts for repeatable routing, project conventions, communication or
   verification issues. Solve one-off issues in the current turn instead.
 

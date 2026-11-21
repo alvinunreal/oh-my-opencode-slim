@@ -488,15 +488,26 @@ describe('v2 profile refresh hook', () => {
     });
   });
 
-  test('removed fallback settings refuse refresh and retain last-good profiles', async () => {
+  test('removed settings refuse refresh and retain last-good profiles', async () => {
     env.writeUserConfig(CHEAP_DEEPSEEK);
     await withFactory(
       async ({ refresh, hooks }) => {
         const initialAgent = JSON.stringify(hooks.agent?.explorer);
-        for (const fallback of [
-          { continuationPolicy: 'retry-primary' },
-          { initialRetryDelayMs: 0 },
-        ]) {
+        for (const [key, stale] of [
+          [
+            'fallback.continuationPolicy',
+            { fallback: { continuationPolicy: 'retry-primary' } },
+          ],
+          [
+            'fallback.initialRetryDelayMs',
+            { fallback: { initialRetryDelayMs: 0 } },
+          ],
+          ['routingBlock', { routingBlock: false }],
+          [
+            'agents.orchestrator.subagents',
+            { agents: { orchestrator: { subagents: [] } } },
+          ],
+        ] as const) {
           env.writeUserConfig({
             preset: 'changed',
             presets: {
@@ -504,15 +515,13 @@ describe('v2 profile refresh hook', () => {
             },
             backgroundJobs: { mode: 'off' },
             disabled_hooks: ['foreground-fallback'],
-            fallback,
+            ...stale,
           });
           const result = await refresh();
           expect(result.ok).toBe(false);
           if (result.ok) throw new Error('expected removed setting rejection');
           expect(result.reason).toContain(env.userConfigPath);
-          for (const key of Object.keys(fallback)) {
-            expect(result.reason).toContain(`fallback.${key}`);
-          }
+          expect(result.reason).toContain(key);
           expect(sidebarModels().explorer).toBe(
             'opencode-go/deepseek-v4.1-flash',
           );

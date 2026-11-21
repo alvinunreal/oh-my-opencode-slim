@@ -103,22 +103,6 @@ export const AgentOverrideConfigSchema = z
       'Agent display color as #RRGGBB or an OpenCode theme color',
     ),
     description: z.string().min(1).optional(),
-    subagents: z
-      .array(z.string().min(1))
-      .refine((names) => names.every((name) => name.trim().length > 0), {
-        message: 'specialist names must not be empty or whitespace-only',
-      })
-      .refine(
-        (names) => names.every((name) => name.trim().replace(/^@/, '') !== '*'),
-        {
-          message:
-            "'*' is reserved for the delegation-scope wildcard and is not a specialist name",
-        },
-      )
-      .optional()
-      .describe(
-        "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-      ),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })
   .strict();
@@ -897,12 +881,6 @@ const RawPluginConfigSchema = z
       .optional()
       .describe(
         'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
-      ),
-    routingBlock: z
-      .boolean()
-      .optional()
-      .describe(
-        "When false, removes the <Agents> routing block from the built-in orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
       ),
     autoUpdate: z
       .boolean()

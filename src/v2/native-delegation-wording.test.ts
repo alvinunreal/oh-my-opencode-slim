@@ -50,7 +50,7 @@ describe('delegationWording', () => {
 
 describe('buildOrchestratorPrompt delegation vocabulary', () => {
   test('v2 leaves completion mechanics to native tool descriptions', () => {
-    const prompt = buildOrchestratorPrompt({ hostFlavor: 'v2' });
+    const prompt = buildOrchestratorPrompt();
 
     expect(prompt).not.toContain('completion notifications resume you');
     expect(prompt).not.toContain('wake scheduler resume you');

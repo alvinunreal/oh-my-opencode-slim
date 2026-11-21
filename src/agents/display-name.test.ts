@@ -29,52 +29,23 @@ describe('displayName', () => {
     );
   });
 
-  test('injects configured displayName into orchestrator prompt mentions', () => {
-    const config: PluginConfig = {
-      agents: {
-        explorer: { displayName: 'researcher' },
-      },
-    };
-
-    const agents = createAgents(runtimeFor(config));
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    const prompt = orchestrator?.config.prompt ?? '';
-
-    expect(prompt).toContain('@researcher');
-    expect(prompt).not.toMatch(/@explorer\b/);
-  });
-
-  test('normalizes @-prefixed displayName in prompt injection', () => {
-    const config: PluginConfig = {
-      agents: {
-        explorer: { displayName: '@researcher' },
-      },
-    };
-
-    const agents = createAgents(runtimeFor(config));
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    const prompt = orchestrator?.config.prompt ?? '';
-
-    expect(prompt).toContain('@researcher');
-    expect(prompt).not.toContain('@@researcher');
-    expect(prompt).not.toMatch(/@explorer\b/);
-  });
-
-  test('normalizes whitespace-padded displayName in prompt injection', () => {
-    const config: PluginConfig = {
-      agents: {
-        explorer: { displayName: '  researcher  ' },
-      },
-    };
-
-    const agents = createAgents(runtimeFor(config));
-    const orchestrator = agents.find((a) => a.name === 'orchestrator');
-    const prompt = orchestrator?.config.prompt ?? '';
-
-    expect(prompt).toContain('@researcher');
-    expect(prompt).not.toContain('@ researcher ');
-    expect(prompt).not.toMatch(/@explorer\b/);
-  });
+  test.each(['researcher', '@researcher', '  researcher  '])(
+    'normalizes %p in native agent IDs and user-authored prompt mentions',
+    (displayName) => {
+      const configs = getAgentConfigs(
+        runtimeFor({
+          agents: {
+            explorer: { displayName },
+            orchestrator: { prompt: 'Brief @explorer.' },
+          },
+        }),
+        { hostFlavor: 'v2' },
+      );
+      expect(configs.researcher.mode).toBe('subagent');
+      expect(configs.explorer.hidden).toBe(true);
+      expect(configs.orchestrator.prompt).toBe('Brief @researcher.');
+    },
+  );
 
   test('throws when duplicate displayName is assigned', () => {
     const config: PluginConfig = {

@@ -93,8 +93,9 @@ fresh host process to measure the full memory benefit of a smaller feature set.
 
 Default agent prompts retain roles, routing and workflow constraints without
 repeating native delegation syntax, continuation or completion mechanics. The
-native roster supplies identity; `<Agents>` supplies dispatch criteria and skill
-grants, and Council retains its exact hidden seat IDs. The phase reminder stays
+native `subagent` tool renders permitted, visible IDs with their descriptions
+and routing criteria. OpenCode owns Skill access; Council separately exposes its
+exact hidden seat IDs. The phase reminder stays
 on the first eligible message, not the latest turn. Stock prose cuts do not
 change user-authored prompt composition or injection placement. See
 [Cache Verification](cache-verification.md).

@@ -1,10 +1,4 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
-import {
-  AGENT_SKILLS_NOTE,
-  type AgentSkillGrants,
-  renderRoutingLines,
-  renderScopedAgentsBlock,
-} from './role-routing';
 
 export interface AgentDefinition {
   name: string;
@@ -41,72 +35,8 @@ export function resolvePrompt(
     : effectiveBase;
 }
 
-export interface OrchestratorPromptOptions {
-  /** Agents to leave out of the <Agents> routing block. */
-  disabledAgents?: ReadonlySet<string>;
-  /** Agent names whose routing lines are omitted (e.g. council without councillors). */
-  excludeDescriptions?: readonly string[];
-  /** Delegation scope (issue #1591): when set, the <Agents> block lists
-   *  exactly these agents. */
-  onlyAgents?: readonly string[];
-  /** Descriptions for in-scope custom specialists (issue #1591); built-in
-   *  names keep their slim routing lines. */
-  customDescriptions?: Readonly<Record<string, string | undefined>>;
-  /** Per-agent skill grant summaries; when set, each routing line names the
-   *  skills that agent can load and the block closes with a short note. */
-  agentSkills?: AgentSkillGrants;
-  /** Host flavor supplied by agent configuration. */
-  hostFlavor?: string;
-  /** false drops the whole <Agents> block. */
-  routingBlock?: boolean;
-}
-
-/**
- * Build the orchestrator system prompt.
- *
- * Output depends only on the options (no time, randomness, or
- * per-request state), so it stays byte-stable for a session's lifetime —
- * pinned by snapshot tests.
- */
-export function buildOrchestratorPrompt({
-  disabledAgents,
-  excludeDescriptions,
-  onlyAgents,
-  customDescriptions,
-  agentSkills,
-  routingBlock = true,
-}: OrchestratorPromptOptions = {}): string {
-  // A scope renders through the scoped-catalog renderer so in-scope custom
-  // specialists appear with their description fallback; the unscoped path
-  // keeps the built-in slim routing lines.
-  const scoped = onlyAgents?.filter(
-    (name) =>
-      !disabledAgents?.has(name) && !excludeDescriptions?.includes(name),
-  );
-  const agentsBlock = scoped
-    ? renderScopedAgentsBlock(
-        scoped,
-        customDescriptions,
-        undefined,
-        agentSkills,
-      )
-    : renderRoutingLines(disabledAgents, excludeDescriptions, agentSkills);
-  // An empty scope renders no catalog: a bare `<Agents>` shell would read
-  // as "no specialists to route to" without saying so.
-  // renderScopedAgentsBlock already returns the complete `<Agents>` block.
-  const agentsSection = !routingBlock
-    ? ''
-    : scoped === undefined
-      ? `<Agents>
-${agentsBlock}${agentSkills ? `\n\n${AGENT_SKILLS_NOTE}` : ''}
-</Agents>
-
-`
-      : scoped.length > 0
-        ? `${agentsBlock}\n`
-        : '';
-
-  // Tool descriptions own dispatch, continuation and completion mechanics.
+/** The native subagent tool owns the permission-filtered agent catalog. */
+export function buildOrchestratorPrompt(): string {
   return `<Role>
 Orchestrator plans, delegates, monitors, reconciles and verifies specialist work.
 Delegate non-trivial work; do small, clear changes directly when context is held.
@@ -115,7 +45,7 @@ same specialist session; Fixer handles only mechanical doc edits.
 Prefer a working result over a perfect plan; make reversible decisions promptly.
 </Role>
 
-${agentsSection}<Workflow>
+<Workflow>
 - Build in passes: outline → structure → detail. Review proportionately to risk
   and maturity; stop when the request is met.
 - Respect dependencies; dispatch independent lanes in parallel with disjoint
@@ -149,13 +79,12 @@ export function createOrchestratorAgent(
   model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
-  promptOptions: OrchestratorPromptOptions = {},
 ): AgentDefinition {
   const prompt = resolvePrompt(
     'orchestrator',
     undefined,
     customPrompt,
-    buildOrchestratorPrompt(promptOptions),
+    buildOrchestratorPrompt(),
     customAppendPrompt,
   );
 
