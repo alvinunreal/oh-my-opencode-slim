@@ -684,22 +684,10 @@ export const FailoverConfigSchema = z
       .min(0)
       .default(3)
       .describe(
-        'Number of current-model retries allowed before Slim switches to ' +
-          'the next fallback model (or aborts when no chain is configured). ' +
-          'The budget is shared across the whole fallback chain and is not ' +
-          'reset by a model switch; it resets only on a successful ' +
-          'assistant response, session deletion, or a new user turn. 0 ' +
-          'switches immediately.',
-      ),
-    initialRetryDelayMs: z
-      .number()
-      .int()
-      .min(0)
-      .default(0)
-      .describe(
-        'Delay in milliseconds before triggering the first fallback on a ' +
-          'failover-worthy error. Gives intercepting plugins time to recover ' +
-          'the current model before the fallback chain advances. 0 disables.',
+        'Host retries tolerated before a model switch. Shared across the ' +
+          'fallback chain and user turns; successful execution or response, ' +
+          'session deletion, or fresh descent from the configured primary ' +
+          're-arms it. 0 switches immediately.',
       ),
     retryDelayMs: z
       .number()
@@ -707,18 +695,8 @@ export const FailoverConfigSchema = z
       .min(0)
       .default(500)
       .describe(
-        'Delay in milliseconds between consecutive fallback attempts ' +
-          'after the initial trigger. 0 disables.',
-      ),
-    continuationPolicy: z
-      .enum(['retry-primary', 'stick-to-fallback'])
-      .default('retry-primary')
-      .describe(
-        'Model policy for unpinned OpenCode v1 internal continuations ' +
-          '(for example, background completion and lifecycle wakes) after ' +
-          'a confirmed fallback. "retry-primary" lets the host try the ' +
-          'configured primary again; "stick-to-fallback" keeps the ' +
-          'confirmed fallback until a new external user turn.',
+        'Delay in milliseconds for the native retry decision when Slim ' +
+          'switches or reconciles fallback. 0 disables that delay.',
       ),
     timeoutMs: z.never({ error: 'fallback.timeoutMs was removed' }).optional(),
     retry_on_empty: z

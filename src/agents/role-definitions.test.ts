@@ -84,11 +84,11 @@ describe('specialist role definitions', () => {
 
   test('default prompts keep role and guardrails, not tool catalogs', () => {
     const explorerPrompt = ROLE_DEFINITIONS.explorer.prompt;
-    expect(explorerPrompt).toContain(
-      'a fast research specialist for codebases and external knowledge',
-    );
-    expect(explorerPrompt).toContain('**Role**: Codebase navigation');
+    expect(explorerPrompt).toContain('codebase navigation');
+    expect(explorerPrompt).toContain('link official docs');
     expect(explorerPrompt).toContain('READ-ONLY: inspect and report');
+    expect(ROLE_DEFINITIONS.observer.prompt).toContain('never guess');
+    expect(ROLE_DEFINITIONS.observer.prompt).toContain('never paraphrase');
     expect(explorerPrompt).not.toContain('**Tool selection**');
     for (const catalog of [
       'ast_grep_search',

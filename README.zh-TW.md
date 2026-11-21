@@ -46,9 +46,9 @@ oh-my-opencode-slim 是 OpenCode 的代理協作編排外掛。它內建一支�
 - **想用 Claude 嗎？** 請參閱 [ACP 支援](docs/acp-agents.md)：把
   Claude Code 引入為 Orchestrator 可以委派的子代理。
 - **打造專屬於你的設定。** oh-my-opencode-slim 的設計就是要能客製化，無論是全域，
-  還是[依專案設定](docs/project-local-customization.md)：新增
+  還是[依專案設定](docs/configuration.md)：新增
   [自訂代理](docs/configuration.md#custom-agents)、覆寫提示詞，並
-  [改寫委派規則](docs/project-local-customization.md#custom-routing-guidance-orchestratorprompt)，
+  [改寫委派規則](docs/configuration.md#custom-routing-guidance-orchestratorprompt)，
   讓 Orchestrator 以你的方式分派工作。
 - **掌握你自己的預設組合。** 模型陣容變化很快，所以
   [範例預設組合](#預設組合文件)很快就會過時。把它們當作靈感，再依你實際擁有的模型
@@ -753,9 +753,9 @@ bunx oh-my-opencode-slim@latest companion install
 | **[自訂代理](docs/configuration.md#custom-agents)** | 以自訂的提示詞、模型、MCP 存取權與 Orchestrator 委派規則，定義你自己的專家 |
 | **[ACP 代理](docs/acp-agents.md)** | 連接外部相容 ACP 的代理（例如 Claude Code ACP 或 Gemini ACP），作為可委派的子代理；它們工作時，工具與計畫的進度會串流顯示在 TUI 中 |
 | **[多工器整合](docs/multiplexer-integration.md)** | 在 Tmux、Zellij、Herdr、cmux、kitty、WezTerm 或 Orca 窗格中即時觀看代理工作 |
-| **[Codemap](docs/codemap.md)** | 產生階層式程式碼地圖，更快理解大型程式碼庫 |
-| **[Clonedeps](docs/clonedeps.md)** | 把選定的相依套件原始碼複製到被忽略的本機工作區中以供檢視 |
-| **[Worktrees](docs/worktrees.md)** | 使用 `.slim/worktrees/` 通道處理隔離的平行或高風險開發工作 |
+| **[Codemap](docs/skills.md#codemap)** | 產生階層式程式碼地圖，更快理解大型程式碼庫 |
+| **[Clonedeps](docs/skills.md#clonedeps)** | 把選定的相依套件原始碼複製到被忽略的本機工作區中以供檢視 |
+| **[Worktrees](docs/skills.md#worktrees)** | 使用 `.slim/worktrees/` 通道處理隔離的平行或高風險開發工作 |
 | **[預設組合切換](docs/presets/preset-switching.md)** | 以 `/preset` 在執行期間切換代理模型的預設組合 |
 | **[Interview](docs/interview.md)** | 透過瀏覽器內的問答流程，把粗略的想法轉成結構化的 markdown 規格，再用 `/implement` 實作 |
 | **[Companion](docs/companion.md)** | 用於解析、說明與型別的浮動視窗伴侶 |
@@ -765,11 +765,11 @@ bunx oh-my-opencode-slim@latest companion install
 | 文件 | 涵蓋內容 |
 |-----|----------------|
 | **[安裝指南](docs/installation.md)** | 安裝外掛、使用 CLI 旗標、重設設定，以及排解安裝問題 |
-| **[OpenCode v2 相容性](docs/opencode-v2-compatibility.md)** | 主機合約、功能對照表、進入點與套件載入 |
+| **[OpenCode 2 介接](src/v2/codemap.md)** | 主機合約、請求處理、權限與驗證 |
 | **[執行效率](docs/runtime-efficiency.md)** | 共用的設定讀取、請求範圍內的事實、選用實作的載入與驗證 |
 | **[設定](docs/configuration.md)** | 設定檔位置、JSONC 支援、提示詞覆寫與完整的選項參考 |
 | **[市集](docs/marketplace.md)** | 安裝、檢視、啟用與更新市集中的代理套件 |
-| **[專案客製化](docs/project-local-customization.md)** | 儲存庫專屬的自訂代理、提示詞覆寫、各代理的技能與優先順序 |
+| **[專案客製化](docs/configuration.md)** | 儲存庫專屬的自訂代理、提示詞覆寫、各代理的技能與優先順序 |
 | **[背景編排](docs/background-orchestration.md)** | 以排程優先為核心、圍繞原生背景子代理打造的 orchestrator 模型 |
 | **[維護者指南](docs/maintainers.md)** | issue 分流規則、標籤意義、支援管道的分流，以及儲存庫維護流程 |
 | **[開發者評測](docs/evals.md)** | 以原始碼檢出為基礎的路由／可靠度測試框架、離線評分，以及由模型提供參考性的評判 |

@@ -50,6 +50,72 @@ describe('loadPluginConfig', () => {
     expect(config).toEqual({});
   });
 
+  describe('removed native fallback settings', () => {
+    const cases = [
+      ['continuationPolicy', 'retry-primary'],
+      ['initialRetryDelayMs', 0],
+    ] as const;
+
+    test('a closer off mode cannot hide a removed user-layer setting', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+      const userPath = path.join(globalDir, 'oh-my-opencode-slim.json');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: { mode: 'off' },
+        disabled_hooks: ['foreground-fallback'],
+      });
+      for (const [key, value] of cases) {
+        fs.writeFileSync(
+          userPath,
+          JSON.stringify({
+            disabled_tools: ['webfetch'],
+            fallback: { [key]: value },
+          }),
+        );
+        const warnings: ConfigLoadWarning[] = [];
+        const load = () =>
+          loadPluginConfig(projectDir, {
+            hostFlavor: 'v2',
+            silent: true,
+            onWarning: (warning) => warnings.push(warning),
+          });
+        expect(load).toThrow(UnsupportedHostConfigError);
+        expect(load).toThrow(userPath);
+        expect(load).toThrow(`fallback.${key}`);
+        expect(warnings).toHaveLength(0);
+      }
+    });
+
+    test('inherited project settings fail before a nearer fallback override', () => {
+      const ancestor = path.join(tempDir, 'ancestor');
+      const projectDir = path.join(ancestor, 'repo');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: { mode: 'off' },
+        fallback: { enabled: false, retryDelayMs: 125 },
+      });
+      for (const [key, value] of cases) {
+        const file = writeProjectConfig(ancestor, {
+          fallback: { [key]: value },
+          disabled_tools: ['webfetch'],
+        });
+        const load = () =>
+          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true });
+        expect(load).toThrow(file);
+        expect(load).toThrow(`fallback.${key}`);
+        expect(load).toThrow('then run /reload');
+      }
+      writeProjectConfig(ancestor, { disabled_tools: ['webfetch'] });
+      expect(
+        loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+      ).toMatchObject({
+        disabled_tools: ['webfetch'],
+        backgroundJobs: { mode: 'off' },
+        fallback: { enabled: false, retryDelayMs: 125 },
+      });
+    });
+  });
+
   describe('host-aware background jobs retirement matrix', () => {
     test('migrates managed mode in every reader without discarding the layer', () => {
       const projectDir = path.join(tempDir, 'project');
@@ -2177,7 +2243,7 @@ describe('deepMerge behavior', () => {
     expect(config.agents?.oracle?.model).toBe('user/model');
   });
 
-  test('merges fallback timeout from user and project', () => {
+  test('merges fallback enablement from user and project', () => {
     const userOpencodeDir = path.join(userConfigDir, 'opencode');
     fs.mkdirSync(userOpencodeDir, { recursive: true });
     fs.writeFileSync(
@@ -2247,7 +2313,6 @@ describe('deepMerge behavior', () => {
         enabled: false,
         maxRetries: 7,
         retryDelayMs: 200,
-        initialRetryDelayMs: 0,
       });
       expect(config.council?.default_preset).toBe('review');
       expect(config.council?.presets.review.alpha.models).toEqual([
@@ -2263,7 +2328,7 @@ describe('deepMerge behavior', () => {
     }
   });
 
-  test('fallback delay keys alone produce no deprecation warning', () => {
+  test('the active fallback retry delay produces no deprecation warning', () => {
     const userOpencodeDir = path.join(userConfigDir, 'opencode');
     fs.mkdirSync(userOpencodeDir, { recursive: true });
     fs.writeFileSync(
@@ -2271,7 +2336,6 @@ describe('deepMerge behavior', () => {
       JSON.stringify({
         fallback: {
           enabled: true,
-          initialRetryDelayMs: 100,
           retryDelayMs: 400,
         },
       }),
@@ -2283,7 +2347,6 @@ describe('deepMerge behavior', () => {
     });
 
     expect(warnings).toHaveLength(0);
-    expect(config.fallback?.initialRetryDelayMs).toBe(100);
     expect(config.fallback?.retryDelayMs).toBe(400);
   });
 });

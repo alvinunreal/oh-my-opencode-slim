@@ -145,24 +145,28 @@ describe('PluginConfigSchema ACP wrapper models', () => {
   });
 });
 
-describe('PluginConfigSchema fallback continuation policy', () => {
-  it('defaults to retrying the primary and accepts sticky fallback mode', () => {
-    expect(PluginConfigSchema.parse({ fallback: {} }).fallback).toMatchObject({
-      continuationPolicy: 'retry-primary',
+describe('PluginConfigSchema fallback settings', () => {
+  it('keeps only effective native fallback settings', () => {
+    expect(PluginConfigSchema.parse({ fallback: {} }).fallback).toEqual({
+      enabled: true,
+      maxRetries: 3,
+      retryDelayMs: 500,
     });
     expect(
       PluginConfigSchema.parse({
-        fallback: { continuationPolicy: 'stick-to-fallback' },
+        fallback: { enabled: false, maxRetries: 7, retryDelayMs: 125 },
       }).fallback,
-    ).toMatchObject({ continuationPolicy: 'stick-to-fallback' });
+    ).toEqual({ enabled: false, maxRetries: 7, retryDelayMs: 125 });
   });
 
-  it('rejects unknown continuation policies', () => {
-    expect(
-      PluginConfigSchema.safeParse({
-        fallback: { continuationPolicy: 'sometimes' },
-      }).success,
-    ).toBe(false);
+  it('rejects removed fallback keys instead of pretending they work', () => {
+    for (const fallback of [
+      { continuationPolicy: 'retry-primary' },
+      { initialRetryDelayMs: 0 },
+      { continuationPolicy: 'stick-to-fallback', initialRetryDelayMs: 100 },
+    ]) {
+      expect(PluginConfigSchema.safeParse({ fallback }).success).toBe(false);
+    }
   });
 });
 

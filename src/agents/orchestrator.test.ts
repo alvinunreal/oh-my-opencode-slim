@@ -35,10 +35,12 @@ describe('orchestrator prompt: host vocabulary', () => {
 
   test('shared guidance is identical across hosts', () => {
     for (const prompt of [v1(), v2()]) {
-      expect(prompt).toContain('You are Orchestrator, a workflow manager');
-      expect(prompt).toContain('Value productivity');
+      expect(prompt).toContain(
+        'Orchestrator plans, delegates, monitors, reconciles and verifies',
+      );
+      expect(prompt).toContain('Prefer a working result');
       expect(prompt).toContain('Build in passes');
-      expect(prompt).toContain('Subagent summaries are claims, not evidence');
+      expect(prompt).toContain('Summaries are claims, not evidence');
       expect(prompt).not.toContain('## File operations');
     }
   });
@@ -77,10 +79,9 @@ describe('orchestrator prompt: blocking on the user', () => {
     for (const prompt of [v1(), v2()]) {
       expect(prompt).not.toContain('wait_for_user');
       expect(prompt).not.toContain('`question`');
-      expect(prompt).toContain('external manual step, give concrete steps');
-      expect(prompt).toContain(
-        'Do not ask the user to wait for background tasks.',
-      );
+      expect(prompt).toContain('external manual step, give concrete');
+      expect(prompt).toContain('instructions, then ask and end the turn.');
+      expect(prompt).not.toContain('background tasks');
     }
   });
 });
@@ -121,7 +122,9 @@ describe('orchestrator prompt: cache safety', () => {
     for (const render of [v1, v2]) {
       const first = render();
       const second = render();
-      expect(first).toContain('You are Orchestrator, a workflow manager');
+      expect(first).toContain(
+        'Orchestrator plans, delegates, monitors, reconciles and verifies',
+      );
       expect(first).toBe(second);
     }
 
@@ -167,13 +170,6 @@ describe('createAgents orchestrator prompt gates', () => {
     return RuntimeConfig.get(TEST_DIRECTORY);
   }
 
-  /** What the compact prompt may name: only the wake promise plus the
-   * host-neutral correction policy; no optional lifecycle tool. */
-  const _capabilities = (prompt: string) => ({
-    wakeScheduler: prompt.includes('wake scheduler'),
-    amend: prompt.includes('Amend the same child, never respawn it.'),
-  });
-
   beforeEach(() => {
     RuntimeConfig.reset(TEST_DIRECTORY);
   });
@@ -192,9 +188,9 @@ describe('createAgents orchestrator prompt gates', () => {
     expect(prompt).not.toContain('wait_for_user');
     expect(prompt).not.toContain('wake scheduler');
     expect(prompt).not.toContain('task_message');
-    // The v2 resume promise never included the scheduler.
-    expect(prompt).toContain('completion notifications resume you');
-    expect(prompt).toContain('dispatch in parallel');
+    // Native tool descriptions own completion mechanics, even with controls off.
+    expect(prompt).not.toContain('completion notifications resume you');
+    expect(prompt).toContain('independent lanes in parallel');
     expect(prompt).not.toContain('`subagent`');
   });
 

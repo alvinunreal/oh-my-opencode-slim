@@ -804,7 +804,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             );
           }
         },
-        initialRetryDelayMs: runtime.fallback.initialRetryDelayMs,
         retryDelayMs: runtime.fallback.retryDelayMs,
         v2RetryEnabled: fallbackUserEnabled,
       });
@@ -2115,8 +2114,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       companionStartupAbort?.abort();
       marketplaceLeaseAbort.abort();
       registryBridge.retire();
-      // Cancel pending initial-delay fallback timers so a reloaded
-      // generation cannot observe one stale fallback call.
+      // Fence pending fallback work owned by this generation.
       foregroundFallback?.dispose();
       try {
         clearTuiActivities();

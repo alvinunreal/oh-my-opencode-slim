@@ -18,8 +18,8 @@ continuation when the switch succeeds.
   rejections and permanent or spent quota skip that budget. A structured
   `provider.auth` 401 receives one immediate retry per turn.
 - Host backoffs longer than 30 minutes bypass the retry budget when a chain is
-  available. `initialRetryDelayMs` has no steering equivalent; the host's own
-  retry backoff provides the recovery window.
+  available. The host owns retry backoff; `retryDelayMs` sets the retry delay
+  on a fallback switch or restore reconciliation.
 - `switchV2InPlace` calls `selectFallbackModel`, waits for the host switch, and
   commits the result. A timed-out switch that later settles is reconciled only
   if the turn and observed model still match. An in-flight switch prevents a

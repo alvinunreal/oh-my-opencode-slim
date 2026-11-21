@@ -5,12 +5,12 @@ exports[`specialist role definitions matches golden factory prompts and descript
   {
     "description": "Fast codebase search and external docs/web research.",
     "name": "explorer",
-    "promptSha256": "c1b289b47183717091fce7b665a17dba3bcac762ebbba56a8df9e77866ec26f7",
+    "promptSha256": "26114d217ba616b7e38027bc29f39407d2ac14297e9abab7edb353da1072ad39",
   },
   {
     "description": "Strategic technical advisor.",
     "name": "oracle",
-    "promptSha256": "9343d7f0aa0d95d71cd5b456b1a11f9a1d98170a7128693e56eb43c5b0642004",
+    "promptSha256": "d548d97c6c50e7f2474745e2aebaffd2e0a0ab401cf0f90cc96a3e34a9280637",
   },
   {
     "description": "UI/UX design, review, and implementation.",
@@ -20,12 +20,12 @@ exports[`specialist role definitions matches golden factory prompts and descript
   {
     "description": "Fast implementation specialist.",
     "name": "fixer",
-    "promptSha256": "5e696e1158326ae9c1bad6710887938ba6da6487ce84fad0448d223c7ba1f73d",
+    "promptSha256": "f3a4a8f3e58e5a5c258f82880b71c11e30768498056077583c87919cd662c601",
   },
   {
     "description": "Visual analysis specialist; requires a vision-capable model.",
     "name": "observer",
-    "promptSha256": "8fe81691f94fad14d647c354da88161efe51ca0866439b605daa7539a6f2d722",
+    "promptSha256": "4df7fb0b68260916ecadb5b6ee57cb7c8f43a45424260392d4108554082963cb",
   },
 ]
 `;

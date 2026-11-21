@@ -1,26 +1,11 @@
 /**
  * Single source of truth for the `agent` field on plugin-initiated prompts.
  *
- * Background and measured evidence:
- * `docs/agents/build-agent-empty-input-diagnosis.md` (see "Empirical
- * confirmation", probe A2).
- *
- * When a `session.prompt` / `session.promptAsync` body omits `agent`, OpenCode
- * resolves the agent with `agents.defaultInfo()` (`agent/agent.ts:328-340`),
- * which returns the first visible primary agent — the built-in `build` agent
- * whenever `default_agent` is unset, user-overridden, or not applied. OpenCode
- * then compares the resolved agent against the session's current agent and
- * calls `sessions.setAgentModel()` when they differ
- * (`session/prompt.ts:672-689`), which **permanently rewrites the session's
- * agent**. Probe A2 confirms the rewrite lands immediately on accept (HTTP
- * 204, before generation starts) and persists: a `probe-sub` child session
- * became `build` for every later turn. A single agent-less prompt therefore
- * hijacks the rest of that session.
- *
- * Every plugin-initiated prompt must name its agent explicitly: resolve it
- * with {@link resolveSessionAgent} and attach it with {@link withAgent}.
- * `src/utils/prompt-agent.test.ts` scans `src/` and fails the build if a new
- * prompt call site forgets.
+ * Resolve and name the session's owning agent with {@link resolveSessionAgent}
+ * and {@link withAgent}. An agent-less prompt in the shared factory convention
+ * may select the host default instead. The V2 adapter treats a name as an
+ * identity assertion, never a selection override (see src/v2/codemap.md).
+ * prompt-agent.test.ts guards the prompt call sites.
  */
 
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -162,12 +147,9 @@ function readAgentName(record: unknown): string | undefined {
 /**
  * Agent a *user* message requested, or `undefined` for any other role.
  *
- * Only user messages are trusted: they carry the agent the turn was addressed
- * to (`docs/agents/build-agent-empty-input-diagnosis.md`, probe A2 per-message
- * attribution), whereas assistant messages report whichever agent *served*
- * the turn — including core's internal `compaction`/`summary`/`title`
- * primaries writing into the user's own session, and including `build` in a
- * session this very bug already re-homed.
+ * User messages carry the addressed agent. Assistant messages name the agent
+ * that served the turn, which may be an auxiliary compaction, summary or
+ * title agent rather than the session's owner.
  */
 function readUserMessageAgent(entry: unknown): string | undefined {
   if (!entry || typeof entry !== 'object') return undefined;

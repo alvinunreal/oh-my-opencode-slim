@@ -28,7 +28,7 @@
  * only). Add such names to `MirrorSessionHookNames` explicitly; layer
  * 2a then fails until the name is official — which is the intended
  * alarm. Deleting this file goes unnoticed by `bun test`; it is
- * referenced from docs/opencode-v2-compatibility.md instead.
+ * referenced from src/v2/codemap.md instead.
  */
 
 import type { RpcCallOptions } from '@opencode/client';

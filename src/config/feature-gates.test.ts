@@ -7,6 +7,35 @@ import {
 } from './feature-gates';
 import type { PluginConfig } from './schema';
 
+test('removed fallback keys refuse startup even without task controls', () => {
+  for (const fallback of [
+    { continuationPolicy: 'retry-primary' },
+    { initialRetryDelayMs: 0 },
+    { continuationPolicy: undefined, initialRetryDelayMs: 100 },
+  ]) {
+    for (const backgroundJobs of [undefined, { mode: 'off' }]) {
+      const validate = () =>
+        validateExplicitHostConfig(
+          { fallback, backgroundJobs, disabled_hooks: ['foreground-fallback'] },
+          'v2',
+          '/config/slim.json',
+        );
+      expect(validate).toThrow(UnsupportedHostConfigError);
+      expect(validate).toThrow('/config/slim.json');
+      expect(validate).toThrow('then run /reload');
+      for (const key of Object.keys(fallback)) {
+        expect(validate).toThrow(`fallback.${key}`);
+      }
+    }
+  }
+  expect(() =>
+    validateExplicitHostConfig(
+      { fallback: { enabled: false, maxRetries: 7, retryDelayMs: 125 } },
+      'v2',
+    ),
+  ).not.toThrow();
+});
+
 test('explicit positive managed limits are refused with their full paths', () => {
   const cases = [
     [
