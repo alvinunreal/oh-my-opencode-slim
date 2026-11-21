@@ -591,6 +591,7 @@ describe('RuntimeConfig', () => {
       layout: 'main-vertical',
       main_pane_size: 60,
       equalize_panes: true,
+      agents: ['*'],
     });
     expect(runtime.fallback).toEqual({
       enabled: true,

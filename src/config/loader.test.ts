@@ -983,6 +983,7 @@ describe('loadPluginConfig', () => {
       main_pane_size: 60,
       viewer: 'tui',
       equalize_panes: true,
+      agents: ['*'],
     });
   });
 
@@ -1007,6 +1008,7 @@ describe('loadPluginConfig', () => {
         main_pane_size: 60,
         viewer: 'tui',
         equalize_panes: true,
+        agents: ['*'],
       });
     } finally {
       warnSpy.mockRestore();
@@ -1041,6 +1043,7 @@ describe('loadPluginConfig', () => {
       main_pane_size: 40,
       viewer: 'mini',
       equalize_panes: true,
+      agents: ['*'],
     });
   });
 });

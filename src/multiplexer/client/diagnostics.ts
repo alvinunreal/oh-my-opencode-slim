@@ -32,6 +32,7 @@ export interface DiagnosticContext {
   parentSessionId?: string;
   adapter?: AdapterType;
   anchoredTarget?: string;
+  subagentType?: string;
 }
 
 /**

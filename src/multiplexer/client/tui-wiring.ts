@@ -672,6 +672,7 @@ export async function createTuiPaneWiring(
           loaded.multiplexer.viewer ??
           ((options.viewerFlavor ?? 'v1') === 'v1' ? 'tui' : 'mini'),
       },
+      agents: loaded.multiplexer.agents,
     },
     logger,
   );

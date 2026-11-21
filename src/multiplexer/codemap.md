@@ -144,6 +144,7 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
    ├─ reflect serverUrl; embedded sentinel / probe failure → host-unreachable
    └─ construct PaneLifecycle + subscribe to the four session events
 2. session.created for a child whose parentID is the displayed session:
+   ├─ subagent filter: excluded by multiplexer.agents → agent-filtered, no pane
    ├─ resolve server URL (fail-closed when unreachable)
    ├─ create adapter (unavailable → adapter-unavailable)
    ├─ readiness gate: /session/status?directory=<dir>, bounded retries
@@ -206,12 +207,16 @@ interface MultiplexerConfig {
   main_pane_size?: number; // Percentage for main pane (20-80), tmux main-* and the first WezTerm main-* split
   cmux_tui_binary?: string; // Explicit cmux-tui binary path
   viewer?: 'tui' | 'mini'; // Host default: v1 'tui', v2 'mini'; explicit wins
+  agents: string[]; // Which subagents get a pane ("*"/"!name" list; default ["*"])
 }
 ```
 
 `zellij_pane_mode` is removed; the loader strips it with a warning. Invalid
-`type`/`layout`/`main_pane_size`/`cmux_tui_binary`/`viewer` values disable
-pane management with a once-per-process diagnostic.
+`type`/`layout`/`main_pane_size`/`cmux_tui_binary`/`viewer`/`agents` values
+disable pane management with a once-per-process diagnostic. The `agents`
+filter is applied when a pane would be created, so an excluded subagent still
+runs as a normal child session; its pane is simply skipped (reason
+`agent-filtered`).
 
 The host wiring resolves an omitted viewer. v1 mini uses `attach ... --dir
 <dir> --mini` (OpenCode >= 1.17.10), without extra pane-cwd pinning; v2 mini

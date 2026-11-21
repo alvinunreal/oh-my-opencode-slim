@@ -41,6 +41,7 @@ describe('no-pane diagnostics', () => {
       'admission-mismatch',
       'admission-none',
       'admission-unavailable',
+      'agent-filtered',
       'host-unreachable',
       'host-unsupported',
       'not-our-child',

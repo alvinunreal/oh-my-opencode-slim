@@ -1407,6 +1407,16 @@
           "description": "Herdr only: re-equalize the agent panes after each spawn and agent-pane close. Set false to keep manual pane sizes.",
           "type": "boolean"
         },
+        "agents": {
+          "default": [
+            "*"
+          ],
+          "description": "Which subagents get a pane: [\"*\"] (default) opens one for every child, [\"*\", \"!explorer\"] opens one for every child except the excluded names, and [\"oracle\", \"fixer\"] opens one only for the listed names. A filtered-out subagent still runs; only its pane is skipped.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "zellij_pane_mode": {
           "not": {}
         }

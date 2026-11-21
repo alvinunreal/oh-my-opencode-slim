@@ -443,7 +443,36 @@ describe('MultiplexerConfigSchema', () => {
       layout: 'main-vertical',
       main_pane_size: 60,
       equalize_panes: true,
+      agents: ['*'],
     });
+  });
+
+  it('defaults agents to ["*"] and keeps the three documented shapes', () => {
+    expect(MultiplexerConfigSchema.parse({}).agents).toEqual(['*']);
+    expect(
+      MultiplexerConfigSchema.parse({ agents: ['*', '!explorer'] }).agents,
+    ).toEqual(['*', '!explorer']);
+    expect(
+      MultiplexerConfigSchema.parse({ agents: ['oracle', 'fixer'] }).agents,
+    ).toEqual(['oracle', 'fixer']);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('disables pane management for a non-array agents value', () => {
+    const result = PluginConfigSchema.safeParse({
+      multiplexer: { type: 'tmux', agents: 'explorer' },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.multiplexer?.type).toBe('none');
+      // The invalid key is dropped, so the documented default applies.
+      expect(result.data.multiplexer?.agents).toEqual(['*']);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain('Invalid multiplexer config value');
+    expect(message).toContain('agents');
   });
 
   it('defaults equalize_panes to true and preserves an explicit false', () => {
