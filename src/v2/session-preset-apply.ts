@@ -5,7 +5,10 @@
  * A preset switch is not a configuration write: it binds the target session's
  * inference snapshot (see `./session-presets`) for new delegations and explicit
  * same-agent continuations. The root model, prompts, skills/MCPs and global
- * default are untouched. The transport differs (TUI:
+ * default are untouched — unless `forceOrchestrator` is set, in which case the
+ * same transaction also switches the root session's model to the preset's
+ * orchestrator entry (ADR-005); the global default still stays untouched. The
+ * transport differs (TUI:
  * session-preset RPC; server: the in-process store), so callers pass a `bind`
  * callback; name validation and the user-facing wording live here so both
  * surfaces report the same thing.
@@ -17,6 +20,49 @@ import type { SessionPresetState } from './session-presets';
 export interface SessionPresetOutcome {
   ok: boolean;
   message: string;
+}
+
+/** Parsed `/preset` command input, shared by the TUI fast path and the
+ * server command so both surfaces report identical usage errors.
+ * Preset names never contain spaces (configuration schema), so more than
+ * one non-flag token is a usage error. */
+export type ParsedPresetCommandInput =
+  | { kind: 'empty' }
+  | { kind: 'apply'; presetName: string; forceOrchestrator: boolean }
+  | { kind: 'usage-error'; message: string };
+
+export const FORCE_ORCHESTRATOR_FLAG = '--force-orchestrator';
+
+export function parsePresetCommandInput(
+  text: string,
+): ParsedPresetCommandInput {
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { kind: 'empty' };
+  const names: string[] = [];
+  let forceOrchestrator = false;
+  for (const token of tokens) {
+    if (token === FORCE_ORCHESTRATOR_FLAG) {
+      forceOrchestrator = true;
+      continue;
+    }
+    if (token.startsWith('--'))
+      return {
+        kind: 'usage-error',
+        message: `Unknown flag "${token}". The only valid flag is ${FORCE_ORCHESTRATOR_FLAG}.`,
+      };
+    names.push(token);
+  }
+  if (names.length > 1)
+    return {
+      kind: 'usage-error',
+      message: `Specify one preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG}].`,
+    };
+  if (names.length === 0)
+    return {
+      kind: 'usage-error',
+      message: `Specify a preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG}] for ${FORCE_ORCHESTRATOR_FLAG}.`,
+    };
+  return { kind: 'apply', presetName: names[0], forceOrchestrator };
 }
 
 export interface AvailablePresets {
@@ -52,9 +98,19 @@ export async function bindSessionPreset(options: {
   directory: string;
   presetName: string;
   hostFlavor?: string;
-  bind: (presetName: string) => Promise<SessionPresetState>;
+  forceOrchestrator?: boolean;
+  bind: (
+    presetName: string,
+    forceOrchestrator: boolean,
+  ) => Promise<SessionPresetState>;
 }): Promise<SessionPresetOutcome> {
-  const { directory, presetName, hostFlavor = 'v2', bind } = options;
+  const {
+    directory,
+    presetName,
+    hostFlavor = 'v2',
+    forceOrchestrator = false,
+    bind,
+  } = options;
   const { names } = readAvailablePresets(directory, hostFlavor);
   if (!names.includes(presetName)) {
     return {
@@ -66,14 +122,20 @@ export async function bindSessionPreset(options: {
     };
   }
   try {
-    const state = await bind(presetName);
+    const state = await bind(presetName, forceOrchestrator);
     if (state.status !== 'bound' || state.presetName !== presetName) {
       return {
         ok: false,
         message: `Preset "${presetName}" was not applied: the server did not confirm the session binding.`,
       };
     }
-    return { ok: true, message: sessionPresetAppliedMessage(presetName) };
+    let message = sessionPresetAppliedMessage(presetName);
+    if (state.rootForce?.outcome === 'switched') {
+      message += ` Root model switched to ${state.rootForce.model}. A native model pick overrides it later.`;
+    } else if (state.rootForce?.outcome === 'no-orchestrator-model') {
+      message += ` The preset defines no orchestrator model; the main model is unchanged.`;
+    }
+    return { ok: true, message };
   } catch (err) {
     return {
       ok: false,

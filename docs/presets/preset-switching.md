@@ -21,9 +21,24 @@ the built-in `/models`, so it triggers no LLM turn.
 > to the session on screen, so it is equivalent to Manager → Current session
 > without the dialogs. It never writes the global default.
 >
+> `/preset <name> --force-orchestrator` (ADR-005) additionally switches the
+> live root session's model to the preset's `orchestrator` entry — model,
+> variant, temperature and provider options — and stores the forced state
+> with the session team. It applies to root sessions only: a child session
+> reports an error and applies nothing, as does a host without
+> `session.switchModel` support. A preset without an `orchestrator.model`
+> entry still binds the team and reports that the main model is unchanged.
+> The flag is all-or-nothing with the team binding: if the model switch
+> fails, nothing is applied. A later native model pick overrides the forced
+> model permanently, and a plain `/preset <name>` reapply drops the forced
+> state. A restart restores the forced model only when no native pick
+> intervened. The TUI manager stays team-only: the flag is the only path to
+> the root model.
+>
 > Non-TUI clients (OpenChamber, SDK consumers, ACP hosts) get a server-side
-> `/preset <name>` command with the same meaning. No argument lists the
-> available presets, the current session binding, and the global and effective
+> `/preset <name> [--force-orchestrator]` command with the same meaning. No
+> argument lists the available presets, the current session binding, the
+> root model (forced by a preset or native), and the global and effective
 > defaults. A name binds the invoking session; an unknown name reports the
 > valid options. It is apply-only — create, edit and delete stay in the TUI
 > manager — and the client reports the result without a model turn, so no turn
@@ -84,6 +99,7 @@ configuration still configures Slim `explorer`; it does not configure the native
 |--------|---------------|---------------------|
 | Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New children and explicit same-agent continuations of bound children |
 | `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New children and explicit same-agent continuations of bound children |
+| `/preset <name> --force-orchestrator` | The same session snapshot plus the forced root model (live switch + stored forced state) | The session's own model on screen and its new children; consumed by a native model pick |
 | Manager → Global default | The selected preset in the user configuration | Unbound sessions and default-bound roots on their next admission, subject to project and environment overrides |
 | Edit the user configuration's `preset` | The global default | Future bindings and default-bound roots on their next admission |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project and default-bound roots on their next admission |
@@ -229,7 +245,10 @@ a raw JSON prompt for provider-specific settings (e.g.
 
 V2 session selection applies **only subagent inference settings**. It does
 not change the main session's model selection or hot-reload its agent
-registry. The default configuration and the current session's binding are
+registry — the one exception is `--force-orchestrator`, which switches the
+root session's model, variant, temperature and provider options per the
+preset's `orchestrator` entry and applies the forced temperature/options on
+each root request while the forced state is active. The default configuration and the current session's binding are
 different states; a default label is not evidence that a running child has
 changed models.
 

@@ -40,6 +40,17 @@ const bundleSchema = z
     inheritance: z.record(z.string(), z.enum(['session', 'orchestrator'])),
   })
   .strict();
+/** Forced root inference (ADR-005): the live-session application of a
+ * preset's orchestrator entry. Present only on root records; consumed when
+ * the session model differs from the forced value (native pick wins). */
+const rootForceSchema = z
+  .object({
+    model,
+    temperature: z.number().finite().optional(),
+    providerOptions: z.record(z.string(), z.unknown()).optional(),
+    managedProviderOptionKeys: z.array(z.string()).optional(),
+  })
+  .strict();
 const recordSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -53,8 +64,10 @@ const recordSchema = z
     preserveModel: z.boolean().optional(),
     explicitModel: z.boolean().optional(),
     inheritedProviderID: z.string().min(1).optional(),
+    rootForce: rootForceSchema.optional(),
   })
   .strict();
+type SessionRootForce = z.infer<typeof rootForceSchema>;
 
 export type SessionTeamBundle = Omit<
   z.infer<typeof bundleSchema>,
@@ -76,6 +89,14 @@ export type SessionPresetState = {
   /** Present on new bindings; absent legacy records mean explicit. */
   selection?: 'explicit' | 'default';
   affects: 'future-children-only';
+  /** Root session's model line: the forced value while a rootForce record
+   * is active, otherwise the host-reported live model. Roots only. */
+  root?: { model: string; variant?: string; forced: boolean };
+  /** Present on a `--force-orchestrator` apply: the root switch happened,
+   * or the preset defines no orchestrator model. */
+  rootForce?:
+    | { outcome: 'switched'; model: string }
+    | { outcome: 'no-orchestrator-model' };
   team?: {
     agentModels: Record<string, string>;
     agentVariants: Record<string, string>;
@@ -143,6 +164,42 @@ function assertJSON(value: unknown): void {
     return;
   }
   throw new Error('Session preset snapshot is not JSON');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Host session model ref. A `default` variant is a default-selection
+ * sentinel, not an explicit pin (native 2.1.2 fromRow projection), so it is
+ * normalized away like the capture path in setup.ts. */
+function liveModelRef(
+  info: Record<string, unknown> | undefined,
+): { providerID: string; id: string; variant?: string } | undefined {
+  const stored = isRecord(info) ? info.model : undefined;
+  if (
+    !isRecord(stored) ||
+    typeof stored.providerID !== 'string' ||
+    typeof stored.id !== 'string'
+  )
+    return undefined;
+  return {
+    providerID: stored.providerID,
+    id: stored.id,
+    ...(typeof stored.variant === 'string' && stored.variant !== 'default'
+      ? { variant: stored.variant }
+      : {}),
+  };
+}
+
+/** Same model comparison for force consumption: provider and id decide.
+ * A variant-only native change of the same model keeps the force (the
+ * forced temperature/options keep applying to it). */
+function sameModelRef(
+  a: { providerID: string; id: string; variant?: string },
+  b: { providerID: string; id: string; variant?: string },
+): boolean {
+  return a.providerID === b.providerID && a.id === b.id;
 }
 
 function freeze<T>(value: T): T {
@@ -325,21 +382,32 @@ export function createSessionPresets(options: {
     if (existing) {
       if (existing.parentID !== parentID)
         throw new Error('Session preset parent identity mismatch');
+      // ADR-005: a forced root model is consumed once the live session model
+      // differs from it — a native pick wins permanently. An absent host
+      // model pin proves nothing either way, so the force is kept.
+      let binding = existing;
+      if (existing.rootForce) {
+        const live = liveModelRef(info);
+        if (live && !sameModelRef(live, existing.rootForce.model)) {
+          const { rootForce: _consumed, ...stripped } = existing;
+          binding = stripped;
+        }
+      }
       // A root on the live default follows strict config refreshes; a team
       // applied by name, or a root during a fallback config, keeps its snapshot.
-      let bundle = existing.bundle;
+      let bundle = binding.bundle;
       if (
         !parentID &&
-        existing.selection === 'default' &&
+        binding.selection === 'default' &&
         !options.currentIsFallback?.()
       ) {
         const live = options.current();
         assertJSON(live);
         bundle = JSON.parse(JSON.stringify(live));
       }
-      const current = isDeepStrictEqual(existing.bundle, bundle)
-        ? existing
-        : { ...existing, bundle };
+      const current = isDeepStrictEqual(binding.bundle, bundle)
+        ? binding
+        : { ...binding, bundle };
       if (
         explicitModel === true &&
         (!current.explicitModel || !current.preserveModel)
@@ -483,12 +551,34 @@ export function createSessionPresets(options: {
   const state = (
     id: string,
     record?: SessionPresetRecord,
+    live?: { providerID: string; id: string; variant?: string },
+    rootForceOutcome?: SessionPresetState['rootForce'],
   ): SessionPresetState => ({
     sessionID: id,
     status: record ? 'bound' : 'unbound',
     presetName: record?.bundle.presetName ?? null,
     ...(record?.selection ? { selection: record.selection } : {}),
     affects: 'future-children-only',
+    ...(rootForceOutcome ? { rootForce: rootForceOutcome } : {}),
+    ...(record && !record.parentID
+      ? {
+          root: record.rootForce
+            ? {
+                model: `${record.rootForce.model.providerID}/${record.rootForce.model.id}`,
+                ...(record.rootForce.model.variant
+                  ? { variant: record.rootForce.model.variant }
+                  : {}),
+                forced: true,
+              }
+            : live
+              ? {
+                  model: `${live.providerID}/${live.id}`,
+                  ...(live.variant ? { variant: live.variant } : {}),
+                  forced: false,
+                }
+              : { model: 'default', forced: false },
+        }
+      : {}),
     ...(record
       ? {
           team: {
@@ -567,10 +657,15 @@ export function createSessionPresets(options: {
             (typeof info.parentID === 'string' ? info.parentID : undefined)
         )
           throw new Error('Session preset parent identity mismatch');
-        return state(id, record);
+        return state(id, record, liveModelRef(info));
       });
     },
-    async apply(id: string, name: string, signal?: AbortSignal) {
+    async apply(
+      id: string,
+      name: string,
+      signal?: AbortSignal,
+      applyOptions?: { forceOrchestrator?: boolean },
+    ) {
       requireAvailable();
       return serial(id, async () => {
         const info = await identity(id);
@@ -581,27 +676,141 @@ export function createSessionPresets(options: {
           throw new Error('Session preset parent identity mismatch');
         if (parentID && !previous)
           throw new Error('Cannot apply to an unbound child');
+        const force = applyOptions?.forceOrchestrator === true;
+        if (force && parentID)
+          throw new Error(
+            '--force-orchestrator applies to root sessions only; this is a child session. Nothing was applied.',
+          );
+        const session = options.session;
+        const switchModel = session?.switchModel;
+        if (force && typeof switchModel !== 'function')
+          throw new Error(
+            'The host does not support switching the session model, so --force-orchestrator is unavailable. Run /preset <name> without the flag to bind the team. Nothing was applied.',
+          );
         const bundle = await options.named(name);
-        const record = await write(
+        // A root apply replaces the whole binding: a previous forced root
+        // model never survives a reapply (ADR-005); a forced apply
+        // re-captures it below from the fresh bundle.
+        const rootProfile = force ? bundle.profiles.orchestrator : undefined;
+        const rootForce: SessionRootForce | undefined = rootProfile?.model
+          ? {
+              model: rootProfile.model,
+              ...(rootProfile.temperature !== undefined
+                ? { temperature: rootProfile.temperature }
+                : {}),
+              ...(rootProfile.providerOptions
+                ? { providerOptions: rootProfile.providerOptions }
+                : {}),
+              managedProviderOptionKeys: [
+                ...new Set([
+                  ...(rootProfile.managedProviderOptionKeys ?? []),
+                  ...Object.keys(rootProfile.providerOptions ?? {}),
+                ]),
+              ],
+            }
+          : undefined;
+        if (force && !rootForce) {
+          // Not an error: the team binds and the caller reports that the
+          // preset defines no orchestrator model (ADR-005 decision 4).
+          const record = await write(
+            id,
+            {
+              schemaVersion: 1,
+              ...(previous?.preserveModel ? { preserveModel: true } : {}),
+              ...(previous?.explicitModel !== undefined
+                ? { explicitModel: previous.explicitModel }
+                : {}),
+              ...(previous?.inheritedProviderID
+                ? { inheritedProviderID: previous.inheritedProviderID }
+                : {}),
+              ...(parentID && previous
+                ? { parentID, execution: previous.execution ?? previous.bundle }
+                : {}),
+              bundle,
+              selection: 'explicit',
+            },
+            signal,
+          );
+          return state(id, record, liveModelRef(info), {
+            outcome: 'no-orchestrator-model',
+          });
+        }
+        // Switch first, commit second: a host refusal leaves nothing
+        // applied. A commit failure restores the pre-switch live model,
+        // best-effort (ADR-005 decision 1).
+        if (rootForce && switchModel) {
+          try {
+            await switchModel.call(session, {
+              sessionID: id,
+              model: rootForce.model,
+            });
+          } catch (err) {
+            throw new Error(
+              `--force-orchestrator: the host refused the model switch (${
+                err instanceof Error ? err.message : String(err)
+              }). Nothing was applied.`,
+            );
+          }
+        }
+        let record: SessionPresetRecord;
+        try {
+          record = await write(
+            id,
+            {
+              schemaVersion: 1,
+              ...(previous?.preserveModel ? { preserveModel: true } : {}),
+              ...(previous?.explicitModel !== undefined
+                ? { explicitModel: previous.explicitModel }
+                : {}),
+              ...(previous?.inheritedProviderID
+                ? { inheritedProviderID: previous.inheritedProviderID }
+                : {}),
+              ...(parentID && previous
+                ? { parentID, execution: previous.execution ?? previous.bundle }
+                : {}),
+              bundle,
+              selection: 'explicit',
+              ...(rootForce ? { rootForce } : {}),
+            },
+            signal,
+          );
+        } catch (err) {
+          if (rootForce && switchModel) {
+            const live = liveModelRef(info);
+            const restore =
+              live && !sameModelRef(live, rootForce.model) ? live : undefined;
+            if (restore) {
+              try {
+                await switchModel.call(session, {
+                  sessionID: id,
+                  model: restore,
+                });
+              } catch (revertErr) {
+                throw new Error(
+                  `--force-orchestrator: the team binding failed (${
+                    err instanceof Error ? err.message : String(err)
+                  }) and restoring the previous root model also failed (${
+                    revertErr instanceof Error
+                      ? revertErr.message
+                      : String(revertErr)
+                  }). Re-run /preset <name> --force-orchestrator or pick a model natively.`,
+                );
+              }
+            }
+          }
+          throw err;
+        }
+        return state(
           id,
-          {
-            schemaVersion: 1,
-            ...(previous?.preserveModel ? { preserveModel: true } : {}),
-            ...(previous?.explicitModel !== undefined
-              ? { explicitModel: previous.explicitModel }
-              : {}),
-            ...(previous?.inheritedProviderID
-              ? { inheritedProviderID: previous.inheritedProviderID }
-              : {}),
-            ...(parentID && previous
-              ? { parentID, execution: previous.execution ?? previous.bundle }
-              : {}),
-            bundle,
-            selection: 'explicit',
-          },
-          signal,
+          record,
+          liveModelRef(info),
+          rootForce
+            ? {
+                outcome: 'switched',
+                model: `${rootForce.model.providerID}/${rootForce.model.id}`,
+              }
+            : undefined,
         );
-        return state(id, record);
       });
     },
     async remove(id: string) {

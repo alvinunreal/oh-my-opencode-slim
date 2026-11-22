@@ -247,6 +247,9 @@ describe('durable session team presets', () => {
       status: 'bound',
       presetName: 'A',
       affects: 'future-children-only',
+      // Bound root without a host model pin and without a forced root
+      // model: the root line reports the native default.
+      root: { model: 'default', forced: false },
       team: {
         agentModels: {
           explorer: 'test/saved-A',

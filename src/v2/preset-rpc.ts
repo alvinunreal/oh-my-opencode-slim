@@ -7,6 +7,19 @@ const state = z.object({
   presetName: z.string().nullable(),
   selection: z.enum(['explicit', 'default']).optional(),
   affects: z.literal('future-children-only'),
+  root: z
+    .object({
+      model: z.string(),
+      variant: z.string().optional(),
+      forced: z.boolean(),
+    })
+    .optional(),
+  rootForce: z
+    .union([
+      z.object({ outcome: z.literal('switched'), model: z.string() }),
+      z.object({ outcome: z.literal('no-orchestrator-model') }),
+    ])
+    .optional(),
   team: z
     .object({
       agentModels: z.record(z.string(), z.string()),
@@ -17,7 +30,9 @@ const state = z.object({
 });
 
 /** Shared server/TUI contract. Call context.client.rpc(sessionPresetRpc).
- * No method writes config or changes the session's native model. */
+ * No method writes config or changes the session's native model — except
+ * `apply` with `forceOrchestrator`, which switches the invoking root
+ * session's model per ADR-005. */
 export const sessionPresetRpc = Rpc.define({
   id: 'oh-my-opencode-slim.session-preset.v1',
   methods: {
@@ -27,7 +42,11 @@ export const sessionPresetRpc = Rpc.define({
     },
     apply: {
       input: z
-        .object({ sessionID: z.string().min(1), presetName: z.string().min(1) })
+        .object({
+          sessionID: z.string().min(1),
+          presetName: z.string().min(1),
+          forceOrchestrator: z.boolean().optional(),
+        })
         .strict(),
       output: state,
     },

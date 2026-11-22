@@ -28,6 +28,10 @@ function makeHarness(options?: {
   named?: (name: string) => Promise<SessionTeamBundle>;
   current?: () => SessionTeamBundle;
   currentIsFallback?: () => boolean;
+  switchModel?: (input: {
+    sessionID: string;
+    model: { id: string; providerID: string; variant?: string };
+  }) => Promise<unknown>;
 }) {
   const storage = new Map<string, unknown>();
   const getCalls: Array<unknown> = [];
@@ -59,7 +63,10 @@ function makeHarness(options?: {
   };
   const presets = createSessionPresets({
     storage: backend,
-    session: { get },
+    session: {
+      get,
+      ...(options?.switchModel ? { switchModel: options.switchModel } : {}),
+    },
     directory: options?.directory ?? DIRECTORY,
     current: options?.current ?? (() => BUNDLE),
     currentIsFallback: options?.currentIsFallback,
@@ -611,5 +618,239 @@ describe('adoptExecution', () => {
     await expect(
       h.presets.adoptExecution('child', adoptedRecord()),
     ).rejects.toThrow('snapshot write failed');
+  });
+});
+
+describe('apply --force-orchestrator (ADR-005)', () => {
+  const FORCE_BUNDLE: SessionTeamBundle = {
+    presetName: 'powerful',
+    fallbackEnabled: true,
+    profiles: {
+      orchestrator: {
+        model: { providerID: 'anthropic', id: 'claude-opus-4-6' },
+        temperature: 0.4,
+        providerOptions: { thinking: { type: 'enabled' } },
+        sidebarModel: 'anthropic/claude-opus-4-6',
+      },
+      explorer: { sidebarModel: 'openai/gpt-5-mini' },
+    },
+    chains: {},
+    inheritance: {},
+  };
+
+  function rootInfo(model?: unknown) {
+    return {
+      data: {
+        id: 'root-9',
+        agent: 'orchestrator',
+        parentID: undefined,
+        ...(model !== undefined ? { model } : {}),
+        location: { directory: DIRECTORY },
+      },
+    };
+  }
+
+  test('a forced root apply switches the live model and stores the force', async () => {
+    const switches: Array<unknown> = [];
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async (input) => {
+        switches.push(input);
+      },
+    });
+    h.setGetResponse(
+      rootInfo({ providerID: 'openai', id: 'gpt-5', variant: 'default' }),
+    );
+
+    const state = await h.presets.apply('root-9', 'powerful', undefined, {
+      forceOrchestrator: true,
+    });
+
+    expect(switches).toEqual([
+      {
+        sessionID: 'root-9',
+        model: { providerID: 'anthropic', id: 'claude-opus-4-6' },
+      },
+    ]);
+    expect(state.rootForce).toEqual({
+      outcome: 'switched',
+      model: 'anthropic/claude-opus-4-6',
+    });
+    expect(state.root).toEqual({
+      model: 'anthropic/claude-opus-4-6',
+      forced: true,
+    });
+    const stored = h.storage.get(storageKey('root-9')) as {
+      rootForce?: unknown;
+    };
+    expect(stored.rootForce).toEqual({
+      model: { providerID: 'anthropic', id: 'claude-opus-4-6' },
+      temperature: 0.4,
+      providerOptions: { thinking: { type: 'enabled' } },
+      managedProviderOptionKeys: ['thinking'],
+    });
+  });
+
+  test('a bound child rejects the flag and applies nothing', async () => {
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async () => {},
+    });
+    h.setGetResponse({
+      data: {
+        id: 'child-9',
+        parentID: 'root-9',
+        agent: 'explorer',
+        location: { directory: DIRECTORY },
+      },
+    });
+    h.storage.set(storageKey('child-9'), {
+      schemaVersion: 1,
+      parentID: 'root-9',
+      bundle: BUNDLE,
+      selection: 'explicit',
+    });
+
+    await expect(
+      h.presets.apply('child-9', 'powerful', undefined, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('--force-orchestrator applies to root sessions only');
+    const stored = h.storage.get(storageKey('child-9')) as {
+      bundle: { presetName: string };
+    };
+    expect(stored.bundle.presetName).toBe('default');
+  });
+
+  test('a host without switchModel rejects the flag before any write', async () => {
+    const h = makeHarness({ named: async () => FORCE_BUNDLE });
+    h.setGetResponse(rootInfo());
+
+    await expect(
+      h.presets.apply('root-9', 'powerful', undefined, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('does not support switching the session model');
+    expect(h.storage.has(storageKey('root-9'))).toBe(false);
+  });
+
+  test('a host refusal of the model switch applies nothing', async () => {
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async () => {
+        throw new Error('model not in catalog');
+      },
+    });
+    h.setGetResponse(rootInfo());
+
+    await expect(
+      h.presets.apply('root-9', 'powerful', undefined, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('the host refused the model switch');
+    expect(h.storage.has(storageKey('root-9'))).toBe(false);
+  });
+
+  test('a preset without an orchestrator model binds the team and reports it', async () => {
+    const switches: Array<unknown> = [];
+    const h = makeHarness({
+      named: async () => BUNDLE,
+      switchModel: async (input) => {
+        switches.push(input);
+      },
+    });
+    h.setGetResponse(rootInfo());
+
+    const state = await h.presets.apply('root-9', 'default', undefined, {
+      forceOrchestrator: true,
+    });
+
+    expect(switches).toEqual([]);
+    expect(state.rootForce).toEqual({ outcome: 'no-orchestrator-model' });
+    const stored = h.storage.get(storageKey('root-9')) as {
+      rootForce?: unknown;
+    };
+    expect(stored.rootForce).toBeUndefined();
+  });
+
+  test('a commit failure restores the pre-switch model', async () => {
+    const switches: Array<unknown> = [];
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async (input) => {
+        switches.push(input);
+      },
+    });
+    h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5' }));
+    const set = h.backend.set;
+    h.backend.set = async (key: string, value: unknown) => {
+      if (key === storageKey('root-9')) throw new Error('kv unavailable');
+      await set(key, value);
+    };
+
+    await expect(
+      h.presets.apply('root-9', 'powerful', undefined, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('kv unavailable');
+    expect(switches).toEqual([
+      {
+        sessionID: 'root-9',
+        model: { providerID: 'anthropic', id: 'claude-opus-4-6' },
+      },
+      { sessionID: 'root-9', model: { providerID: 'openai', id: 'gpt-5' } },
+    ]);
+  });
+
+  test('a native pick consumes the forced root model at the next admission', async () => {
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async () => {},
+    });
+    h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5' }));
+    await h.presets.apply('root-9', 'powerful', undefined, {
+      forceOrchestrator: true,
+    });
+
+    // The switch landed: the live model now equals the forced one.
+    h.setGetResponse(
+      rootInfo({ providerID: 'anthropic', id: 'claude-opus-4-6' }),
+    );
+    await h.presets.ensureAdmission('root-9');
+    let stored = h.storage.get(storageKey('root-9')) as {
+      rootForce?: unknown;
+    };
+    expect(stored.rootForce).toBeDefined();
+
+    // A native pick to another model consumes the force; the team stays.
+    h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5-mini' }));
+    await h.presets.ensureAdmission('root-9');
+    stored = h.storage.get(storageKey('root-9')) as {
+      rootForce?: unknown;
+      bundle: { presetName: string };
+      selection: string;
+    };
+    expect(stored.rootForce).toBeUndefined();
+    expect(stored.bundle.presetName).toBe('powerful');
+    expect(stored.selection).toBe('explicit');
+  });
+
+  test('a plain root reapply drops a previous force', async () => {
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async () => {},
+    });
+    h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5' }));
+    await h.presets.apply('root-9', 'powerful', undefined, {
+      forceOrchestrator: true,
+    });
+
+    const state = await h.presets.apply('root-9', 'powerful');
+    expect(state.rootForce).toBeUndefined();
+    expect(state.root?.forced).toBe(false);
+    const stored = h.storage.get(storageKey('root-9')) as {
+      rootForce?: unknown;
+    };
+    expect(stored.rootForce).toBeUndefined();
   });
 });

@@ -2946,8 +2946,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         ) {
           const registration = await ctx.rpc.register(sessionPresetRpc, {
             read: ({ sessionID }) => presets.readState(sessionID),
-            apply: ({ sessionID, presetName }, { signal }) =>
-              presets.apply(sessionID, presetName, signal),
+            apply: ({ sessionID, presetName, forceOrchestrator }, { signal }) =>
+              presets.apply(
+                sessionID,
+                presetName,
+                signal,
+                forceOrchestrator ? { forceOrchestrator: true } : undefined,
+              ),
           });
           disposers.push(() => registration.dispose());
         }
@@ -3123,8 +3128,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             draft.add(
               createPresetCommand({
                 directory,
-                applyToSession: (sessionID: string, presetName: string) =>
-                  presets.apply(sessionID, presetName),
+                applyToSession: (
+                  sessionID: string,
+                  presetName: string,
+                  forceOrchestrator?: boolean,
+                ) =>
+                  presets.apply(
+                    sessionID,
+                    presetName,
+                    undefined,
+                    forceOrchestrator ? { forceOrchestrator: true } : undefined,
+                  ),
                 readSessionPreset: (sessionID: string) =>
                   presets.readState(sessionID),
               }),
@@ -3527,6 +3541,29 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               binding,
             );
           } else if (!binding?.parentID && isRecord(event.options)) {
+            // ADR-005: while a forced root model is active (not yet consumed
+            // by a native pick — the admission transaction strips it first),
+            // the root request options come from the forced orchestrator
+            // profile instead of the startup registry. Managed keys are
+            // cleared first so a preset field that was removed cannot leak
+            // the startup value into the request.
+            const forcedRoot = sessionPresets?.peek(event.sessionID)?.rootForce;
+            if (forcedRoot) {
+              const options = await variantCompatibleOptions(
+                forcedRoot.providerOptions ?? {},
+                event.model,
+                'primary',
+              );
+              delete event.options.temperature;
+              if (typeof forcedRoot.temperature === 'number') {
+                event.options.temperature = forcedRoot.temperature;
+              }
+              for (const key of forcedRoot.managedProviderOptionKeys ?? []) {
+                delete event.options[key];
+              }
+              Object.assign(event.options, options);
+              return;
+            }
             const primary = staticRequestOptions.get(event.agent);
             if (!primary) return;
             const options = await variantCompatibleOptions(

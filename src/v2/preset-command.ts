@@ -13,7 +13,10 @@
  */
 import { readPluginConfigSnapshot } from '../config/snapshot';
 import { getPresetSelectionState } from '../tools/preset-switch';
-import { bindSessionPreset } from './session-preset-apply';
+import {
+  bindSessionPreset,
+  parsePresetCommandInput,
+} from './session-preset-apply';
 import type { SessionPresetState } from './session-presets';
 import type { V2CommandDefinition } from './types';
 
@@ -23,10 +26,12 @@ export const PRESET_COMMAND_DESCRIPTION =
 
 export interface PresetCommandOptions {
   directory: string;
-  /** Binds a preset to the invoking session (server-side store, no RPC). */
+  /** Binds a preset to the invoking session (server-side store, no RPC).
+   * The third argument carries `--force-orchestrator`. */
   applyToSession: (
     sessionID: string,
     presetName: string,
+    forceOrchestrator?: boolean,
   ) => Promise<SessionPresetState>;
   /** Reads the invoking session's binding, so the list reports what actually
    * applies to it instead of only the global default. */
@@ -48,13 +53,18 @@ export async function presetListFeedback(
   } = options;
   const parts: string[] = [];
   try {
-    const { status, presetName, selection } =
+    const { status, presetName, selection, root } =
       await readSessionPreset(sessionID);
     const binding = selection === 'default' ? 'default-derived' : 'explicit';
     parts.push(
       status === 'bound'
         ? `Session team: ${presetName ?? '(unnamed)'} (${binding}).`
         : 'Session team: not bound yet.',
+    );
+    parts.push(
+      root
+        ? `Root model: ${root.model}${root.variant ? `#${root.variant}` : ''} (${root.forced ? `forced by preset ${presetName ?? '(unnamed)'}` : 'native'}).`
+        : 'Root model: unknown.',
     );
   } catch {
     parts.push('Session team: unknown.');
@@ -106,16 +116,24 @@ export async function presetApplyFeedback(
   options: Pick<PresetCommandOptions, 'directory' | 'applyToSession'> & {
     sessionID: string;
     presetName: string;
+    forceOrchestrator?: boolean;
     hostFlavor?: string;
   },
 ): Promise<string> {
-  const { directory, sessionID, presetName, applyToSession, hostFlavor } =
-    options;
+  const {
+    directory,
+    sessionID,
+    presetName,
+    forceOrchestrator,
+    applyToSession,
+    hostFlavor,
+  } = options;
   const outcome = await bindSessionPreset({
     directory,
     presetName,
+    forceOrchestrator,
     hostFlavor: hostFlavor ?? 'v2',
-    bind: (name) => applyToSession(sessionID, name),
+    bind: (name, force) => applyToSession(sessionID, name, force),
   });
   return outcome.message;
 }
@@ -132,14 +150,16 @@ export function createPresetCommand(
     name: PRESET_COMMAND_NAME,
     description: PRESET_COMMAND_DESCRIPTION,
     execute: async (input) => {
-      const presetName = (input?.prompt?.text ?? '').trim();
+      const parsed = parsePresetCommandInput(input?.prompt?.text ?? '');
+      if (parsed.kind === 'usage-error') throw new Error(parsed.message);
       throw new Error(
-        presetName
+        parsed.kind === 'apply'
           ? await presetApplyFeedback({
               directory: options.directory,
               applyToSession: options.applyToSession,
               sessionID: input.sessionID,
-              presetName,
+              presetName: parsed.presetName,
+              forceOrchestrator: parsed.forceOrchestrator,
             })
           : await presetListFeedback({
               directory: options.directory,
