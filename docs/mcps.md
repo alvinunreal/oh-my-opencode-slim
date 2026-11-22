@@ -87,10 +87,11 @@ Control which MCPs each agent can use via the `mcps` array in your preset config
 ```
 
 > **Tip:** Omit `mcps` to inherit defaults. Explicit lists, including `[]`,
-> override them. One historical exception repairs the same-preset pair
-> `librarian.mcps: ["context7", "gh_grep"]` + `explorer.mcps: []` on load.
-> See [Librarian merge configuration updates](configuration.md#updating-configurations-after-the-librarian-merge)
-> for the exact rule and intentional deny-all syntax.
+> override them. The loader's existing repair applies only to the same-preset
+> pair `librarian.mcps: ["context7", "gh_grep"]` + `explorer.mcps: []`: it drops
+> the empty Explorer list so the retained list is inherited, with a warning and
+> no file write. Customized pairs are untouched. Use `explorer.mcps: ["!*"]`
+> for intentional deny-all in that exact legacy shape; use `explorer` in new config.
 
 ---
 

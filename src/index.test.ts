@@ -2592,9 +2592,17 @@ describe('plugin config model inheritance', () => {
         coworker: {
           primary: true,
           model: 'test/coworker',
-          subagents: ['fixer'],
         },
-        orchestrator: { subagents: ['coworker', 'reviewer', 'writer'] },
+        orchestrator: {
+          permission: {
+            task: {
+              '*': 'deny',
+              coworker: 'allow',
+              reviewer: 'allow',
+              writer: 'allow',
+            },
+          },
+        },
       },
       presets: {
         base: { reviewer: { primary: true, model: 'test/reviewer' } },
@@ -3013,22 +3021,22 @@ describe('plugin config model inheritance', () => {
   });
 
   test.each([
-    [undefined, true],
-    [['explorer', 'councillor-alpha'], false],
+    { disabled: [], expected: true },
+    { disabled: ['council'], expected: false },
   ])(
-    'council-inject follows the orchestrator seat pointer (scope %p)',
-    async (subagents, expected) => {
+    'council injection follows the configured seat roster (%p)',
+    async ({ disabled, expected }) => {
       const hooks = await loadConfiguredPlugin({
         council: {
           presets: { default: { alpha: { model: 'test/councillor' } } },
         },
-        agents: subagents ? { orchestrator: { subagents } } : {},
+        disabled_agents: disabled,
       });
       const transcript = {
         messages: [
           {
             info: {
-              sessionID: 'council-scope',
+              sessionID: 'council-fixture',
               role: 'user',
               agent: 'orchestrator',
             },

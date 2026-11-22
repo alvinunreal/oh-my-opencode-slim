@@ -42,7 +42,7 @@ oh-my-opencode-slim は OpenCode 向けのエージェントオーケストレ�
 - **[マルチプレクサー統合](docs/multiplexer-integration.md)** - Tmux、Zellij、Herdr、cmux、kitty、WezTerm のペインでエージェントの作業をライブ表示します。
 - **[プリセット切り替え](docs/presets/preset-switching.md)** - `/preset` でチーム全体のモデルを実行時に切り替えます。
 - **[コードインテリジェンスツール](docs/tools.md)** - 25 言語対応の LSP、AST 対応検索、ドキュメント・GitHub コード検索用の組み込み MCP を提供します。
-- **[完全にカスタマイズ可能](docs/configuration.md)** - カスタムエージェント、プロンプト上書き、エージェントごとのスキル/MCP 権限、[プロジェクトローカルのカスタマイズ](docs/project-local-customization.md)に対応します。
+- **[完全にカスタマイズ可能](docs/configuration.md)** - カスタムエージェント、プロンプト上書き、エージェントごとのスキル/MCP 権限、[プロジェクトローカルのカスタマイズ](docs/configuration.md)に対応します。
 
 ### OpenAI GPT-6
 
@@ -570,9 +570,9 @@ bunx oh-my-opencode-slim@latest companion install
 | **[Custom Agents](docs/configuration.md#custom-agents)** | カスタムプロンプト、モデル、MCP アクセス、Orchestrator の委譲ルールを備えた独自の専門エージェントを定義します |
 | **[ACP Agents](docs/acp-agents.md)** | Claude Code ACP や Gemini ACP などの外部 ACP 互換エージェントを委譲可能なサブエージェントとして接続します |
 | **[Multiplexer Integration](docs/multiplexer-integration.md)** | エージェントの動作を Tmux、Zellij、Herdr、cmux、kitty、や WezTerm のペインでライブ表示します |
-| **[Codemap](docs/codemap.md)** | 階層的なコードマップを生成し、大規模コードベースを迅速に理解します |
-| **[Clonedeps](docs/clonedeps.md)** | 選択した依存関係のソースを ignore 済みのローカルワークスペースにクローンし、調査できるようにします |
-| **[Worktrees](docs/worktrees.md)** | `.slim/worktrees/` lane を使い、隔離された並列または高リスクなコーディング作業を行います |
+| **[Codemap](docs/skills.md#codemap)** | 階層的なコードマップを生成し、大規模コードベースを迅速に理解します |
+| **[Clonedeps](docs/skills.md#clonedeps)** | 選択した依存関係のソースを ignore 済みのローカルワークスペースにクローンし、調査できるようにします |
+| **[Worktrees](docs/skills.md#worktrees)** | `.slim/worktrees/` lane を使い、隔離された並列または高リスクなコーディング作業を行います |
 | **[Preset Switching](docs/presets/preset-switching.md)** | `/preset` で実行時にエージェントモデルのプリセットを切り替えます |
 | **[Interview](docs/interview.md)** | ブラウザベースの Q&A フローで、ざっくりとしたアイデアを構造化された Markdown 仕様に変換します |
 | **[Companion](docs/companion.md)** | 解析、ヘルプ、型情報のためのフローティングウィンドウ companion |
@@ -583,7 +583,7 @@ bunx oh-my-opencode-slim@latest companion install
 |-----|----------------|
 | **[Installation Guide](docs/installation.md)** | プラグインのインストール、CLI フラグの使用、設定のリセット、セットアップのトラブルシューティング |
 | **[Configuration](docs/configuration.md)** | 設定ファイルの配置場所、JSONC サポート、プロンプトの上書き、全オプションのリファレンス |
-| **[Project Customization](docs/project-local-customization.md)** | リポジトリ固有のカスタムエージェント、プロンプト上書き、エージェントごとのスキル、および優先順位 |
+| **[Project Customization](docs/configuration.md)** | リポジトリ固有のカスタムエージェント、プロンプト上書き、エージェントごとのスキル、および優先順位 |
 | **[Background Orchestration](docs/background-orchestration.md)** | ネイティブのバックグラウンドサブエージェントを中心にした、スケジューラー優先の Orchestrator モデル |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue のトリアージルール、ラベルの意味、サポートの振り分け、リポジトリ運用ワークフロー |
 | **[Skills](docs/skills.md)** | `simplify`、`codemap`、`clonedeps`、`deepwork`、`verification-planning`、`reflect`、`worktrees`、`oh-my-opencode-slim` などの同梱スキル |

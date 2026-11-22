@@ -60,7 +60,8 @@ export const DEFAULT_MODELS: Record<AgentName, string | undefined> = {
 };
 
 // Workflow reminders
-export const PHASE_REMINDER_TEXT = `!IMPORTANT! Scheduler workflow: pick the lightest workflow that fits. Direct work: execute and verify proportionately. Otherwise: plan lanes → dispatch background specialists → track task IDs → await hook-driven completion → reconcile terminal results → verify. !END!`;
+export const PHASE_REMINDER_TEXT =
+  'Use the lightest workflow: verify direct work; reconcile every writer before final checks.';
 
 export function formatSystemReminder(text: string): string {
   return `<system-reminder>\n${text}\n</system-reminder>`;

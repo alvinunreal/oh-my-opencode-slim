@@ -929,66 +929,128 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
     expect(observed).toBeUndefined();
   });
 
-  test('context bridge exposes the stored synthetic delivery time to the observer', async () => {
+  test('attributed native notices skip history reads across fresh growing payloads', async () => {
     const text =
       '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>';
-    const event = makeEvent([
-      { id: 'msg_delivery', role: 'user', content: [{ type: 'text', text }] },
-    ]);
-    let observedTime: unknown;
+    const metadata = {
+      source: 'subagent',
+      childID: 'ses_child',
+      state: 'completed',
+    };
+    const sessionContext = mock(async () => []);
+    const pipeline = createPipeline();
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
-      sessionContext: async () => [
-        {
-          id: 'msg_delivery',
-          type: 'synthetic',
-          text,
-          time: { created: 2000 },
-        },
-      ],
-      messagesTransform: async (_input, output) => {
-        observedTime = (
-          output.messages[0]?.info as { time?: unknown } | undefined
-        )?.time;
-      },
+      sessionContext,
+      messagesTransform: async (_input, output) => pipeline.run(output),
     });
-
-    await handler(event);
-    expect(observedTime).toEqual({ created: 2000 });
-    expect(event.messages[0]).not.toHaveProperty('time');
-  });
-
-  test('context bridge projects delivery time when every user message has an agent', async () => {
-    const text =
-      '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>';
-    const event = makeEvent([
+    const history = [
+      {
+        id: 'msg_start',
+        role: 'user',
+        agent: 'orchestrator',
+        sessionID: SESSION_ID,
+        time: { created: 1 },
+        content: [{ type: 'text', text: 'run a council' }],
+      },
       {
         id: 'msg_delivery',
         role: 'user',
         agent: 'orchestrator',
-        content: [{ type: 'text', text }],
+        sessionID: SESSION_ID,
+        metadata,
+        content: [{ type: 'text', text, cache: { type: 'ephemeral' } }],
       },
-    ]);
-    let observedTime: unknown;
+    ];
+    let prefix: string | undefined;
+    for (let turn = 0; turn < 3; turn += 1) {
+      const event = makeEvent(structuredClone(history), {
+        sessionID: SESSION_ID,
+      });
+      await handler(event);
+      expect(sessionContext).not.toHaveBeenCalled();
+      const renderedPrefix = JSON.stringify(event.messages.slice(0, 2));
+      if (prefix === undefined) prefix = renderedPrefix;
+      else expect(renderedPrefix).toBe(prefix);
+      expect(event.messages[0]).toHaveProperty('time', { created: 1 });
+      expect(event.messages[1]).not.toHaveProperty('time');
+      expect(event.messages[1]?.metadata).toEqual(metadata);
+      expect(event.messages[1]?.content).toEqual(history[1].content);
+      history.push({
+        id: `msg_followup_${turn}`,
+        role: 'user',
+        agent: 'orchestrator',
+        sessionID: SESSION_ID,
+        content: [
+          { type: 'text', text: 'continue', cache: { type: 'ephemeral' } },
+        ],
+      });
+    }
+  });
+
+  test('missing-agent users still read history without projecting native notice times', async () => {
+    const text =
+      '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>';
+    const history = [
+      { id: 'u_old', type: 'user', text: 'inspect' },
+      {
+        id: 'switch',
+        type: 'agent-switched',
+        previous: 'explorer',
+        agent: 'orchestrator',
+      },
+      { id: 'u_new', type: 'user', text: 'run a council' },
+      {
+        id: 'msg_delivery',
+        type: 'synthetic',
+        text,
+        time: { created: 2000 },
+      },
+    ];
+    const storedBefore = JSON.stringify(history);
+    const sessionContext = mock(async () => history);
+    const pipeline = createPipeline();
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
-      sessionContext: async () => [
+      sessionContext,
+      messagesTransform: async (_input, output) => pipeline.run(output),
+    });
+    const event = makeEvent(
+      [
+        {
+          id: 'u_old',
+          role: 'user',
+          content: [{ type: 'text', text: 'inspect' }],
+        },
+        {
+          id: 'u_new',
+          role: 'user',
+          content: [{ type: 'text', text: 'run a council' }],
+        },
         {
           id: 'msg_delivery',
-          type: 'synthetic',
-          text,
-          time: { created: 2000 },
+          role: 'user',
+          agent: 'orchestrator',
+          metadata: { source: 'subagent', childID: 'ses_child' },
+          content: [{ type: 'text', text, cache: { type: 'ephemeral' } }],
         },
       ],
-      messagesTransform: async (_input, output) => {
-        observedTime = (
-          output.messages[0]?.info as { time?: unknown } | undefined
-        )?.time;
-      },
-    });
+      { sessionID: SESSION_ID, agent: 'oracle' },
+    );
 
     await handler(event);
-    expect(observedTime).toEqual({ created: 2000 });
+
+    expect(sessionContext).toHaveBeenCalledTimes(1);
+    expect(event.messages.map((message) => message.agent)).toEqual([
+      'explorer',
+      'orchestrator',
+      'orchestrator',
+    ]);
+    expect(event.messages[2]).not.toHaveProperty('time');
+    expect(event.messages[2]?.content).toEqual([
+      { type: 'text', text, cache: { type: 'ephemeral' } },
+    ]);
+    expect(JSON.stringify(history)).toBe(storedBefore);
   });
 
   test('context bridge collapses v2 tool parts without mutating them', async () => {

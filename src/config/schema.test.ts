@@ -145,24 +145,28 @@ describe('PluginConfigSchema ACP wrapper models', () => {
   });
 });
 
-describe('PluginConfigSchema fallback continuation policy', () => {
-  it('defaults to retrying the primary and accepts sticky fallback mode', () => {
-    expect(PluginConfigSchema.parse({ fallback: {} }).fallback).toMatchObject({
-      continuationPolicy: 'retry-primary',
+describe('PluginConfigSchema fallback settings', () => {
+  it('keeps only effective native fallback settings', () => {
+    expect(PluginConfigSchema.parse({ fallback: {} }).fallback).toEqual({
+      enabled: true,
+      maxRetries: 3,
+      retryDelayMs: 500,
     });
     expect(
       PluginConfigSchema.parse({
-        fallback: { continuationPolicy: 'stick-to-fallback' },
+        fallback: { enabled: false, maxRetries: 7, retryDelayMs: 125 },
       }).fallback,
-    ).toMatchObject({ continuationPolicy: 'stick-to-fallback' });
+    ).toEqual({ enabled: false, maxRetries: 7, retryDelayMs: 125 });
   });
 
-  it('rejects unknown continuation policies', () => {
-    expect(
-      PluginConfigSchema.safeParse({
-        fallback: { continuationPolicy: 'sometimes' },
-      }).success,
-    ).toBe(false);
+  it('rejects removed fallback keys instead of pretending they work', () => {
+    for (const fallback of [
+      { continuationPolicy: 'retry-primary' },
+      { initialRetryDelayMs: 0 },
+      { continuationPolicy: 'stick-to-fallback', initialRetryDelayMs: 100 },
+    ]) {
+      expect(PluginConfigSchema.safeParse({ fallback }).success).toBe(false);
+    }
   });
 });
 
@@ -1122,20 +1126,15 @@ describe('PluginConfigSchema removed legacy keys', () => {
   });
 });
 
-describe('AgentOverrideConfigSchema.subagents', () => {
-  it('accepts a delegation-scope allowlist', () => {
-    const result = PluginConfigSchema.safeParse({
-      agents: {
-        orchestrator: { model: 'x/y', subagents: ['fixer', '@writer'] },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects the reserved * wildcard as a specialist name', () => {
-    const result = PluginConfigSchema.safeParse({
-      agents: { orchestrator: { model: 'x/y', subagents: ['fixer', '*'] } },
-    });
-    expect(result.success).toBe(false);
+describe('retired config keys', () => {
+  it('does not advertise routingBlock or agent subagents', () => {
+    const schema = z.toJSONSchema(PluginConfigSchema, { io: 'input' });
+    expect(schema.properties).not.toHaveProperty('routingBlock');
+    expect(PluginConfigSchema.parse({ routingBlock: false })).toEqual({});
+    expect(
+      PluginConfigSchema.safeParse({
+        agents: { orchestrator: { model: 'x/y', subagents: ['fixer'] } },
+      }).success,
+    ).toBe(false);
   });
 });

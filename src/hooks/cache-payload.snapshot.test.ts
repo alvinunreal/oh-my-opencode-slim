@@ -35,15 +35,8 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
   });
 
   test('orchestrator system prompt', () => {
-    // Default skill grants: only oracle ships with skills.
-    const options = {
-      disabledAgents: new Set<string>(),
-      agentSkills: { oracle: 'simplify' },
-    };
-    const prompt = buildOrchestratorPrompt(options);
-    // Deterministic across invocations — a mismatch here means something
-    // volatile (time, randomness, environment) leaked into the prompt.
-    expect(buildOrchestratorPrompt(options)).toBe(prompt);
+    const prompt = buildOrchestratorPrompt();
+    expect(buildOrchestratorPrompt()).toBe(prompt);
     expect(prompt).toMatchSnapshot();
   });
 
@@ -66,11 +59,7 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
     // src/index.ts (`experimental.chat.system.transform`); the v2 suite
     // `setup-generate-shaping.test.ts` proves the bridge wiring itself, this
     // snapshot makes any byte drift a reviewed diff.
-    const options = {
-      disabledAgents: new Set<string>(),
-      agentSkills: { oracle: 'simplify' },
-    };
-    const orchestratorPrompt = buildOrchestratorPrompt(options);
+    const orchestratorPrompt = buildOrchestratorPrompt();
     const handler = createSessionGenerateHandler({
       systemTransform: async (input, output) => {
         const agent = (input as { agent?: unknown }).agent;

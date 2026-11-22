@@ -8,7 +8,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Orchestrator** — The canonical primary agent. Plans work, delegates to subagents, monitors them, and reconciles their results. One per session; cannot be disabled.
 - **Primary agent** — An agent with SDK mode `primary` that can run a foreground session. Slim registers the built-in orchestrator in this mode.
 - **Subagent** — A specialist agent a primary agent delegates bounded work to.
-- **Delegation scope** — The orchestrator's `agents.orchestrator.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
+- **Delegation scope** — The specialist IDs permitted by the caller's native `subagent` rules. OpenCode uses those rules to filter the visible roster and authorize delegation.
 - **Explorer** — Subagent for fast codebase search, pattern matching, and external documentation/library research.
 - **Oracle** — Subagent for architecture, debugging strategy, and code review.
 - **Designer** — Subagent for UI/UX design and visual polish.

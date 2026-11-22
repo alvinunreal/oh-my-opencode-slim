@@ -169,7 +169,6 @@ function makeOptions(
     maxRetries: 3,
     coordinator: undefined,
     onSessionModelChanged: undefined,
-    initialRetryDelayMs: 0,
     retryDelayMs: 500,
     timers: undefined,
     ...overrides,
@@ -181,7 +180,6 @@ function makeOptions(
 function makeManager({
   chain = ['test/a', 'test/b', 'test/c'],
   maxRetries = 3,
-  initialRetryDelayMs = 0,
   retryDelayMs = 0,
   hostFlavor,
   onChanged,
@@ -189,7 +187,6 @@ function makeManager({
 }: {
   chain?: ReadonlyArray<string | { id: string; variant?: string }>;
   maxRetries?: number;
-  initialRetryDelayMs?: number;
   retryDelayMs?: number;
   hostFlavor?: 'v2';
   onChanged?: (sessionID: string, model: string) => void;
@@ -210,7 +207,6 @@ function makeManager({
         input: { directory: '/test', hostFlavor } as never,
         maxRetries: maxRetries,
         onSessionModelChanged: onChanged,
-        initialRetryDelayMs: initialRetryDelayMs,
         retryDelayMs: retryDelayMs,
         timers: timers,
       }),
@@ -346,7 +342,6 @@ describe('foreground fallback redo harness', () => {
       },
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -408,7 +403,6 @@ describe('foreground fallback redo harness', () => {
       chains: { orchestrator: chain },
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -451,7 +445,6 @@ describe('foreground fallback redo harness', () => {
       },
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 3,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -672,7 +665,6 @@ describe('foreground fallback redo: host retry budget', () => {
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: false,
     });
@@ -743,32 +735,28 @@ describe('foreground fallback redo: host retry budget', () => {
       capture.mockRestore();
     }
   });
-  test('v2 steering ignores the configured initial delay', async () => {
+  test('v2 steering applies the configured retry delay after switching', async () => {
     const mgr = timedManager({
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 250,
-      // initialRetryDelayMs — no replay to delay on the steering path
-      retryDelayMs: 0,
+      retryDelayMs: 250,
     });
     const switchModel = mock(async () => ({}));
     const event = retryEvent('v2-delay', 'a', { retry: true, delay: 77 });
     await mgr.handleV2Retry(event, switchModel);
-    // No deferred same-model retry: the first failover event switches.
     expect(switchModel).toHaveBeenCalledTimes(1);
     expect(switchModel).toHaveBeenCalledWith('v2-delay', {
       providerID: 'test',
       id: 'b',
     });
-    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(event.decision).toEqual({ retry: true, delay: 250 });
   });
   test('v2 bookkeeping resets descent state without replay interventions', async () => {
     const mgr = timedManager({
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -861,7 +849,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         } as never,
         maxRetries: options?.maxRetries ?? 0,
         onSessionModelChanged: onChanged,
-        initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: options?.retryEnabled ?? true,
         timers: options?.timers,
@@ -1746,7 +1733,6 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
         chains: { orchestrator: ['p1/a', 'p2/b'] },
         input: { directory: '/test', hostFlavor: 'v2' } as never,
         maxRetries: 0,
-        initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: true,
       }),
@@ -3377,7 +3363,6 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'authGrace',
     'observedUserMessageIds',
     'sessionRetries',
-    'initialDelayUsed',
     'chainExhaustion',
     'quotaExhaustedProviders',
   ])('%s entry is removed on session.deleted', (mapName) => {
@@ -3478,7 +3463,6 @@ describe('ForegroundFallbackManager dispose cleanup', () => {
 
 describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {
   test.each([
-    'initialDelayUsed',
     'authGrace',
     'sessionRetries',
     'chainExhaustion',
@@ -3520,7 +3504,6 @@ describe('ForegroundFallbackManager chain generation pins', () => {
         chains: chains,
         input: { directory: '/test', hostFlavor: 'v2' } as never,
         maxRetries: 0,
-        initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: startupEnabled,
       }),

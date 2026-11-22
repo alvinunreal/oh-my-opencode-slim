@@ -103,22 +103,6 @@ export const AgentOverrideConfigSchema = z
       'Agent display color as #RRGGBB or an OpenCode theme color',
     ),
     description: z.string().min(1).optional(),
-    subagents: z
-      .array(z.string().min(1))
-      .refine((names) => names.every((name) => name.trim().length > 0), {
-        message: 'specialist names must not be empty or whitespace-only',
-      })
-      .refine(
-        (names) => names.every((name) => name.trim().replace(/^@/, '') !== '*'),
-        {
-          message:
-            "'*' is reserved for the delegation-scope wildcard and is not a specialist name",
-        },
-      )
-      .optional()
-      .describe(
-        "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-      ),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })
   .strict();
@@ -705,22 +689,10 @@ export const FailoverConfigSchema = z
       .min(0)
       .default(3)
       .describe(
-        'Number of current-model retries allowed before Slim switches to ' +
-          'the next fallback model (or aborts when no chain is configured). ' +
-          'The budget is shared across the whole fallback chain and is not ' +
-          'reset by a model switch; it resets only on a successful ' +
-          'assistant response, session deletion, or a new user turn. 0 ' +
-          'switches immediately.',
-      ),
-    initialRetryDelayMs: z
-      .number()
-      .int()
-      .min(0)
-      .default(0)
-      .describe(
-        'Delay in milliseconds before triggering the first fallback on a ' +
-          'failover-worthy error. Gives intercepting plugins time to recover ' +
-          'the current model before the fallback chain advances. 0 disables.',
+        'Host retries tolerated before a model switch. Shared across the ' +
+          'fallback chain and user turns; successful execution or response, ' +
+          'session deletion, or fresh descent from the configured primary ' +
+          're-arms it. 0 switches immediately.',
       ),
     retryDelayMs: z
       .number()
@@ -728,18 +700,8 @@ export const FailoverConfigSchema = z
       .min(0)
       .default(500)
       .describe(
-        'Delay in milliseconds between consecutive fallback attempts ' +
-          'after the initial trigger. 0 disables.',
-      ),
-    continuationPolicy: z
-      .enum(['retry-primary', 'stick-to-fallback'])
-      .default('retry-primary')
-      .describe(
-        'Model policy for unpinned OpenCode v1 internal continuations ' +
-          '(for example, background completion and lifecycle wakes) after ' +
-          'a confirmed fallback. "retry-primary" lets the host try the ' +
-          'configured primary again; "stick-to-fallback" keeps the ' +
-          'confirmed fallback until a new external user turn.',
+        'Delay in milliseconds for the native retry decision when Slim ' +
+          'switches or reconciles fallback. 0 disables that delay.',
       ),
     timeoutMs: z.never({ error: 'fallback.timeoutMs was removed' }).optional(),
     retry_on_empty: z
@@ -919,12 +881,6 @@ const RawPluginConfigSchema = z
       .optional()
       .describe(
         'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
-      ),
-    routingBlock: z
-      .boolean()
-      .optional()
-      .describe(
-        "When false, removes the <Agents> routing block from the built-in orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
       ),
     autoUpdate: z
       .boolean()

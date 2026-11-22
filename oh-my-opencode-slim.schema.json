@@ -54,10 +54,6 @@
       "description": "When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.",
       "type": "boolean"
     },
-    "routingBlock": {
-      "description": "When false, removes the <Agents> routing block from the built-in orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
-      "type": "boolean"
-    },
     "autoUpdate": {
       "description": "Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Defaults to true.",
       "type": "boolean"
@@ -204,14 +200,6 @@
                     "description": {
                       "type": "string",
                       "minLength": 1
-                    },
-                    "subagents": {
-                      "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "minLength": 1
-                      }
                     },
                     "permission": {
                       "anyOf": [
@@ -458,14 +446,6 @@
                         "type": "string",
                         "minLength": 1
                       },
-                      "subagents": {
-                        "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-                        "type": "array",
-                        "items": {
-                          "type": "string",
-                          "minLength": 1
-                        }
-                      },
                       "permission": {
                         "anyOf": [
                           {
@@ -642,14 +622,6 @@
                 "description": {
                   "type": "string",
                   "minLength": 1
-                },
-                "subagents": {
-                  "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  }
                 },
                 "permission": {
                   "anyOf": [
@@ -857,14 +829,6 @@
                         "type": "string",
                         "minLength": 1
                       },
-                      "subagents": {
-                        "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-                        "type": "array",
-                        "items": {
-                          "type": "string",
-                          "minLength": 1
-                        }
-                      },
                       "permission": {
                         "anyOf": [
                           {
@@ -1038,14 +1002,6 @@
                 "description": {
                   "type": "string",
                   "minLength": 1
-                },
-                "subagents": {
-                  "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  }
                 },
                 "permission": {
                   "anyOf": [
@@ -1226,14 +1182,6 @@
           "description": {
             "type": "string",
             "minLength": 1
-          },
-          "subagents": {
-            "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            }
           },
           "permission": {
             "anyOf": [
@@ -1540,33 +1488,17 @@
         },
         "maxRetries": {
           "default": 3,
-          "description": "Number of current-model retries allowed before Slim switches to the next fallback model (or aborts when no chain is configured). The budget is shared across the whole fallback chain and is not reset by a model switch; it resets only on a successful assistant response, session deletion, or a new user turn. 0 switches immediately.",
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "initialRetryDelayMs": {
-          "default": 0,
-          "description": "Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables.",
+          "description": "Host retries tolerated before a model switch. Shared across the fallback chain and user turns; successful execution or response, session deletion, or fresh descent from the configured primary re-arms it. 0 switches immediately.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
         },
         "retryDelayMs": {
           "default": 500,
-          "description": "Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables.",
+          "description": "Delay in milliseconds for the native retry decision when Slim switches or reconciles fallback. 0 disables that delay.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
-        },
-        "continuationPolicy": {
-          "default": "retry-primary",
-          "description": "Model policy for unpinned OpenCode v1 internal continuations (for example, background completion and lifecycle wakes) after a confirmed fallback. \"retry-primary\" lets the host try the configured primary again; \"stick-to-fallback\" keeps the confirmed fallback until a new external user turn.",
-          "type": "string",
-          "enum": [
-            "retry-primary",
-            "stick-to-fallback"
-          ]
         },
         "timeoutMs": {
           "not": {}

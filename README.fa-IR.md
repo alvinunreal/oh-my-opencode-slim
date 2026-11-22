@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://github.com/alvinunreal/oh-my-opencode-slim/stargazers">
-    <img src="img/v3-beta.webp" alt="انتشار نسخه Beta 3 از oh-my-opencode-slim" style="border-radius: 10px;">
+    <img src="img/v3.webp" alt="oh-my-opencode-slim v3" style="border-radius: 10px;">
   </a>
   <h3>✨ oh-my-opencode-slim ✨</h3>
 
@@ -54,7 +54,7 @@
   امکانات لازم را در اختیار شما قرار می‌دهد.
 * **[سفارشی‌سازی کامل / Fully customizable](docs/configuration.md)** — شامل Agentهای سفارشی و Prompt
   و همچنین override، دسترسی Skill/MCP برای هر Agent و
-  [سفارشی‌سازی در سطح پروژه / Project-local customization](docs/project-local-customization.md) است.
+  [سفارشی‌سازی در سطح پروژه / Project-local customization](docs/configuration.md) است.
 
 
 ### نظر کاربران
@@ -670,15 +670,15 @@ bunx oh-my-opencode-slim@latest companion install
     <td dir="rtl" align="right">کار Agentها را به‌صورت زنده در paneهای Tmux، Zellij، Herdr، cmux، kitty یا WezTerm ببینید</td>
   </tr>
   <tr>
-    <td><strong><a href="docs/codemap.md">Codemap</a></strong></td>
+    <td><strong><a href="docs/skills.md#codemap">Codemap</a></strong></td>
     <td dir="rtl" align="right">برای درک سریع‌تر Codebaseهای بزرگ، codemapهای سلسله‌مراتبی تولید کنید</td>
   </tr>
   <tr>
-    <td><strong><a href="docs/clonedeps.md">Clonedeps</a></strong></td>
+    <td><strong><a href="docs/skills.md#clonedeps">Clonedeps</a></strong></td>
     <td dir="rtl" align="right">وابستگی‌های source انتخاب‌شده را برای بررسی در یک workspace محلیِ ignore‌شده clone کنید</td>
   </tr>
   <tr>
-    <td><strong><a href="docs/worktrees.md">Worktrees</a></strong></td>
+    <td><strong><a href="docs/skills.md#worktrees">Worktrees</a></strong></td>
     <td dir="rtl" align="right">از laneهای <code>.slim/worktrees/</code> برای coding ایزوله، موازی یا پرریسک استفاده کنید</td>
   </tr>
   <tr>
@@ -707,7 +707,7 @@ bunx oh-my-opencode-slim@latest companion install
     <td dir="rtl" align="right">نصب Plugin، استفاده از flagهای CLI، reset کردن config و عیب‌یابی setup</td>
   </tr>
   <tr>
-    <td dir="rtl" align="right"><strong><a href="docs/opencode-v2-compatibility.md">سازگاری با OpenCode v2</a></strong></td>
+    <td dir="rtl" align="right"><strong><a href="src/v2/codemap.md">سازگاری با OpenCode v2</a></strong></td>
     <td dir="rtl" align="right">اجرای همان Plugin روی <code>opencode</code>: ماتریس featureها، baseline سازگاری با v2.3.0+ و pin کردن version</td>
   </tr>
   <tr>
@@ -715,7 +715,7 @@ bunx oh-my-opencode-slim@latest companion install
     <td dir="rtl" align="right">محل فایل‌های config، پشتیبانی JSONC، Prompt override و مرجع کامل optionها</td>
   </tr>
   <tr>
-    <td><strong><a href="docs/project-local-customization.md">سفارشی‌سازی پروژه</a></strong></td>
+    <td><strong><a href="docs/configuration.md">سفارشی‌سازی پروژه</a></strong></td>
     <td dir="rtl" align="right">Agentهای سفارشی مخصوص repository، Prompt override، Skillهای هر Agent و precedence</td>
   </tr>
   <tr>
