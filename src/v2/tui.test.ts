@@ -337,7 +337,7 @@ describe('v2 tui preset plugin', () => {
       expect(applies).toEqual([]);
       expect(stub.toasts).toHaveLength(1);
       expect(stub.toasts[0]).toBe(
-        'Unknown flag "--force". The only valid flag is --force-orchestrator.',
+        'Unknown flag "--force". The only valid flag is --force-orchestrator (-f).',
       );
     });
 

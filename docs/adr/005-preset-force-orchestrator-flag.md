@@ -17,7 +17,8 @@ The design started as a new command `force-preset` and settled on a flag.
 ## Decision
 
 Add `--force-orchestrator` to the existing `/preset` command on both
-surfaces (TUI fast path and server command). `/preset <name>
+surfaces (TUI fast path and server command); `-f` is its shorthand.
+`/preset <name>
 --force-orchestrator` binds the session team exactly like today AND applies
 the preset's `orchestrator` entry to the live session through
 `ctx.session.switchModel` plus the runtime-profile options bridge. The

@@ -11,6 +11,7 @@ import {
 } from './preset-command';
 import {
   FORCE_ORCHESTRATOR_FLAG,
+  FORCE_ORCHESTRATOR_SHORT_FLAG,
   parsePresetCommandInput,
 } from './session-preset-apply';
 import type { SessionPresetState } from './session-presets';
@@ -429,7 +430,7 @@ describe('createPresetCommand', () => {
         prompt: { text: 'fast --force' },
       }),
     ).rejects.toThrow(
-      `Unknown flag "--force". The only valid flag is ${FORCE_ORCHESTRATOR_FLAG}.`,
+      `Unknown flag "--force". The only valid flag is ${FORCE_ORCHESTRATOR_FLAG} (${FORCE_ORCHESTRATOR_SHORT_FLAG}).`,
     );
     expect(calls).toEqual([]);
   });
@@ -471,6 +472,19 @@ describe('parsePresetCommandInput', () => {
       forceOrchestrator: true,
     });
     expect(parsePresetCommandInput('--force-orchestrator cheap')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: true,
+    });
+  });
+
+  test('the -f shorthand matches the long flag', () => {
+    expect(parsePresetCommandInput('cheap -f')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: true,
+    });
+    expect(parsePresetCommandInput('-f cheap')).toEqual({
       kind: 'apply',
       presetName: 'cheap',
       forceOrchestrator: true,

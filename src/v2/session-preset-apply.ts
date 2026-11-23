@@ -32,6 +32,7 @@ export type ParsedPresetCommandInput =
   | { kind: 'usage-error'; message: string };
 
 export const FORCE_ORCHESTRATOR_FLAG = '--force-orchestrator';
+export const FORCE_ORCHESTRATOR_SHORT_FLAG = '-f';
 
 export function parsePresetCommandInput(
   text: string,
@@ -41,26 +42,29 @@ export function parsePresetCommandInput(
   const names: string[] = [];
   let forceOrchestrator = false;
   for (const token of tokens) {
-    if (token === FORCE_ORCHESTRATOR_FLAG) {
+    if (
+      token === FORCE_ORCHESTRATOR_FLAG ||
+      token === FORCE_ORCHESTRATOR_SHORT_FLAG
+    ) {
       forceOrchestrator = true;
       continue;
     }
     if (token.startsWith('--'))
       return {
         kind: 'usage-error',
-        message: `Unknown flag "${token}". The only valid flag is ${FORCE_ORCHESTRATOR_FLAG}.`,
+        message: `Unknown flag "${token}". The only valid flag is ${FORCE_ORCHESTRATOR_FLAG} (${FORCE_ORCHESTRATOR_SHORT_FLAG}).`,
       };
     names.push(token);
   }
   if (names.length > 1)
     return {
       kind: 'usage-error',
-      message: `Specify one preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG}].`,
+      message: `Specify one preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG} | ${FORCE_ORCHESTRATOR_SHORT_FLAG}].`,
     };
   if (names.length === 0)
     return {
       kind: 'usage-error',
-      message: `Specify a preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG}] for ${FORCE_ORCHESTRATOR_FLAG}.`,
+      message: `Specify a preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG} | ${FORCE_ORCHESTRATOR_SHORT_FLAG}] to force the orchestrator model.`,
     };
   return { kind: 'apply', presetName: names[0], forceOrchestrator };
 }
