@@ -1071,6 +1071,21 @@ describe('loadPluginConfig', () => {
     });
   });
 
+  test('loads an explicit Rex multiplexer type', () => {
+    const projectDir = path.join(tempDir, 'project-rex');
+    writeProjectConfig(projectDir, {
+      multiplexer: { type: 'rex', layout: 'even-horizontal' },
+    });
+
+    expect(loadPluginConfig(projectDir, { silent: true }).multiplexer).toEqual({
+      type: 'rex',
+      layout: 'even-horizontal',
+      main_pane_size: 60,
+      equalize_panes: true,
+      agents: ['*'],
+    });
+  });
+
   test('invalid project viewer disables panes without overriding the user viewer', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');

@@ -32,6 +32,7 @@ import {
 import { isRecord } from '../../utils/guards';
 import { initLogger } from '../../utils/logger';
 import { getMultiplexer } from '../factory';
+import { resolveRexContext } from '../rex';
 import { PANE_VIEWER_ENV, type ViewerFlavor } from '../shared';
 import type { Multiplexer } from '../types';
 import {
@@ -237,6 +238,8 @@ export function detectClientAdapter(
   if (env.TMUX_PANE) return 'tmux';
   if (env.ZELLIJ_PANE_ID) return 'zellij';
   if (env.HC_TERMINAL_ID || env.HERDR_PANE_ID) return 'herdr';
+  // Rex is after Herdr and before Kitty; nested tmux/Zellij already won.
+  if (resolveRexContext(env)) return 'rex';
   if (env.KITTY_WINDOW_ID) return 'kitty';
   // WezTerm hosts tmux/zellij sessions, which must win when nested inside it;
   // Orca sits after it for the same reason (a nested session inside either
@@ -310,6 +313,8 @@ export function resolveAnchoredTarget(
       return env.ZELLIJ_PANE_ID ?? null;
     case 'herdr':
       return env.HC_TERMINAL_ID ?? env.HERDR_PANE_ID ?? null;
+    case 'rex':
+      return resolveRexContext(env)?.block ?? null;
     case 'kitty':
       return env.KITTY_WINDOW_ID ?? null;
     case 'wezterm':

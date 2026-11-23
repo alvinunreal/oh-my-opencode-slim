@@ -113,6 +113,7 @@ export const MultiplexerTypeSchema = z.enum([
   'tmux',
   'zellij',
   'herdr',
+  'rex',
   'kitty',
   'wezterm',
   'orca',
@@ -175,7 +176,7 @@ const MultiplexerAgentsSchema = z.array(z.string());
  */
 export const MULTIPLEXER_INVALID_VALUE_MESSAGE =
   'Invalid multiplexer config value; pane management is disabled. Expected ' +
-  'type (auto|tmux|zellij|herdr|kitty|wezterm|orca|cmux-tui|none), layout ' +
+  'type (auto|tmux|zellij|herdr|rex|kitty|wezterm|orca|cmux-tui|none), layout ' +
   '(main-horizontal|main-vertical|tiled|even-horizontal|even-vertical), ' +
   'main_pane_size (20-80), cmux_tui_binary (non-empty string), ' +
   'viewer (tui|mini), equalize_panes (boolean), agents (string array).';

@@ -181,7 +181,7 @@ Key event flows:
 - **Agents** (`src/agents/`): Agent personalities and permission sets
 - **Tools** (`src/tools/`): Tool implementations (task lifecycle controls, webfetch, AST operations, ACP)
 - **Hooks** (`src/hooks/`): Phase reminders, cache monitoring, event observations, and tool guards.
-- **Multiplexer** (`src/multiplexer/`): Client-side pane lifecycle (`client/`) plus tmux/Zellij/Herdr/cmux/kitty adapters; wired only from the TUI entry
+- **Multiplexer** (`src/multiplexer/`): Client-side pane lifecycle (`client/`) plus tmux/Zellij/Herdr/Rex/cmux-tui/kitty/WezTerm/Orca adapters; wired only from the TUI entry
 - **Council** (`src/agents/council.ts`, `src/agents/council-agents.ts`): Multi-LLM council orchestration
 - **Companion** (`src/companion/`): Companion version management
 - **Utils** (`src/utils/`): Logger, environment checks, and session status

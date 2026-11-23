@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Provides a unified abstraction for tmux, Zellij, Herdr, cmux-tui, kitty, WezTerm, and Orca to
+Provides a unified abstraction for tmux, Zellij, Herdr, Rex, cmux-tui, kitty, WezTerm, and Orca to
 spawn, manage, and close panes for child OpenCode agent sessions — **from the
 TUI client process that displays the parent session**, never from the server.
 
@@ -30,6 +30,9 @@ multiplexer-specific command translation.
     and closes owned children with `hc kill` or finished records with `hc rm`;
     legacy Herdr uses `pane split`, `pane rename`, `pane run` and requires
     `HERDR_PANE_ID`
+  - `RexMultiplexer`: `rex split` scoped by both `REX_SESSION` and
+    `REX_BLOCK`, no focus change requested, native cwd and label; every child
+    splits the parent, no agent-area/equalization/sweep. See [map](rex/codemap.md).
   - `KittyMultiplexer`: `kitten @` CLI, parent-window anchoring from
     `KITTY_WINDOW_ID`, `--next-to=id:<parent>`, layout via
     `goto-layout --match=window_id:<id>`
@@ -91,7 +94,7 @@ multiplexer-specific command translation.
 
 ```typescript
 export interface Multiplexer {
-  readonly type: 'tmux' | 'zellij' | 'herdr' | 'cmux-tui' | 'kitty' | 'wezterm' | 'orca';
+  readonly type: 'tmux' | 'zellij' | 'herdr' | 'rex' | 'cmux-tui' | 'kitty' | 'wezterm' | 'orca';
   isAvailable(): Promise<boolean>;
   isInsideSession(): boolean;
   spawnPane(sessionId: string, description: string, serverUrl: string, directory: string, options?: PaneSpawnOptions): Promise<PaneResult>;
@@ -191,7 +194,7 @@ The server entry (`src/index.ts`) must not reach `src/multiplexer/client/*` or
 ### Dependencies
 
 - **Config Schema** (`src/config/schema.ts`): `MultiplexerConfig`
-  (type/layout/main_pane_size/cmux_tui_binary/viewer); removed keys are
+   (type/layout/main_pane_size/cmux_tui_binary/viewer/equalize_panes/agents); removed keys are
   rejected by the schema.
 - **Logger** (`src/utils/logger.ts`): plugin log sink for all diagnostics.
 - **OpenCode host**: TUI event bus (`api.event`), SDK client (`api.client`),
@@ -202,17 +205,18 @@ The server entry (`src/index.ts`) must not reach `src/multiplexer/client/*` or
 
 ```typescript
 interface MultiplexerConfig {
-  type: 'tmux' | 'zellij' | 'herdr' | 'cmux-tui' | 'kitty' | 'wezterm' | 'orca' | 'auto' | 'none';
+  type: 'tmux' | 'zellij' | 'herdr' | 'rex' | 'cmux-tui' | 'kitty' | 'wezterm' | 'orca' | 'auto' | 'none';
   layout: 'main-horizontal' | 'main-vertical' | 'tiled' | 'even-horizontal' | 'even-vertical';
-  main_pane_size?: number; // Percentage for main pane (20-80), tmux main-* and the first WezTerm main-* split
+  main_pane_size?: number; // 20-80; main-* sizing varies by adapter, Rex applies it to each parent split
   cmux_tui_binary?: string; // Explicit cmux-tui binary path
   viewer?: 'tui' | 'mini'; // Host default: v1 'tui', v2 'mini'; explicit wins
+  equalize_panes?: boolean; // Legacy Herdr only; no effect on Rex
   agents: string[]; // Which subagents get a pane ("*"/"!name" list; default ["*"])
 }
 ```
 
 `zellij_pane_mode` is removed; the loader strips it with a warning. Invalid
-`type`/`layout`/`main_pane_size`/`cmux_tui_binary`/`viewer`/`agents` values
+`type`/`layout`/`main_pane_size`/`cmux_tui_binary`/`viewer`/`equalize_panes`/`agents` values
 disable pane management with a once-per-process diagnostic. The `agents`
 filter is applied when a pane would be created, so an excluded subagent still
 runs as a normal child session; its pane is simply skipped (reason
@@ -221,14 +225,15 @@ runs as a normal child session; its pane is simply skipped (reason
 The host wiring resolves an omitted viewer. v1 mini uses `attach ... --dir
 <dir> --mini` (OpenCode >= 1.17.10), without extra pane-cwd pinning; v2 mini
 uses the `mini` subcommand without a positional directory, so adapters pin
-the cwd. Herdr, kitty, and WezTerm always set their native cwd flags; Orca
+the cwd. Herdr, Rex, kitty, and WezTerm always set their native cwd flags; Orca
 has no cwd flag (the split inherits the anchor's working directory).
 
 ### Environment Detection
 
 - **Auto / admission order**: cmux-tui (`CMUX_TUI_SOCKET` or legacy
   `CMUX_MUX_SOCKET`) → tmux (`TMUX_PANE`) → Zellij (`ZELLIJ_PANE_ID`) → Herdr
-  Desktop (`HC_TERMINAL_ID`) or legacy Herdr (`HERDR_PANE_ID`) → kitty (`KITTY_WINDOW_ID`) → WezTerm (`WEZTERM_PANE`,
+  Desktop (`HC_TERMINAL_ID`) or legacy Herdr (`HERDR_PANE_ID`) → Rex (both trimmed
+  `REX_SESSION` and `REX_BLOCK`) → kitty (`KITTY_WINDOW_ID`) → WezTerm (`WEZTERM_PANE`,
   so tmux/Zellij nested inside WezTerm win) → Orca (`ORCA_TERMINAL_HANDLE`,
   last).
 - **Explicit adapter**: only enabled when it matches the detected adapter;
@@ -280,6 +285,21 @@ has no cwd flag (the split inherits the anchor's working directory).
   `main-vertical` agent-area tracking.
 - `main-vertical` approximates a main/agent column: the first right-side pane
   becomes the agent area, later children stack down inside it.
+
+### Rex Implementation
+
+- Explicit session and block anchors are required; no focused-block fallback.
+- `rex split` uses `--session`, `--block`, `--focus=false`, `--cwd`,
+  `--label`, `--json`, `--split` and `--ratio`; CLI calls disable autostart
+  and set a 5 s timeout. The returned new block ID is the close handle.
+- `main-vertical`/`even-horizontal`/`tiled` → `right`;
+  `main-horizontal`/`even-vertical` → `below`. New-pane percentage is
+  `100 - main_pane_size` for `main-*`, otherwise `50`. Every child splits the
+  original parent; no agent-area tracking, rebalancing or FR-8 sweep.
+- Shared viewer helpers select v1/v2, TUI/mini and shared-service commands.
+  Windows and password-bearing v2-remote/v1 viewers fail closed before
+  mutation: Rex has no supported spawn-time credential injection.
+- Close addresses only the returned block in its original Rex session.
 
 ### Kitty Implementation
 
@@ -392,6 +412,7 @@ has no cwd flag (the split inherits the anchor's working directory).
 | `tmux/index.ts` | tmux-specific implementation |
 | `zellij/index.ts` | zellij-specific implementation |
 | `herdr/index.ts` | herdr-specific implementation |
+| `rex/index.ts` | Superlogical Rex scoped split/close adapter |
 | `herdr/layout-equalize.ts` | Herdr socket-backed agent-pane equalization |
 | `kitty/index.ts` | kitty-specific implementation |
 | `wezterm/index.ts` | WezTerm-specific implementation |

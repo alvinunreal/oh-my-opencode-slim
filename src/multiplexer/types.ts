@@ -2,7 +2,7 @@
  * Multiplexer abstraction layer
  *
  * Provides a unified interface for terminal multiplexers (tmux, zellij,
- * herdr, etc.) to spawn and manage panes for child agent sessions.
+ * herdr, Rex, etc.) to spawn and manage panes for child agent sessions.
  */
 
 import type { MultiplexerViewer } from '../config/schema';
@@ -49,13 +49,15 @@ export interface PaneSpawnOptions {
 /**
  * Core multiplexer interface
  * Implementations: TmuxMultiplexer, ZellijMultiplexer, HerdrMultiplexer,
- * CmuxMultiplexer, KittyMultiplexer, WeztermMultiplexer, OrcaMultiplexer
+ * RexMultiplexer, CmuxMultiplexer, KittyMultiplexer, WeztermMultiplexer,
+ * OrcaMultiplexer
  */
 export interface Multiplexer {
   readonly type:
     | 'tmux'
     | 'zellij'
     | 'herdr'
+    | 'rex'
     | 'cmux-tui'
     | 'kitty'
     | 'wezterm'
@@ -90,8 +92,9 @@ export interface Multiplexer {
    * Close a pane by its adapter-local opaque handle.
    *
    * The handle is only meaningful to the adapter that produced it: cmux
-   * returns a terminal id, tmux/zellij/herdr/kitty return their native pane
-   * id. Callers must pass it back unmodified and never interpret it.
+   * returns a terminal id, Rex returns its block id, and
+   * tmux/zellij/herdr/kitty return their native pane id. Callers must pass it
+   * back unmodified and never interpret it.
    * @param paneId - The adapter-local opaque handle returned by spawnPane
    * @returns true if successfully closed
    */
