@@ -24,8 +24,11 @@ export interface SessionPresetOutcome {
 
 /** Parsed `/preset` command input, shared by the TUI fast path and the
  * server command so both surfaces report identical usage errors.
- * Preset names never contain spaces (configuration schema), so more than
- * one non-flag token is a usage error. */
+ * Configured preset names may contain spaces (the schema accepts
+ * arbitrary keys, and the pre-flag command matched the whole argument),
+ * so callers pass the configured names: an exact match wins before
+ * token parsing, and otherwise more than one non-flag token is a usage
+ * error. */
 export type ParsedPresetCommandInput =
   | { kind: 'empty' }
   | { kind: 'apply'; presetName: string; forceOrchestrator: boolean }
@@ -36,9 +39,15 @@ export const FORCE_ORCHESTRATOR_SHORT_FLAG = '-f';
 
 export function parsePresetCommandInput(
   text: string,
+  availableNames?: readonly string[],
 ): ParsedPresetCommandInput {
-  const tokens = text.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return { kind: 'empty' };
+  const trimmed = text.trim();
+  if (!trimmed) return { kind: 'empty' };
+  // An exact configured name wins over flag tokenizing, so names with
+  // spaces keep working (`/preset code review`).
+  if (availableNames?.includes(trimmed))
+    return { kind: 'apply', presetName: trimmed, forceOrchestrator: false };
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
   const names: string[] = [];
   let forceOrchestrator = false;
   for (const token of tokens) {
@@ -56,11 +65,17 @@ export function parsePresetCommandInput(
       };
     names.push(token);
   }
-  if (names.length > 1)
+  if (names.length > 1) {
+    // The name tokens may still be one configured multi-word name
+    // alongside the flag (`/preset code review -f`).
+    const joined = names.join(' ');
+    if (availableNames?.includes(joined))
+      return { kind: 'apply', presetName: joined, forceOrchestrator };
     return {
       kind: 'usage-error',
       message: `Specify one preset name: /preset <name> [${FORCE_ORCHESTRATOR_FLAG} | ${FORCE_ORCHESTRATOR_SHORT_FLAG}].`,
     };
+  }
   if (names.length === 0)
     return {
       kind: 'usage-error',

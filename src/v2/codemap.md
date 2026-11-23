@@ -129,9 +129,10 @@ scope and persistence semantics.
 command rejection (no non-turn result channel). The TUI `/preset` paths use
 the same apply helper via RPC or write the global default and request refresh.
 `--force-orchestrator` (ADR-005) extends the same apply: on a root session it
-switches the live model via `session.switchModel`, stores a `rootForce`
-record consumed by a later native pick, and shapes the root request options
-in the context handler while active.
+switches the live model via `session.switchModel` — only when the preset's
+own orchestrator entry defines a model; merged root-level/host settings
+never qualify — stores a `rootForce` record consumed by a later native pick,
+and shapes the root request options in the context handler while active.
 `disabled_commands: ["preset"]` removes UI/command/RPC entry points, not internal
 admission. TUI commands use the host keymap provider and dialogs;
 `question-timeout-tui.ts` handles eligible forms only in an attached Slim TUI.

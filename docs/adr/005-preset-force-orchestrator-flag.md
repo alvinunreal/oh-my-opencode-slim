@@ -42,7 +42,9 @@ Semantic decisions carried with it:
 3. Root sessions only: invoked in a child session, the flag reports
    "not a root session" and applies nothing.
 4. A preset without an `orchestrator` entry is not an error: team binding
-   applies, and the notice says the main model is unchanged.
+   applies, and the notice says the main model is unchanged. The gate is the
+   preset's own resolved entry — orchestrator settings merged in from
+   root-level config or the host never trigger a force.
 
 ## Consequences
 

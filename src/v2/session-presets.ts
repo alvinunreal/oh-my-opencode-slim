@@ -202,6 +202,18 @@ function sameModelRef(
   return a.providerID === b.providerID && a.id === b.id;
 }
 
+/** Exact model comparison for rollback: provider, id and variant must all
+ * match. A variant-only switch is still a change to undo, unlike the
+ * consumption comparison above (a native variant pick keeps the force). */
+function identicalModelRef(
+  a: { providerID: string; id: string; variant?: string },
+  b: { providerID: string; id: string; variant?: string },
+): boolean {
+  return (
+    a.providerID === b.providerID && a.id === b.id && a.variant === b.variant
+  );
+}
+
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     for (const child of Object.values(value)) freeze(child);
@@ -220,6 +232,11 @@ export function createSessionPresets(options: {
   /** True while `current` is not a valid live config (fallback or failed refresh); roots keep their snapshot. */
   currentIsFallback?: () => boolean;
   named: (name: string) => Promise<SessionTeamBundle>;
+  /** True when the preset's own resolved definition sets an orchestrator
+   * model. Gates --force-orchestrator: the merged orchestrator profile
+   * also carries root-level and host settings, which are never a force
+   * target (ADR-005 decision 4). */
+  presetOwnOrchestratorModel?: (name: string) => Promise<boolean>;
 }) {
   const cache = new Map<string, SessionPresetRecord>();
   const pending = new Map<string, Promise<unknown>>();
@@ -687,11 +704,24 @@ export function createSessionPresets(options: {
           throw new Error(
             'The host does not support switching the session model, so --force-orchestrator is unavailable. Run /preset <name> without the flag to bind the team. Nothing was applied.',
           );
+        if (force && !options.presetOwnOrchestratorModel)
+          throw new Error(
+            'The preset orchestrator entry is not readable, so --force-orchestrator is unavailable. Run /preset <name> without the flag to bind the team. Nothing was applied.',
+          );
         const bundle = await options.named(name);
         // A root apply replaces the whole binding: a previous forced root
         // model never survives a reapply (ADR-005); a forced apply
-        // re-captures it below from the fresh bundle.
-        const rootProfile = force ? bundle.profiles.orchestrator : undefined;
+        // re-captures it below from the fresh bundle. The force target is
+        // gated on the preset's own orchestrator model: the merged
+        // orchestrator profile also carries root-level and host settings,
+        // so a team-only preset never switches the root model.
+        const ownOrchestratorModel = force
+          ? await options.presetOwnOrchestratorModel?.(name)
+          : undefined;
+        const rootProfile =
+          force && ownOrchestratorModel
+            ? bundle.profiles.orchestrator
+            : undefined;
         const rootForce: SessionRootForce | undefined = rootProfile?.model
           ? {
               model: rootProfile.model,
@@ -753,32 +783,36 @@ export function createSessionPresets(options: {
           }
         }
         let record: SessionPresetRecord;
+        const attempt: SessionPresetRecord = {
+          schemaVersion: 1,
+          ...(previous?.preserveModel ? { preserveModel: true } : {}),
+          ...(previous?.explicitModel !== undefined
+            ? { explicitModel: previous.explicitModel }
+            : {}),
+          ...(previous?.inheritedProviderID
+            ? { inheritedProviderID: previous.inheritedProviderID }
+            : {}),
+          ...(parentID && previous
+            ? { parentID, execution: previous.execution ?? previous.bundle }
+            : {}),
+          bundle,
+          selection: 'explicit',
+          ...(rootForce ? { rootForce } : {}),
+        };
         try {
-          record = await write(
-            id,
-            {
-              schemaVersion: 1,
-              ...(previous?.preserveModel ? { preserveModel: true } : {}),
-              ...(previous?.explicitModel !== undefined
-                ? { explicitModel: previous.explicitModel }
-                : {}),
-              ...(previous?.inheritedProviderID
-                ? { inheritedProviderID: previous.inheritedProviderID }
-                : {}),
-              ...(parentID && previous
-                ? { parentID, execution: previous.execution ?? previous.bundle }
-                : {}),
-              bundle,
-              selection: 'explicit',
-              ...(rootForce ? { rootForce } : {}),
-            },
-            signal,
-          );
+          record = await write(id, attempt, signal);
         } catch (err) {
-          if (rootForce && switchModel) {
+          // A save that already committed — a cancellation that landed
+          // after the KV write throws here — is not a failed save: the
+          // stored record matches the switched model, so roll back only
+          // when nothing was committed.
+          const committed = isDeepStrictEqual(cache.get(id), attempt);
+          if (rootForce && switchModel && !committed) {
             const live = liveModelRef(info);
             const restore =
-              live && !sameModelRef(live, rootForce.model) ? live : undefined;
+              live && !identicalModelRef(live, rootForce.model)
+                ? live
+                : undefined;
             if (restore) {
               try {
                 await switchModel.call(session, {

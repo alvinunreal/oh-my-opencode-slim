@@ -355,6 +355,30 @@ describe('v2 tui preset plugin', () => {
       expect(stub.toasts[0]).toContain('Specify a preset name');
     });
 
+    test('a configured multi-word preset name applies through the RPC', async () => {
+      writeUserConfig({
+        presets: {
+          'code review': { orchestrator: { model: 'openai/gpt-5-mini' } },
+        },
+      });
+      const stub = makeStubCtx();
+      const { applies } = attachSessionRpc(stub);
+
+      await runPresetFlow(stub.ctx, 'code review');
+
+      expect(stub.selectCalls).toHaveLength(0);
+      expect(applies).toEqual([
+        {
+          input: { sessionID: 'visible-root', presetName: 'code review' },
+          options: { location: { directory: projectDir } },
+        },
+      ]);
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toBe(
+        'Applied preset "code review" to this session\'s team.',
+      );
+    });
+
     test('an unknown named preset binds nothing and lists the options', async () => {
       writeUserConfig({
         presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },

@@ -20,6 +20,7 @@ import {
   buildBundledSkillInfos,
   removeLegacySkillSyncState,
 } from '../cli/custom-skills';
+import { resolvePreset } from '../config';
 import { BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
 import {
@@ -30,6 +31,7 @@ import {
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
+import { lookupWithAliases } from '../config/utils';
 import { getBuildInfo } from '../generated/build-info';
 import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/runtime-package';
 import {
@@ -58,6 +60,7 @@ import {
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
 import { skillIdsFromResponse } from '../marketplace/skills';
 import type { McpConfig } from '../mcp/types';
+import { getAllConfiguredPresets } from '../tools/preset-switch';
 import {
   collectAgentDisplayNames,
   recordTuiAgentDisplayNames,
@@ -2926,6 +2929,23 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 result.profiles,
               ),
             };
+          },
+          // ADR-005 gate: --force-orchestrator switches the root model only
+          // when the preset's own resolved definition sets an orchestrator
+          // model. The merged orchestrator profile also carries root-level
+          // and host settings, which are never a force target.
+          presetOwnOrchestratorModel: async (presetName) => {
+            try {
+              const agents = resolvePreset(
+                presetName,
+                getAllConfiguredPresets(directory, 'v2'),
+              );
+              return Boolean(lookupWithAliases(agents, 'orchestrator')?.model);
+            } catch {
+              // A missing or broken preset chain reports no own model;
+              // the named-bundle resolution surfaces the real error.
+              return false;
+            }
           },
         });
         sessionPresets = presets;

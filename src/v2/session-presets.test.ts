@@ -32,6 +32,7 @@ function makeHarness(options?: {
     sessionID: string;
     model: { id: string; providerID: string; variant?: string };
   }) => Promise<unknown>;
+  presetOwnOrchestratorModel?: (name: string) => Promise<boolean>;
 }) {
   const storage = new Map<string, unknown>();
   const getCalls: Array<unknown> = [];
@@ -71,6 +72,11 @@ function makeHarness(options?: {
     current: options?.current ?? (() => BUNDLE),
     currentIsFallback: options?.currentIsFallback,
     named: options?.named ?? (async () => BUNDLE),
+    ...(options?.presetOwnOrchestratorModel
+      ? {
+          presetOwnOrchestratorModel: options.presetOwnOrchestratorModel,
+        }
+      : {}),
   });
   return {
     presets,
@@ -654,6 +660,7 @@ describe('apply --force-orchestrator (ADR-005)', () => {
     const switches: Array<unknown> = [];
     const h = makeHarness({
       named: async () => FORCE_BUNDLE,
+      presetOwnOrchestratorModel: async () => true,
       switchModel: async (input) => {
         switches.push(input);
       },
@@ -737,6 +744,7 @@ describe('apply --force-orchestrator (ADR-005)', () => {
   test('a host refusal of the model switch applies nothing', async () => {
     const h = makeHarness({
       named: async () => FORCE_BUNDLE,
+      presetOwnOrchestratorModel: async () => true,
       switchModel: async () => {
         throw new Error('model not in catalog');
       },
@@ -755,6 +763,7 @@ describe('apply --force-orchestrator (ADR-005)', () => {
     const switches: Array<unknown> = [];
     const h = makeHarness({
       named: async () => BUNDLE,
+      presetOwnOrchestratorModel: async () => false,
       switchModel: async (input) => {
         switches.push(input);
       },
@@ -777,6 +786,7 @@ describe('apply --force-orchestrator (ADR-005)', () => {
     const switches: Array<unknown> = [];
     const h = makeHarness({
       named: async () => FORCE_BUNDLE,
+      presetOwnOrchestratorModel: async () => true,
       switchModel: async (input) => {
         switches.push(input);
       },
@@ -805,6 +815,7 @@ describe('apply --force-orchestrator (ADR-005)', () => {
   test('a native pick consumes the forced root model at the next admission', async () => {
     const h = makeHarness({
       named: async () => FORCE_BUNDLE,
+      presetOwnOrchestratorModel: async () => true,
       switchModel: async () => {},
     });
     h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5' }));
@@ -838,6 +849,7 @@ describe('apply --force-orchestrator (ADR-005)', () => {
   test('a plain root reapply drops a previous force', async () => {
     const h = makeHarness({
       named: async () => FORCE_BUNDLE,
+      presetOwnOrchestratorModel: async () => true,
       switchModel: async () => {},
     });
     h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5' }));
@@ -852,5 +864,127 @@ describe('apply --force-orchestrator (ADR-005)', () => {
       rootForce?: unknown;
     };
     expect(stored.rootForce).toBeUndefined();
+  });
+
+  test('a commit failure restores the pre-switch variant on the same model', async () => {
+    const switches: Array<unknown> = [];
+    const h = makeHarness({
+      named: async () => ({
+        ...FORCE_BUNDLE,
+        profiles: {
+          ...FORCE_BUNDLE.profiles,
+          orchestrator: {
+            ...FORCE_BUNDLE.profiles.orchestrator,
+            model: { providerID: 'openai', id: 'gpt-5', variant: 'preview' },
+          },
+        },
+      }),
+      presetOwnOrchestratorModel: async () => true,
+      switchModel: async (input) => {
+        switches.push(input);
+      },
+    });
+    h.setGetResponse(
+      rootInfo({ providerID: 'openai', id: 'gpt-5', variant: 'stable' }),
+    );
+    const set = h.backend.set;
+    h.backend.set = async (key: string, value: unknown) => {
+      if (key === storageKey('root-9')) throw new Error('kv unavailable');
+      await set(key, value);
+    };
+
+    await expect(
+      h.presets.apply('root-9', 'powerful', undefined, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('kv unavailable');
+    // Same provider and id, different variant: the rollback must still
+    // restore the pre-switch variant, not just a different model.
+    expect(switches).toEqual([
+      {
+        sessionID: 'root-9',
+        model: { providerID: 'openai', id: 'gpt-5', variant: 'preview' },
+      },
+      {
+        sessionID: 'root-9',
+        model: { providerID: 'openai', id: 'gpt-5', variant: 'stable' },
+      },
+    ]);
+  });
+
+  test('cancellation after the save commits keeps the switched model', async () => {
+    const controller = new AbortController();
+    const switches: Array<unknown> = [];
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      presetOwnOrchestratorModel: async () => true,
+      switchModel: async (input) => {
+        switches.push(input);
+      },
+    });
+    h.setGetResponse(rootInfo({ providerID: 'openai', id: 'gpt-5' }));
+    const set = h.backend.set;
+    h.backend.set = async (key: string, value: unknown) => {
+      await set(key, value);
+      if (key === storageKey('root-9'))
+        controller.abort(new Error('client went away'));
+    };
+
+    await expect(
+      h.presets.apply('root-9', 'powerful', controller.signal, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('client went away');
+    // The KV commit already happened when cancellation landed: the stored
+    // binding matches the switched model, so no rollback runs.
+    expect(switches).toEqual([
+      {
+        sessionID: 'root-9',
+        model: { providerID: 'anthropic', id: 'claude-opus-4-6' },
+      },
+    ]);
+    expect(h.storage.has(storageKey('root-9'))).toBe(true);
+  });
+
+  test('a team-only preset with a merged orchestrator model never switches the root', async () => {
+    const switches: Array<unknown> = [];
+    const h = makeHarness({
+      // The merged bundle carries a root-config orchestrator model even
+      // though the preset itself defines none.
+      named: async (name) => ({ ...FORCE_BUNDLE, presetName: name }),
+      presetOwnOrchestratorModel: async () => false,
+      switchModel: async (input) => {
+        switches.push(input);
+      },
+    });
+    h.setGetResponse(rootInfo());
+
+    const state = await h.presets.apply('root-9', 'team-only', undefined, {
+      forceOrchestrator: true,
+    });
+
+    expect(switches).toEqual([]);
+    expect(state.rootForce).toEqual({ outcome: 'no-orchestrator-model' });
+    expect(state.status).toBe('bound');
+    expect(state.presetName).toBe('team-only');
+    const stored = h.storage.get(storageKey('root-9')) as {
+      rootForce?: unknown;
+    };
+    expect(stored.rootForce).toBeUndefined();
+  });
+
+  test('a missing own-orchestrator reader rejects the flag before any write', async () => {
+    const h = makeHarness({
+      named: async () => FORCE_BUNDLE,
+      switchModel: async () => {},
+    });
+    h.setGetResponse(rootInfo());
+
+    await expect(
+      h.presets.apply('root-9', 'powerful', undefined, {
+        forceOrchestrator: true,
+      }),
+    ).rejects.toThrow('preset orchestrator entry is not readable');
+    expect(h.storage.has(storageKey('root-9'))).toBe(false);
   });
 });

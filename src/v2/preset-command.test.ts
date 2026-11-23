@@ -449,6 +449,23 @@ describe('createPresetCommand', () => {
     ).rejects.toThrow('Specify a preset name');
     expect(calls).toEqual([]);
   });
+
+  test('a configured multi-word preset name still applies', async () => {
+    writeUserConfig({
+      presets: { 'code review': { fixer: { model: 'test/deep' } } },
+    });
+    const { calls, applyToSession } = recorder();
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: 'code review' },
+      }),
+    ).rejects.toThrow('Applied preset "code review" to this session\'s team.');
+    expect(calls).toEqual([
+      { sessionID: 'ses_preset', presetName: 'code review' },
+    ]);
+  });
 });
 
 describe('parsePresetCommandInput', () => {
@@ -507,5 +524,38 @@ describe('parsePresetCommandInput', () => {
 
   test('two names are a usage error', () => {
     expect(parsePresetCommandInput('cheap fast').kind).toBe('usage-error');
+  });
+
+  test('an exact configured multi-word name wins over token parsing', () => {
+    expect(
+      parsePresetCommandInput('code review', ['code review', 'cheap']),
+    ).toEqual({
+      kind: 'apply',
+      presetName: 'code review',
+      forceOrchestrator: false,
+    });
+  });
+
+  test('a multi-word name with the force flag still applies', () => {
+    expect(parsePresetCommandInput('code review -f', ['code review'])).toEqual({
+      kind: 'apply',
+      presetName: 'code review',
+      forceOrchestrator: true,
+    });
+    expect(
+      parsePresetCommandInput('--force-orchestrator code review', [
+        'code review',
+      ]),
+    ).toEqual({
+      kind: 'apply',
+      presetName: 'code review',
+      forceOrchestrator: true,
+    });
+  });
+
+  test('unconfigured multi-token input stays a usage error', () => {
+    expect(parsePresetCommandInput('cheap fast', ['cheap', 'fast']).kind).toBe(
+      'usage-error',
+    );
   });
 });

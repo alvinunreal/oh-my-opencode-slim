@@ -28,7 +28,8 @@ the built-in `/models`, so it triggers no LLM turn.
 > only: a child session
 > reports an error and applies nothing, as does a host without
 > `session.switchModel` support. A preset without an `orchestrator.model`
-> entry still binds the team and reports that the main model is unchanged.
+> entry of its own — root-level or host-merged orchestrator settings never
+> count — still binds the team and reports that the main model is unchanged.
 > The flag is all-or-nothing with the team binding: if the model switch
 > fails, nothing is applied. A later native model pick overrides the forced
 > model permanently, and a plain `/preset <name>` reapply drops the forced

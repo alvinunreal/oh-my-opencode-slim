@@ -45,6 +45,7 @@ import { registerQuestionTimeout } from './question-timeout-tui';
 import {
   bindSessionPreset,
   parsePresetCommandInput,
+  readAvailablePresets,
 } from './session-preset-apply';
 import { registerUpdateNotice } from './update-notice';
 
@@ -138,7 +139,10 @@ export async function runPresetFlow(
     }
   };
   try {
-    const parsed = parsePresetCommandInput(presetArg ?? '');
+    const parsed = parsePresetCommandInput(
+      presetArg ?? '',
+      readAvailablePresets(directory).names,
+    );
     if (parsed.kind === 'usage-error') {
       toast(parsed.message);
       return;

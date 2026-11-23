@@ -16,6 +16,7 @@ import { getPresetSelectionState } from '../tools/preset-switch';
 import {
   bindSessionPreset,
   parsePresetCommandInput,
+  readAvailablePresets,
 } from './session-preset-apply';
 import type { SessionPresetState } from './session-presets';
 import type { V2CommandDefinition } from './types';
@@ -150,7 +151,10 @@ export function createPresetCommand(
     name: PRESET_COMMAND_NAME,
     description: PRESET_COMMAND_DESCRIPTION,
     execute: async (input) => {
-      const parsed = parsePresetCommandInput(input?.prompt?.text ?? '');
+      const parsed = parsePresetCommandInput(
+        input?.prompt?.text ?? '',
+        readAvailablePresets(options.directory).names,
+      );
       if (parsed.kind === 'usage-error') throw new Error(parsed.message);
       throw new Error(
         parsed.kind === 'apply'
