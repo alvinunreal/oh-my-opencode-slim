@@ -4,7 +4,7 @@
 
 Centralized tool factory and registry for the OpenCode plugin system. This directory defines all executable tools exposed to OpenCode agents, including:
 
-- **Task lifecycle tools**: Background task communication, cancellation, status (with live-status policy), results, revival, and HITL continuation control
+- **Task lifecycle tools**: Thin host-read controls (`task_status`, `task_cancel`, `task_reply`) and child progress reports (`task_report`); OpenCode owns child execution, completion delivery, and resume
 - **Code intelligence tools**: AST-grep pattern matching and transformation across languages
 - **Web capabilities**: Smart web fetching with caching and content extraction
 - **ACP integration**: External agent protocol execution
@@ -139,7 +139,6 @@ outcome is `interrupted`; no parent-agent pin or V1 prompt conversion is used.
 | Dependency | Purpose |
 |------------|---------|
 | `@opencode-ai/plugin` | Tool schema and execution framework |
-| `BackgroundJobBoard` (`src/utils/`) | Background task tracking and cleanup |
 | `Session Runtime Status` (`src/utils/session-runtime-status.ts`) | Bounded live session-status reads for `task_status` |
 | `Config System` (`src/config/`) | ACP agent configurations and presets |
 | `TUI State` (`src/tui-state.ts`) | Preset visualization in terminal UI |
@@ -150,10 +149,9 @@ outcome is `interrupted`; no parent-agent pin or V1 prompt conversion is used.
 
 ```
 Tools Layer → Background Layer
-├─ task_cancel → BackgroundJobBoard.resolve() → abortSessionWithTimeout()
-├─ task_revive → BackgroundJobBoard.resolve() → retained-session relaunch
-├─ task_status → BackgroundJobBoard.resolve() → live session-status snapshot
-└─> Returns lifecycle, transport, or status report
+├─ task_cancel → bounded session.get ownership check → session.abort
+├─ task_status → bounded session.get ownership check → live session-status snapshot
+└─> Returns lifecycle, transport, or status report (no board, ledger, or lease)
 
 Tools Layer → Config Layer
 ├─ acp_run tool → AcpAgentsConfig from config system
@@ -176,7 +174,7 @@ Tools Layer → Web Layer
 
 ### Error Handling & Recovery
 
-- **Session Aborts**: `cancel-task.ts` implements robust abort verification with polling and cleanup
+- **Session Aborts**: `task_cancel` in `native-task-control.ts` bounds the abort round-trip with `SESSION_ABORT_TIMEOUT_MS` and reports the host's interruption outcome
 - **Timeouts**: All network and process operations enforce configurable timeouts
 - **Permission Denials**: Tools gracefully handle user rejection via `ctx.ask()`
 - **Binary Availability**: `ast-grep/` tools auto-download CLI on first use
