@@ -2013,7 +2013,8 @@ describe('v2 tui preset plugin', () => {
           { id: 'outside-sidebar', mode: 'subagent' },
           { id: 'explorer', color: '#cc3388' },
           { id: 'fixer' },
-          { id: 'oracle' },
+          { id: 'Oracle' },
+          { id: 'oracle', hidden: true, color: '#ffaa00' },
         ]);
         const defaultLocation = {
           directory: projectDir,
@@ -2087,7 +2088,11 @@ describe('v2 tui preset plugin', () => {
           await screen.renderOnce();
           expect(style('Oracle')).toEqual(changed.toInts());
 
-          setAgents([{ id: 'oracle', color: '#2f9852' }, { id: 'explorer' }]);
+          setAgents([
+            { id: 'Oracle', color: '#2f9852' },
+            { id: 'oracle', hidden: true, color: '#ffaa00' },
+            { id: 'explorer' },
+          ]);
           await screen.renderOnce();
           expect(style('Oracle')).toEqual(RGBA.fromHex('#2f9852').toInts());
           expect(style('explorer')).toEqual(changed.toInts());

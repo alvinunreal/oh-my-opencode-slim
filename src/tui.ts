@@ -1924,14 +1924,14 @@ export function renderSidebar(
               !expanded && mergedTargets.length === 1 && sessions.length === 1
                 ? sidebarSiblingAnnotation(sessions[0])
                 : undefined;
+            // OpenCode registers display names as visible IDs. Only the
+            // native color lookup uses that ID; sidebar state stays canonical.
+            const displayName = snapshot.agentDisplayNames?.[agentName];
             const rowOptions: AgentRowOptions = {
-              // Label only: every lookup below stays keyed by the canonical
-              // agent ID so models, activity, expansion and history keep
-              // resolving.
-              label: snapshot.agentDisplayNames?.[agentName] || agentName,
+              label: displayName || agentName,
               color: theme.resolveAgentColor
                 ? theme.resolveAgentColor(
-                    agentName,
+                    displayName || agentName,
                     snapshot.agentColors?.[agentName],
                   )
                 : agentColor(snapshot.agentColors?.[agentName], theme),

@@ -255,8 +255,9 @@ TUI history, models and click targets stay keyed by canonical identity. Aliases
 and configured colors are frozen until reload. Councillor color overrides
 Council color for seats.
 
-On OpenCode v2, the sidebar uses the host agent's explicit `#RRGGBB` color or
-the host's categorical palette in its default TUI design. Use a hex value to
+On OpenCode v2, the sidebar uses the visible agent's explicit `#RRGGBB` color
+or the host's categorical palette in its default TUI design. An agent with
+`displayName` uses the color of that visible host entry. Use a hex value to
 set an explicit color in both places; v2 does not accept agent color tokens
 such as `info` or `primary`. The v2 plugin API does not expose the legacy design
 setting (`experimental.new-designs: false`), so automatic shades may differ
