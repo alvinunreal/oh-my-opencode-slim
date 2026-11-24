@@ -252,8 +252,15 @@ Aliases are normalized by trimming whitespace and an optional `@`. They must be
 unique and cannot collide with canonical agent names. Mentions in the final
 Orchestrator prompt and custom routing snippets use the configured display name;
 TUI history, models and click targets stay keyed by canonical identity. Aliases
-and colors are frozen until reload. Unconfigured colors use the host palette;
-Councillor color overrides Council color for seats.
+and configured colors are frozen until reload. Councillor color overrides
+Council color for seats.
+
+On OpenCode v2, the sidebar uses the host agent's explicit `#RRGGBB` color or
+the host's categorical palette in its default TUI design. Use a hex value to
+set an explicit color in both places; v2 does not accept agent color tokens
+such as `info` or `primary`. The v2 plugin API does not expose the legacy design
+setting (`experimental.new-designs: false`), so automatic shades may differ
+from native colors in that mode.
 
 ## Prompt Overriding
 

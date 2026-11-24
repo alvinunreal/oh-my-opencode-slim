@@ -652,7 +652,7 @@ describe('v2 tui preset plugin', () => {
               100: '#001100',
               200: '#002200',
               300: '#003300',
-              400: '#004400',
+              400: RGBA.fromHex('#004400'),
               500: RGBA.fromInts(210, 80, 90),
               600: '#006600',
               700: '#007700',
@@ -663,7 +663,7 @@ describe('v2 tui preset plugin', () => {
               100: '#110000',
               200: '#220000',
               300: '#330000',
-              400: '#440000',
+              400: RGBA.fromHex('#440000'),
               500: RGBA.fromInts(80, 170, 100),
               600: '#660000',
               700: '#770000',
@@ -1916,7 +1916,7 @@ describe('v2 tui preset plugin', () => {
       expect(cleanup).toBeUndefined();
     });
 
-    test('renders only configured agent colors and the brand in the interactive hue', async () => {
+    test('falls back to configured hex without a roster and keeps the interactive brand hue', async () => {
       const stub = makeSetupCtx();
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       recordTuiSessionParent('oracle-live', 'root', projectDir);
@@ -1985,8 +1985,7 @@ describe('v2 tui preset plugin', () => {
         expect(brand).toBeDefined();
         expect(activeIndicator).toBeDefined();
         expect(mutedText).toBeDefined();
-        // Unconfigured agents stay muted even though the host ships a
-        // categorical palette; a configured color tints label and model.
+        // Without a roster, only configured hex colors tint agent rows.
         expect(namedAgent?.fg).toEqual(mutedText?.fg);
         expect(model?.fg).toEqual(mutedText?.fg);
         expect(secondAgent?.fg.r).toBeCloseTo(1);
@@ -2001,81 +2000,116 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
-    test('resolves documented theme-token agent colors on v2 hosts', async () => {
-      const stub = makeSetupCtx();
-      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
-      recordTuiSessionParent('oracle-live', 'root', projectDir);
-      recordTuiAgentActivity(
-        {
-          sessionID: 'oracle-live',
-          agentName: 'oracle',
-          active: true,
-          details: { status: 'busy' },
-        },
-        projectDir,
-      );
-      recordTuiAgentModels(
-        {
-          agentModels: {
-            oracle: 'openai/gpt-5-mini',
-            explorer: 'anthropic/claude-haiku',
-            fixer: 'anthropic/claude-sonnet',
-            designer: 'anthropic/claude-opus',
-          },
-          agentDisplayNames: { oracle: 'Oracle' },
-          agentColors: {
-            oracle: 'info',
-            explorer: 'error',
-            fixer: 'primary',
-            designer: 'secondary',
-          },
-        },
-        projectDir,
-      );
-      let cleanup: (() => void) | undefined;
-      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
-      try {
-        cleanup = (await tui2Plugin.setup(
-          stub.ctx as unknown as V2TuiPluginContext,
-        )) as (() => void) | undefined;
-        (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
-          () => ({ type: 'session', sessionID: 'root' });
-        const sidebarSlot = stub.slotClaims.find(
-          (slot) => slot.append === 'sidebar.content',
-        );
-        expect(sidebarSlot).toBeDefined();
-        screen = await testRender(() => sidebarSlot?.render?.() as never, {
-          width: 160,
-          height: 24,
+    test.each([true, false])(
+      'uses live host agent colors with compactSidebar=%s',
+      async (compactSidebar) => {
+        const stub = makeSetupCtx();
+        writeUserConfig({ ...makeConfig(), compactSidebar });
+        const [agents, setAgents] = createSignal<
+          | { id: string; mode?: string; hidden?: boolean; color?: string }[]
+          | undefined
+        >([
+          { id: 'designer', hidden: true, color: '#ffaa00' },
+          { id: 'outside-sidebar', mode: 'subagent' },
+          { id: 'explorer', color: '#cc3388' },
+          { id: 'fixer' },
+          { id: 'oracle' },
+        ]);
+        const defaultLocation = {
+          directory: projectDir,
+          workspaceID: 'default',
+        };
+        const location = jest.fn(() => defaultLocation);
+        const list = jest.fn((_location: unknown) => agents());
+        const first = RGBA.fromHex('#b63355');
+        const second = RGBA.fromHex('#3399cc');
+        const changed = RGBA.fromHex('#5669aa');
+        const [palette, setPalette] = createSignal<
+          readonly { 400: RGBA }[] | undefined
+        >([{ 400: first }, { 400: RGBA.fromHex('#b63355') }, { 400: second }]);
+        stub.ctx.data = { location: { default: location, agent: { list } } };
+        const baseTheme = stub.ctx.theme as object;
+        Object.defineProperty(stub.ctx, 'theme', {
+          get: () => ({ ...baseTheme, categorical: palette() }),
         });
-        await screen.renderOnce();
+        recordTuiAgentModels(
+          {
+            agentModels: {
+              oracle: 'openai/gpt-5-mini',
+              explorer: 'anthropic/claude-haiku',
+              fixer: 'anthropic/claude-sonnet',
+              designer: 'anthropic/claude-opus',
+            },
+            agentDisplayNames: { oracle: 'Oracle' },
+            agentColors: {
+              oracle: 'info',
+              explorer: '#ff0000',
+            },
+          },
+          projectDir,
+        );
+        let cleanup: (() => void) | undefined;
+        let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+        try {
+          cleanup = (await tui2Plugin.setup(
+            stub.ctx as unknown as V2TuiPluginContext,
+          )) as (() => void) | undefined;
+          (
+            stub.ctx.ui as { router: { current: () => unknown } }
+          ).router.current = () => ({ type: 'session', sessionID: 'root' });
+          const sidebarSlot = stub.slotClaims.find(
+            (slot) => slot.append === 'sidebar.content',
+          );
+          expect(sidebarSlot).toBeDefined();
+          screen = await testRender(() => sidebarSlot?.render?.() as never, {
+            width: 160,
+            height: 40,
+          });
+          await screen.renderOnce();
 
-        const spans = screen.captureSpans().lines.flatMap((line) => line.spans);
-        const style = (needle: string) =>
-          spans.find((span) => span.text.includes(needle))?.fg;
-        // `primary`/`secondary` resolve from text.action and `info`/`error`
-        // from text.feedback instead of falling back to muted text.
-        expect(style('Oracle')).toEqual(
-          expect.objectContaining({
-            r: 14 / 255,
-            g: 165 / 255,
-            b: 233 / 255,
-          }),
-        );
-        expect(style('explorer')).toEqual(
-          expect.objectContaining({ r: 225 / 255, g: 29 / 255, b: 72 / 255 }),
-        );
-        expect(style('fixer')).toEqual(
-          expect.objectContaining({ r: 10 / 255, g: 20 / 255, b: 30 / 255 }),
-        );
-        expect(style('designer')).toEqual(
-          expect.objectContaining({ r: 40 / 255, g: 50 / 255, b: 60 / 255 }),
-        );
-      } finally {
-        cleanup?.();
-        screen?.renderer.destroy();
-      }
-    });
+          const style = (needle: string) =>
+            screen
+              ?.captureSpans()
+              .lines.flatMap((line) => line.spans)
+              .find((span) => span.text.includes(needle))
+              ?.fg.toInts();
+          expect(style('Oracle')).toEqual(second.toInts());
+          expect(list).toHaveBeenCalledWith(stub.ctx.location);
+          expect(style('gpt-5-mini')).toEqual(second.toInts());
+          expect(style('explorer')).toEqual(RGBA.fromHex('#cc3388').toInts());
+          expect(style('claude-haiku')).toEqual(
+            RGBA.fromHex('#cc3388').toInts(),
+          );
+          expect(style('fixer')).toEqual(first.toInts());
+          expect(style('designer')).toEqual(first.toInts());
+
+          setPalette([{ 400: first }, { 400: changed }]);
+          await screen.renderOnce();
+          expect(style('Oracle')).toEqual(changed.toInts());
+
+          setAgents([{ id: 'oracle', color: '#2f9852' }, { id: 'explorer' }]);
+          await screen.renderOnce();
+          expect(style('Oracle')).toEqual(RGBA.fromHex('#2f9852').toInts());
+          expect(style('explorer')).toEqual(changed.toInts());
+
+          setPalette(undefined);
+          await screen.renderOnce();
+          expect(style('Oracle')).toEqual(RGBA.fromHex('#2f9852').toInts());
+          expect(style('fixer')).toEqual(RGBA.fromHex('#8a8a8a').toInts());
+
+          delete stub.ctx.location;
+          setAgents(undefined);
+          await screen.renderOnce();
+          expect(location).toHaveBeenCalled();
+          expect(list).toHaveBeenCalledWith(defaultLocation);
+          expect(style('Oracle')).toEqual(RGBA.fromHex('#8a8a8a').toInts());
+          expect(style('explorer')).toEqual(RGBA.fromHex('#ff0000').toInts());
+        } finally {
+          cleanup?.();
+          screen?.renderer.destroy();
+        }
+      },
+    );
 
     test('sidebar subagent rows render session titles from the host session store', async () => {
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
