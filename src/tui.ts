@@ -1347,8 +1347,7 @@ function statusDot(
 
 interface AgentRowOptions {
   label: string;
-  /** Configured agent color (`agents.<name>.color`); unset = muted. */
-  color?: string;
+  color: unknown;
   model: string;
   modelName?: string;
   variant?: string;
@@ -1379,7 +1378,7 @@ function agentHeaderCells({
     statusDot(active, hasHistory, now, theme),
     text(
       {
-        fg: agentColor(color, theme),
+        fg: color,
         wrapMode: 'none',
         truncate: true,
         flexShrink: 1,
@@ -1440,9 +1439,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
   if (modelParts.provider) {
     detailRows.push(detailRow('provider', modelParts.provider));
   }
-  detailRows.push(
-    detailRow('model', modelParts.model, agentColor(options.color, theme)),
-  );
+  detailRows.push(detailRow('model', modelParts.model, options.color));
   if (modelName && modelName !== modelParts.model) {
     detailRows.push(detailRow('name', modelName));
   }
@@ -1476,7 +1473,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
 }
 
 function compactAgentRow(options: AgentRowOptions): JSX.Element {
-  const { model, modelName, theme, onClick, hoverBackground, hasSelectedText } =
+  const { model, modelName, onClick, hoverBackground, hasSelectedText } =
     options;
   const displayedModel = modelName ?? splitSidebarModelId(model).model;
   const row = box(
@@ -1499,7 +1496,7 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
       box({ flexDirection: 'row', flexGrow: 1, shouldFill: false }),
       text(
         {
-          fg: agentColor(options.color, theme),
+          fg: options.color,
           wrapMode: 'none',
           truncate: true,
           flexShrink: 1,
@@ -1769,6 +1766,7 @@ export function renderSidebar(
     secondary?: unknown;
     error?: unknown;
     info?: unknown;
+    resolveAgentColor?: (id: string, configured?: string) => unknown;
   },
   configInvalid: boolean,
   compactSidebar: boolean,
@@ -1926,12 +1924,17 @@ export function renderSidebar(
               !expanded && mergedTargets.length === 1 && sessions.length === 1
                 ? sidebarSiblingAnnotation(sessions[0])
                 : undefined;
+            // OpenCode registers display names as visible IDs. Only the
+            // native color lookup uses that ID; sidebar state stays canonical.
+            const displayName = snapshot.agentDisplayNames?.[agentName];
             const rowOptions: AgentRowOptions = {
-              // Label only: every lookup below stays keyed by the canonical
-              // agent ID so models, activity, expansion and history keep
-              // resolving.
-              label: snapshot.agentDisplayNames?.[agentName] || agentName,
-              color: snapshot.agentColors?.[agentName],
+              label: displayName || agentName,
+              color: theme.resolveAgentColor
+                ? theme.resolveAgentColor(
+                    displayName || agentName,
+                    snapshot.agentColors?.[agentName],
+                  )
+                : agentColor(snapshot.agentColors?.[agentName], theme),
               model,
               modelName: modelNames?.get(model),
               variant,
@@ -2106,6 +2109,7 @@ export function readTuiGates(
 // declared locally because the pinned @opencode-ai/plugin dep ships v1
 // types only.
 interface V2TuiThemeTokens {
+  categorical?: readonly { 400?: RGBA }[];
   hue?: {
     interactive: Record<
       100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900,
@@ -2117,15 +2121,9 @@ interface V2TuiThemeTokens {
     muted?: unknown;
     default?: unknown;
     subdued?: unknown;
-    action?: {
-      primary?: { base: unknown };
-      secondary?: { base: unknown };
-    };
     feedback?: {
       success?: { base: unknown };
       warning?: { base: unknown };
-      error?: { base: unknown };
-      info?: { base: unknown };
     };
   };
   background: {
@@ -2147,10 +2145,25 @@ interface V2TuiSlotClaim {
   render: (input: { sessionID: string }) => JSX.Element;
 }
 
+interface V2TuiLocation {
+  directory: string;
+  workspaceID?: string;
+}
+
 interface V2TuiContext extends V2PresetManagerContext {
-  location?: { directory: string; workspaceID?: string };
+  location?: V2TuiLocation;
   client?: unknown;
   data?: V2PresetManagerContext['data'] & {
+    location?: NonNullable<V2PresetManagerContext['data']>['location'] & {
+      default?: () => V2TuiLocation;
+      agent?: {
+        list?: (
+          location?: V2TuiLocation,
+        ) =>
+          | readonly { id: string; hidden?: boolean; color?: string }[]
+          | undefined;
+      };
+    };
     on?: (type: string, handler: (event: unknown) => void) => unknown;
     session?: NonNullable<HostSessionViews['session']> & {
       list?: () => Array<{ id?: string; title?: string }>;
@@ -2174,35 +2187,39 @@ interface V2TuiContext extends V2PresetManagerContext {
   };
 }
 
-/** Map v2 theme tokens onto the flat shape `renderSidebar` consumes (v2 has no `accent` token). */
-function v2ThemeView(theme: V2TuiThemeTokens): {
-  accent: unknown;
-  background: unknown;
-  borderActive: unknown;
-  text: unknown;
-  textMuted: unknown;
-  success?: unknown;
-  warning?: unknown;
-  primary?: unknown;
-  secondary?: unknown;
-  error?: unknown;
-  info?: unknown;
-} {
+function v2ThemeView(ctx: V2TuiContext): Parameters<typeof renderSidebar>[2] {
+  const theme = ctx.theme;
   const feedback = theme.text.feedback;
+  const textMuted = theme.text.muted ?? theme.text.subdued;
+  const location = ctx.data?.location;
+  const roster = location?.agent?.list?.(ctx.location ?? location.default?.());
+  const agents = roster?.filter((agent) => !agent.hidden) ?? [];
+  const palette: RGBA[] = [];
+  for (const scale of theme.categorical ?? []) {
+    // The plugin context does not expose the legacy design toggle (step 200).
+    const color = scale[400];
+    if (color && !palette.some((entry) => entry.equals(color))) {
+      palette.push(color);
+    }
+  }
   return {
     accent: theme.hue?.interactive[200],
     background: theme.background.base ?? theme.background.default,
     borderActive: theme.border.base ?? theme.border.default,
     text: theme.text.base ?? theme.text.default,
-    textMuted: theme.text.muted ?? theme.text.subdued,
+    textMuted,
     success: feedback?.success?.base ?? theme.success,
     warning: feedback?.warning?.base ?? theme.warning,
-    // Documented agent colors (`agents.<name>.color`) resolve against these
-    // flat tokens; v2 splits them across text.action and text.feedback.
-    primary: theme.text.action?.primary?.base,
-    secondary: theme.text.action?.secondary?.base,
-    error: feedback?.error?.base,
-    info: feedback?.info?.base,
+    resolveAgentColor: (id, configured) => {
+      const index = agents.findIndex((agent) => agent.id === id);
+      const explicit = roster?.find((agent) => agent.id === id)?.color;
+      if (explicit?.startsWith('#')) return explicit;
+      if (index < 0 && configured?.startsWith('#')) return configured;
+      if (roster?.length && palette.length) {
+        return palette[Math.max(index, 0) % palette.length];
+      }
+      return configured?.startsWith('#') ? configured : textMuted;
+    },
   };
 }
 
@@ -2954,7 +2971,7 @@ async function setup(
       },
       client: ctx.client,
       renderer: ctx.renderer,
-      theme: () => v2ThemeView(ctx.theme),
+      theme: () => v2ThemeView(ctx),
       navigate: makeRouteNavigator(ctx.ui.router, 'navigate', true),
       registerSlot: (render) =>
         ctx.ui.slot({ append: 'sidebar.content', render }),

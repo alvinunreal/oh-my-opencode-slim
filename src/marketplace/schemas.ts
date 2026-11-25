@@ -319,7 +319,11 @@ export const MarketplaceAgentManifestSummarySchema = z.discriminatedUnion(
   ],
 );
 
-// Kept as the precise agent-manifest name for consumers of the public contract.
+/**
+ * @alias Precise agent-manifest name kept for the published
+ * ./marketplace-contract surface; consumed by
+ * src/marketplace-contract/index.ts (#1746).
+ */
 export const MarketplaceAgentManifestSchema = MarketplacePackageManifestSchema;
 
 export const MarketplacePackageBundleSchema = z
