@@ -215,7 +215,11 @@ Existing names outside that syntax remain selectable.
 
 The configured `preset` selects startup agent settings. With session routing
 enabled, `/preset <name>` applies resolved subagent inference settings to the
-current session, not the global default. The TUI manager also offers **Global
+current session, not the global default. `/preset <name>
+--force-orchestrator` (`-f`) also switches the live root session's model to
+the preset's `orchestrator` entry (root sessions only, never the global
+default; a native model pick overrides it — see ADR-005). The TUI manager
+also offers **Global
 default**, which writes configuration. Named session bindings survive restarts
 and remain pinned until reapplied; default-bound roots refresh on admission.
 See [Preset Switching](presets/preset-switching.md) for scope and failure rules.

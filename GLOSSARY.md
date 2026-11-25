@@ -94,6 +94,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Model entry** — A normalized model reference with an optional variant, used in fallback chains.
 - **Model inheritance** — An explicit agent policy selecting the current `session` model or the configured `orchestrator` model when no agent model is set.
 - **Variant** — An optional model qualifier (e.g., a preview build) used in fallback resolution.
+- **Forced orchestrator model** — The live-session application of a preset's `orchestrator` entry: the root session's model, variant, and inference settings follow the preset until the user selects a model natively. Reached only through the `--force-orchestrator` (`-f`) flag on `/preset`; session binding never touches the root model.
 - **Fallback / failover** — The mechanism that switches models when a call is rate-limited or returns empty.
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.
 - **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).

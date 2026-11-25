@@ -42,7 +42,11 @@ import {
   type V2PresetUiSurface,
 } from './preset-manager';
 import { registerQuestionTimeout } from './question-timeout-tui';
-import { bindSessionPreset } from './session-preset-apply';
+import {
+  bindSessionPreset,
+  parsePresetCommandInput,
+  readAvailablePresets,
+} from './session-preset-apply';
 import { registerUpdateNotice } from './update-notice';
 
 /** A keymap command as accepted by the host's `keymap.layer` reducer. */
@@ -111,6 +115,8 @@ function currentSessionID(ctx: V2PresetTuiContext): string | undefined {
 
 /**
  * `/preset` flow: bare `/preset` opens the three-level preset manager;
+ * `/preset <name> --force-orchestrator` also switches the displayed root
+ * session's model to the preset's orchestrator entry (ADR-005);
  * `/preset <name>` binds the named preset to the session on screen through the
  * session-preset RPC — the same result as the manager's Current session
  * action, and no restart. Neither path writes the global default. Never
@@ -133,8 +139,15 @@ export async function runPresetFlow(
     }
   };
   try {
-    const requested = presetArg?.trim();
-    if (requested) {
+    const parsed = parsePresetCommandInput(
+      presetArg ?? '',
+      readAvailablePresets(directory).names,
+    );
+    if (parsed.kind === 'usage-error') {
+      toast(parsed.message);
+      return;
+    }
+    if (parsed.kind === 'apply') {
       if (!presetRoutingEnabled) {
         toast(
           'Session preset routing is disabled. Use bare /preset to edit global presets.',
@@ -150,10 +163,15 @@ export async function runPresetFlow(
       }
       const outcome = await bindSessionPreset({
         directory,
-        presetName: requested,
-        bind: (presetName) =>
+        presetName: parsed.presetName,
+        forceOrchestrator: parsed.forceOrchestrator,
+        bind: (presetName, forceOrchestrator) =>
           sessionPresetClient(ctx).apply(
-            { sessionID, presetName },
+            {
+              sessionID,
+              presetName,
+              ...(forceOrchestrator ? { forceOrchestrator: true } : {}),
+            },
             { location: { ...ctx.location, directory } },
           ),
       });

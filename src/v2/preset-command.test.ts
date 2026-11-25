@@ -9,6 +9,11 @@ import {
   presetApplyFeedback,
   presetListFeedback,
 } from './preset-command';
+import {
+  FORCE_ORCHESTRATOR_FLAG,
+  FORCE_ORCHESTRATOR_SHORT_FLAG,
+  parsePresetCommandInput,
+} from './session-preset-apply';
 import type { SessionPresetState } from './session-presets';
 
 let tempDir: string;
@@ -62,15 +67,29 @@ function recorder(
   respond?: (
     sessionID: string,
     presetName: string,
+    forceOrchestrator: boolean,
   ) => Promise<SessionPresetState>,
 ) {
-  const calls: Array<{ sessionID: string; presetName: string }> = [];
+  const calls: Array<{
+    sessionID: string;
+    presetName: string;
+    force?: boolean;
+  }> = [];
   return {
     calls,
-    applyToSession: async (sessionID: string, presetName: string) => {
-      calls.push({ sessionID, presetName });
+    applyToSession: async (
+      sessionID: string,
+      presetName: string,
+      forceOrchestrator?: boolean,
+    ) => {
+      const force = forceOrchestrator === true;
+      calls.push({
+        sessionID,
+        presetName,
+        ...(force ? { force } : {}),
+      });
       return respond
-        ? respond(sessionID, presetName)
+        ? respond(sessionID, presetName, force)
         : boundState(sessionID, presetName);
     },
   };
@@ -120,7 +139,7 @@ describe('presetListFeedback', () => {
     });
 
     expect(message).toBe(
-      'Session team: deep (explicit). Global default: fast. Effective default: fast (user config). Available presets: deep, fast. Run /preset <name> to apply one to this session.',
+      'Session team: deep (explicit). Root model: unknown. Global default: fast. Effective default: fast (user config). Available presets: deep, fast. Run /preset <name> to apply one to this session.',
     );
   });
 
@@ -220,7 +239,7 @@ describe('presetListFeedback', () => {
         applyToSession: async () => boundState('ses_caller', 'fast'),
       }),
     ).toBe(
-      'Session team: not bound yet. Global default: (none). Effective default: (none). No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
+      'Session team: not bound yet. Root model: unknown. Global default: (none). Effective default: (none). No presets configured. Define presets in oh-my-opencode-slim.jsonc.',
     );
   });
 });
@@ -326,7 +345,7 @@ describe('createPresetCommand', () => {
         prompt: { text: '  ' },
       }),
     ).rejects.toThrow(
-      'Session team: not bound yet. Global default: (none). Effective default: (none). Available presets: fast. Run /preset <name> to apply one to this session.',
+      'Session team: not bound yet. Root model: unknown. Global default: (none). Effective default: (none). Available presets: fast. Run /preset <name> to apply one to this session.',
     );
   });
 
@@ -344,5 +363,199 @@ describe('createPresetCommand', () => {
     ).rejects.toThrow('Applied preset "fast" to this session\'s team.');
     expect(calls).toEqual([{ sessionID: 'ses_preset', presetName: 'fast' }]);
     expect(readUserConfig().preset).toBeUndefined();
+  });
+
+  test('the force flag reaches the apply and the switched root is reported', async () => {
+    writeUserConfig({
+      presets: { fast: { fixer: { model: 'test/fast' } } },
+    });
+    const { calls, applyToSession } = recorder((_sessionID, _name, force) =>
+      Promise.resolve({
+        ...boundState('ses_preset', 'fast'),
+        ...(force
+          ? {
+              rootForce: { outcome: 'switched' as const, model: 'test/opus' },
+              root: { model: 'test/opus', forced: true },
+            }
+          : {}),
+      }),
+    );
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: `fast ${FORCE_ORCHESTRATOR_FLAG}` },
+      }),
+    ).rejects.toThrow(
+      'Applied preset "fast" to this session\'s team. Root model switched to test/opus. A native model pick overrides it later.',
+    );
+    expect(calls).toEqual([
+      { sessionID: 'ses_preset', presetName: 'fast', force: true },
+    ]);
+    expect(readUserConfig().preset).toBeUndefined();
+  });
+
+  test('a preset without an orchestrator model reports the unchanged root', async () => {
+    writeUserConfig({
+      presets: { fast: { fixer: { model: 'test/fast' } } },
+    });
+    const { applyToSession } = recorder((_s, _n, force) =>
+      Promise.resolve({
+        ...boundState('ses_preset', 'fast'),
+        ...(force
+          ? { rootForce: { outcome: 'no-orchestrator-model' as const } }
+          : {}),
+      }),
+    );
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: `fast ${FORCE_ORCHESTRATOR_FLAG}` },
+      }),
+    ).rejects.toThrow(
+      'Applied preset "fast" to this session\'s team. The preset defines no orchestrator model; the main model is unchanged.',
+    );
+  });
+
+  test('a usage error names the valid flag and binds nothing', async () => {
+    writeUserConfig({
+      presets: { fast: { fixer: { model: 'test/fast' } } },
+    });
+    const { calls, applyToSession } = recorder();
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: 'fast --force' },
+      }),
+    ).rejects.toThrow(
+      `Unknown flag "--force". The only valid flag is ${FORCE_ORCHESTRATOR_FLAG} (${FORCE_ORCHESTRATOR_SHORT_FLAG}).`,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  test('the flag without a name is a usage error and binds nothing', async () => {
+    writeUserConfig({
+      presets: { fast: { fixer: { model: 'test/fast' } } },
+    });
+    const { calls, applyToSession } = recorder();
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: FORCE_ORCHESTRATOR_FLAG },
+      }),
+    ).rejects.toThrow('Specify a preset name');
+    expect(calls).toEqual([]);
+  });
+
+  test('a configured multi-word preset name still applies', async () => {
+    writeUserConfig({
+      presets: { 'code review': { fixer: { model: 'test/deep' } } },
+    });
+    const { calls, applyToSession } = recorder();
+
+    await expect(
+      createPresetCommand({ ...options(), applyToSession }).execute({
+        sessionID: 'ses_preset',
+        prompt: { text: 'code review' },
+      }),
+    ).rejects.toThrow('Applied preset "code review" to this session\'s team.');
+    expect(calls).toEqual([
+      { sessionID: 'ses_preset', presetName: 'code review' },
+    ]);
+  });
+});
+
+describe('parsePresetCommandInput', () => {
+  test('empty input is the list request', () => {
+    expect(parsePresetCommandInput('')).toEqual({ kind: 'empty' });
+    expect(parsePresetCommandInput('   ')).toEqual({ kind: 'empty' });
+  });
+
+  test('a bare name is a team-only apply', () => {
+    expect(parsePresetCommandInput('cheap')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: false,
+    });
+  });
+
+  test('the force flag is accepted around the name', () => {
+    expect(parsePresetCommandInput('cheap --force-orchestrator')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: true,
+    });
+    expect(parsePresetCommandInput('--force-orchestrator cheap')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: true,
+    });
+  });
+
+  test('the -f shorthand matches the long flag', () => {
+    expect(parsePresetCommandInput('cheap -f')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: true,
+    });
+    expect(parsePresetCommandInput('-f cheap')).toEqual({
+      kind: 'apply',
+      presetName: 'cheap',
+      forceOrchestrator: true,
+    });
+  });
+
+  test('the flag without a name is a usage error', () => {
+    const parsed = parsePresetCommandInput(FORCE_ORCHESTRATOR_FLAG);
+    expect(parsed.kind).toBe('usage-error');
+    if (parsed.kind === 'usage-error')
+      expect(parsed.message).toContain('Specify a preset name');
+  });
+
+  test('an unknown flag names the only valid flag', () => {
+    const parsed = parsePresetCommandInput('cheap --force');
+    expect(parsed.kind).toBe('usage-error');
+    if (parsed.kind === 'usage-error')
+      expect(parsed.message).toContain(FORCE_ORCHESTRATOR_FLAG);
+  });
+
+  test('two names are a usage error', () => {
+    expect(parsePresetCommandInput('cheap fast').kind).toBe('usage-error');
+  });
+
+  test('an exact configured multi-word name wins over token parsing', () => {
+    expect(
+      parsePresetCommandInput('code review', ['code review', 'cheap']),
+    ).toEqual({
+      kind: 'apply',
+      presetName: 'code review',
+      forceOrchestrator: false,
+    });
+  });
+
+  test('a multi-word name with the force flag still applies', () => {
+    expect(parsePresetCommandInput('code review -f', ['code review'])).toEqual({
+      kind: 'apply',
+      presetName: 'code review',
+      forceOrchestrator: true,
+    });
+    expect(
+      parsePresetCommandInput('--force-orchestrator code review', [
+        'code review',
+      ]),
+    ).toEqual({
+      kind: 'apply',
+      presetName: 'code review',
+      forceOrchestrator: true,
+    });
+  });
+
+  test('unconfigured multi-token input stays a usage error', () => {
+    expect(parsePresetCommandInput('cheap fast', ['cheap', 'fast']).kind).toBe(
+      'usage-error',
+    );
   });
 });

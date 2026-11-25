@@ -20,6 +20,7 @@ import {
   buildBundledSkillInfos,
   removeLegacySkillSyncState,
 } from '../cli/custom-skills';
+import { resolvePreset } from '../config';
 import { BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
 import {
@@ -30,6 +31,7 @@ import {
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
+import { lookupWithAliases } from '../config/utils';
 import { getBuildInfo } from '../generated/build-info';
 import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/runtime-package';
 import {
@@ -58,6 +60,7 @@ import {
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
 import { skillIdsFromResponse } from '../marketplace/skills';
 import type { McpConfig } from '../mcp/types';
+import { getAllConfiguredPresets } from '../tools/preset-switch';
 import {
   collectAgentDisplayNames,
   recordTuiAgentDisplayNames,
@@ -2927,6 +2930,23 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               ),
             };
           },
+          // ADR-005 gate: --force-orchestrator switches the root model only
+          // when the preset's own resolved definition sets an orchestrator
+          // model. The merged orchestrator profile also carries root-level
+          // and host settings, which are never a force target.
+          presetOwnOrchestratorModel: async (presetName) => {
+            try {
+              const agents = resolvePreset(
+                presetName,
+                getAllConfiguredPresets(directory, 'v2'),
+              );
+              return Boolean(lookupWithAliases(agents, 'orchestrator')?.model);
+            } catch {
+              // A missing or broken preset chain reports no own model;
+              // the named-bundle resolution surfaces the real error.
+              return false;
+            }
+          },
         });
         sessionPresets = presets;
         disposers.push(() => presets.dispose());
@@ -2946,8 +2966,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         ) {
           const registration = await ctx.rpc.register(sessionPresetRpc, {
             read: ({ sessionID }) => presets.readState(sessionID),
-            apply: ({ sessionID, presetName }, { signal }) =>
-              presets.apply(sessionID, presetName, signal),
+            apply: ({ sessionID, presetName, forceOrchestrator }, { signal }) =>
+              presets.apply(
+                sessionID,
+                presetName,
+                signal,
+                forceOrchestrator ? { forceOrchestrator: true } : undefined,
+              ),
           });
           disposers.push(() => registration.dispose());
         }
@@ -3123,8 +3148,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             draft.add(
               createPresetCommand({
                 directory,
-                applyToSession: (sessionID: string, presetName: string) =>
-                  presets.apply(sessionID, presetName),
+                applyToSession: (
+                  sessionID: string,
+                  presetName: string,
+                  forceOrchestrator?: boolean,
+                ) =>
+                  presets.apply(
+                    sessionID,
+                    presetName,
+                    undefined,
+                    forceOrchestrator ? { forceOrchestrator: true } : undefined,
+                  ),
                 readSessionPreset: (sessionID: string) =>
                   presets.readState(sessionID),
               }),
@@ -3527,6 +3561,29 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               binding,
             );
           } else if (!binding?.parentID && isRecord(event.options)) {
+            // ADR-005: while a forced root model is active (not yet consumed
+            // by a native pick — the admission transaction strips it first),
+            // the root request options come from the forced orchestrator
+            // profile instead of the startup registry. Managed keys are
+            // cleared first so a preset field that was removed cannot leak
+            // the startup value into the request.
+            const forcedRoot = sessionPresets?.peek(event.sessionID)?.rootForce;
+            if (forcedRoot) {
+              const options = await variantCompatibleOptions(
+                forcedRoot.providerOptions ?? {},
+                event.model,
+                'primary',
+              );
+              delete event.options.temperature;
+              if (typeof forcedRoot.temperature === 'number') {
+                event.options.temperature = forcedRoot.temperature;
+              }
+              for (const key of forcedRoot.managedProviderOptionKeys ?? []) {
+                delete event.options[key];
+              }
+              Object.assign(event.options, options);
+              return;
+            }
             const primary = staticRequestOptions.get(event.agent);
             if (!primary) return;
             const options = await variantCompatibleOptions(

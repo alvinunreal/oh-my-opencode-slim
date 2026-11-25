@@ -190,7 +190,10 @@ describe('v2 tui preset plugin', () => {
     /** Route the stub to a session and answer the session-preset RPC. */
     function attachSessionRpc(
       stub: ScriptedCtx,
-      options: { sessionID?: string } = {},
+      options: {
+        sessionID?: string;
+        rootForce?: { outcome: 'switched'; model: string };
+      } = {},
     ) {
       const sessionID = options.sessionID ?? 'visible-root';
       const applies: unknown[] = [];
@@ -213,6 +216,7 @@ describe('v2 tui preset plugin', () => {
                 status: 'bound',
                 presetName: (input as { presetName: string }).presetName,
                 affects: 'future-children-only',
+                ...(options.rootForce ? { rootForce: options.rootForce } : {}),
               };
             },
           }),
@@ -286,6 +290,93 @@ describe('v2 tui preset plugin', () => {
         'Applied preset "cheap" to this session\'s team.',
       );
       expect(readUserConfig().preset).toBe('balanced');
+    });
+
+    test('the force flag reaches the RPC and reports the switched root', async () => {
+      writeUserConfig({
+        preset: 'balanced',
+        presets: {
+          balanced: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
+          cheap: { orchestrator: { model: 'openai/gpt-5-mini' } },
+        },
+      });
+      const stub = makeStubCtx();
+      const { applies } = attachSessionRpc(stub, {
+        rootForce: { outcome: 'switched', model: 'openai/gpt-5-mini' },
+      });
+
+      await runPresetFlow(stub.ctx, 'cheap --force-orchestrator');
+
+      expect(stub.selectCalls).toHaveLength(0);
+      expect(applies).toEqual([
+        {
+          input: {
+            sessionID: 'visible-root',
+            presetName: 'cheap',
+            forceOrchestrator: true,
+          },
+          options: { location: { directory: projectDir } },
+        },
+      ]);
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toBe(
+        'Applied preset "cheap" to this session\'s team. Root model switched to openai/gpt-5-mini. A native model pick overrides it later.',
+      );
+      expect(readUserConfig().preset).toBe('balanced');
+    });
+
+    test('a usage error toasts and applies nothing', async () => {
+      writeUserConfig({
+        presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+      });
+      const stub = makeStubCtx();
+      const { applies } = attachSessionRpc(stub);
+
+      await runPresetFlow(stub.ctx, 'cheap --force');
+
+      expect(applies).toEqual([]);
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toBe(
+        'Unknown flag "--force". The only valid flag is --force-orchestrator (-f).',
+      );
+    });
+
+    test('the flag without a name toasts a usage error', async () => {
+      writeUserConfig({
+        presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+      });
+      const stub = makeStubCtx();
+      const { applies } = attachSessionRpc(stub);
+
+      await runPresetFlow(stub.ctx, '--force-orchestrator');
+
+      expect(applies).toEqual([]);
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toContain('Specify a preset name');
+    });
+
+    test('a configured multi-word preset name applies through the RPC', async () => {
+      writeUserConfig({
+        presets: {
+          'code review': { orchestrator: { model: 'openai/gpt-5-mini' } },
+        },
+      });
+      const stub = makeStubCtx();
+      const { applies } = attachSessionRpc(stub);
+
+      await runPresetFlow(stub.ctx, 'code review');
+
+      expect(stub.selectCalls).toHaveLength(0);
+      expect(applies).toEqual([
+        {
+          input: { sessionID: 'visible-root', presetName: 'code review' },
+          options: { location: { directory: projectDir } },
+        },
+      ]);
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toBe(
+        'Applied preset "code review" to this session\'s team.',
+      );
     });
 
     test('an unknown named preset binds nothing and lists the options', async () => {
