@@ -2212,8 +2212,9 @@ function v2ThemeView(ctx: V2TuiContext): Parameters<typeof renderSidebar>[2] {
     warning: feedback?.warning?.base ?? theme.warning,
     resolveAgentColor: (id, configured) => {
       const index = agents.findIndex((agent) => agent.id === id);
-      const explicit = agents[index]?.color;
+      const explicit = roster?.find((agent) => agent.id === id)?.color;
       if (explicit?.startsWith('#')) return explicit;
+      if (index < 0 && configured?.startsWith('#')) return configured;
       if (roster?.length && palette.length) {
         return palette[Math.max(index, 0) % palette.length];
       }

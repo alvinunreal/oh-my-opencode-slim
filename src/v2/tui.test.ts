@@ -2045,6 +2045,7 @@ describe('v2 tui preset plugin', () => {
             agentColors: {
               oracle: 'info',
               explorer: '#ff0000',
+              fixer: '#235678',
             },
           },
           projectDir,
@@ -2082,7 +2083,10 @@ describe('v2 tui preset plugin', () => {
             RGBA.fromHex('#cc3388').toInts(),
           );
           expect(style('fixer')).toEqual(first.toInts());
-          expect(style('designer')).toEqual(first.toInts());
+          expect(style('designer')).toEqual(RGBA.fromHex('#ffaa00').toInts());
+          expect(style('claude-opus')).toEqual(
+            RGBA.fromHex('#ffaa00').toInts(),
+          );
 
           setPalette([{ 400: first }, { 400: changed }]);
           await screen.renderOnce();
@@ -2096,11 +2100,15 @@ describe('v2 tui preset plugin', () => {
           await screen.renderOnce();
           expect(style('Oracle')).toEqual(RGBA.fromHex('#2f9852').toInts());
           expect(style('explorer')).toEqual(changed.toInts());
+          expect(style('fixer')).toEqual(RGBA.fromHex('#235678').toInts());
+          expect(style('claude-sonnet')).toEqual(
+            RGBA.fromHex('#235678').toInts(),
+          );
 
           setPalette(undefined);
           await screen.renderOnce();
           expect(style('Oracle')).toEqual(RGBA.fromHex('#2f9852').toInts());
-          expect(style('fixer')).toEqual(RGBA.fromHex('#8a8a8a').toInts());
+          expect(style('fixer')).toEqual(RGBA.fromHex('#235678').toInts());
 
           delete stub.ctx.location;
           setAgents(undefined);

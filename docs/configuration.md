@@ -258,10 +258,11 @@ Council color for seats.
 On OpenCode v2, the sidebar uses the visible agent's explicit `#RRGGBB` color
 or the host's categorical palette in its default TUI design. An agent with
 `displayName` uses the color of that visible host entry. Use a hex value to
-set an explicit color in both places; v2 does not accept agent color tokens
-such as `info` or `primary`. The v2 plugin API does not expose the legacy design
-setting (`experimental.new-designs: false`), so automatic shades may differ
-from native colors in that mode.
+set an explicit color in both places. Explicit hex colors also survive hidden
+rows and configured rows missing from the live roster. V2 does not accept agent
+color tokens such as `info` or `primary`. The v2 plugin API does not expose the
+legacy design setting (`experimental.new-designs: false`), so automatic shades
+may differ from native colors in that mode.
 
 ## Prompt Overriding
 
