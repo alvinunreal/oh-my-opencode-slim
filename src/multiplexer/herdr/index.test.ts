@@ -474,6 +474,7 @@ describe('HerdrMultiplexer', () => {
     let childFinished = false;
     let childGets = 0;
     let appLists = 0;
+    const sizingCalls: Array<{ command: string[]; payload: unknown }> = [];
     const delays: number[] = [];
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === 'which') {
@@ -575,11 +576,9 @@ describe('HerdrMultiplexer', () => {
         );
       }
       if (command[1] === 'do' && command[2] === 'pane.size_managed') {
-        expect(JSON.parse(command[3] ?? '{}')).toEqual({
-          main: 'p-main',
-          agents: ['p-child'],
-          direction: 'right',
-          main_percent: 60,
+        sizingCalls.push({
+          command,
+          payload: JSON.parse(command[3] ?? '{}') as unknown,
         });
         return createSpawnResult();
       }
@@ -607,6 +606,13 @@ describe('HerdrMultiplexer', () => {
     const run = commands().find((command) => command[1] === 'run');
     expect(run).not.toContain('herdr.space=space-1');
     expect(commands().some((command) => command[1] === 'do')).toBe(true);
+    expect(sizingCalls).toHaveLength(1);
+    expect(sizingCalls[0]?.payload).toEqual({
+      main: 'p-main',
+      agents: ['p-child'],
+      direction: 'right',
+      main_percent: 60,
+    });
     expect(delays).toEqual([500, 500]);
   });
 
@@ -2110,6 +2116,140 @@ describe('HerdrMultiplexer', () => {
     expect(commands()).toEqual([]);
   });
 
+  test('desktop close waits for a managed spawn to release the topology lock', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    let releaseRun!: () => void;
+    let runStarted!: () => void;
+    const runReady = new Promise<void>((resolve) => {
+      runStarted = resolve;
+    });
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const calls: string[][] = [];
+    let childState: 'live' | 'finished' = 'live';
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      calls.push(command);
+      if (command[0] === 'which') {
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      }
+      if (command[1] === 'get' && command[2] === 't-parent') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-parent',
+            parent: null,
+            state: 'live',
+            labels: { 'herdr.space': 'space-1', 'herdr.tab': 'tab-1' },
+          }),
+        );
+      }
+      if (command[1] === 'get' && command[2] === 't-owned') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-owned',
+            parent: 't-parent',
+            state: childState,
+            labels: {
+              'herdr.space': 'space-1',
+              'herdr.tab': 'tab-1',
+              'omosc.owner': 't-parent',
+              omosc: 'omosc:12:owned',
+              'omosc.spawn': 'owned-token',
+            },
+          }),
+        );
+      }
+      if (command[1] === 'run') {
+        runStarted();
+        return {
+          ...createSpawnResult(),
+          exited: runGate.then(() => 0),
+          stdout: () =>
+            runGate.then(() =>
+              JSON.stringify({
+                address: 't-new',
+                parent: 't-parent',
+              }),
+            ),
+        };
+      }
+      if (command[1] === 'get' && command[2] === 't-new') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-new',
+            parent: 't-parent',
+            state: 'live',
+            labels: {
+              'herdr.space': 'space-1',
+              'herdr.tab': 'tab-1',
+              'omosc.owner': 't-parent',
+              omosc: `omosc:${process.pid}:new`,
+              'omosc.spawn': spawnTokenFromCalls(),
+            },
+          }),
+        );
+      }
+      if (command[1] === 'ls') {
+        return createSpawnResult(
+          0,
+          createHerdrAppListing('space-1', 'tab-1', 't-new'),
+        );
+      }
+      if (command[1] === 'kill' && command[2] === 't-owned') {
+        childState = 'finished';
+      }
+      return createSpawnResult();
+    });
+
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const adapter = new HerdrMultiplexer(undefined, undefined, {
+      desktopAdoptionWait: async () => {},
+      equalizePanes: false,
+    });
+    (
+      adapter as unknown as {
+        desktopOwnedTerminals: Map<
+          string,
+          {
+            parentId: string;
+            title: string;
+            spaceId: string;
+            tabId: string;
+            spawnToken: string;
+          }
+        >;
+      }
+    ).desktopOwnedTerminals.set('t-owned', {
+      parentId: 't-parent',
+      title: 'omosc:12:owned',
+      spaceId: 'space-1',
+      tabId: 'tab-1',
+      spawnToken: 'owned-token',
+    });
+
+    const spawn = adapter.spawnPane(
+      'new',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+    await runReady;
+    const close = adapter.closePane('t-owned');
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+    expect(
+      calls.some((command) => command[1] === 'get' && command[2] === 't-owned'),
+    ).toBe(false);
+    releaseRun();
+    expect(await spawn).toEqual({ success: true, paneId: 't-new' });
+    expect(await close).toBe(true);
+    expect(
+      calls.some((command) => command[1] === 'get' && command[2] === 't-owned'),
+    ).toBe(true);
+  });
+
   test('desktop close removes a finished owned terminal without killing it', async () => {
     process.env.HC_TERMINAL_ID = 't-parent';
     crossSpawnMock.mockImplementation((command: string[]) => {
@@ -2720,6 +2860,168 @@ describe('HerdrMultiplexer', () => {
       });
       expect(await adapter.listPanesWithTitles()).toEqual([]);
       expect(commands().some((command) => command[1] === 'kill')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('desktop journal recovery closes an owned child with pending placement labels', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    const dir = mkdtempSync(join(tmpdir(), 'omos-herdr-journal-'));
+    const journalPath = join(dir, 'recovery.json');
+    const spawnToken = '33333333-3333-4333-8333-333333333333';
+    const title = `omosc:${process.pid - 1}:session-old`;
+    writeFileSync(
+      journalPath,
+      JSON.stringify([
+        {
+          spawnToken,
+          parentId: 't-parent',
+          title,
+          spaceId: 'space-1',
+          tabId: 'tab-1',
+          createdAt: Date.now(),
+          kept: false,
+        },
+      ]),
+    );
+    let childState: 'live' | 'finished' = 'live';
+    const calls: string[][] = [];
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      calls.push(command);
+      if (command[0] === 'which') {
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      }
+      if (command[1] === 'ls' && command.includes('omosc.owner=t-parent')) {
+        return createSpawnResult(0, JSON.stringify({ terminals: [] }));
+      }
+      if (
+        command[1] === 'ls' &&
+        command.includes(`omosc.spawn=${spawnToken}`)
+      ) {
+        return createSpawnResult(
+          0,
+          JSON.stringify({ terminals: [{ address: 't-unplaced' }] }),
+        );
+      }
+      if (command[1] === 'get' && command[2] === 't-unplaced') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-unplaced',
+            parent: 't-parent',
+            state: childState,
+            labels: {
+              'omosc.owner': 't-parent',
+              omosc: title,
+              'omosc.spawn': spawnToken,
+            },
+          }),
+        );
+      }
+      if (command[1] === 'kill' && command[2] === 't-unplaced') {
+        childState = 'finished';
+      }
+      return createSpawnResult();
+    });
+
+    try {
+      const { HerdrMultiplexer } = await importFreshHerdr();
+      const adapter = new HerdrMultiplexer(undefined, undefined, {
+        desktopAdoptionWait: async () => {},
+        recoveryJournalPath: journalPath,
+        equalizePanes: false,
+      });
+      expect(await adapter.listPanesWithTitles()).toEqual([
+        { paneId: 't-unplaced', title },
+      ]);
+      expect(await adapter.closePane('t-unplaced')).toBe(true);
+      expect(calls).toContainEqual([
+        '/usr/bin/hc',
+        'kill',
+        't-unplaced',
+        '--json',
+      ]);
+      expect(calls).toContainEqual([
+        '/usr/bin/hc',
+        'rm',
+        't-unplaced',
+        '--json',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('desktop journal recovery refuses foreign placement labels', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    const dir = mkdtempSync(join(tmpdir(), 'omos-herdr-journal-'));
+    const journalPath = join(dir, 'recovery.json');
+    const spawnToken = '44444444-4444-4444-8444-444444444444';
+    const title = `omosc:${process.pid - 1}:session-old`;
+    writeFileSync(
+      journalPath,
+      JSON.stringify([
+        {
+          spawnToken,
+          parentId: 't-parent',
+          title,
+          spaceId: 'space-1',
+          tabId: 'tab-1',
+          createdAt: Date.now(),
+          kept: false,
+        },
+      ]),
+    );
+    const calls: string[][] = [];
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      calls.push(command);
+      if (command[0] === 'which') {
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      }
+      if (command[1] === 'ls' && command.includes('omosc.owner=t-parent')) {
+        return createSpawnResult(0, JSON.stringify({ terminals: [] }));
+      }
+      if (
+        command[1] === 'ls' &&
+        command.includes(`omosc.spawn=${spawnToken}`)
+      ) {
+        return createSpawnResult(
+          0,
+          JSON.stringify({ terminals: [{ address: 't-foreign' }] }),
+        );
+      }
+      if (command[1] === 'get' && command[2] === 't-foreign') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-foreign',
+            parent: 't-parent',
+            state: 'live',
+            labels: {
+              'omosc.owner': 't-parent',
+              omosc: title,
+              'omosc.spawn': spawnToken,
+              'herdr.space': 'foreign-space',
+              'herdr.tab': 'foreign-tab',
+            },
+          }),
+        );
+      }
+      return createSpawnResult();
+    });
+
+    try {
+      const { HerdrMultiplexer } = await importFreshHerdr();
+      const adapter = new HerdrMultiplexer(undefined, undefined, {
+        desktopAdoptionWait: async () => {},
+        recoveryJournalPath: journalPath,
+        equalizePanes: false,
+      });
+      expect(await adapter.listPanesWithTitles()).toEqual([]);
+      expect(await adapter.closePane('t-foreign')).toBe(false);
+      expect(calls.some((command) => command[1] === 'kill')).toBe(false);
+      expect(calls.some((command) => command[1] === 'rm')).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

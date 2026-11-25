@@ -58,6 +58,7 @@ interface DesktopRecoveryRecord {
   spaceId: string;
   tabId: string;
   createdAt: number;
+  kept?: boolean;
 }
 
 function isDesktopRecoveryRecord(
@@ -70,7 +71,8 @@ function isDesktopRecoveryRecord(
     typeof value.parentId === 'string' &&
     typeof value.title === 'string' &&
     typeof value.spaceId === 'string' &&
-    typeof value.tabId === 'string'
+    typeof value.tabId === 'string' &&
+    (value.kept === undefined || typeof value.kept === 'boolean')
   );
 }
 
@@ -229,6 +231,7 @@ export class HerdrMultiplexer implements Multiplexer {
         spaceId: ownership.spaceId,
         tabId: ownership.tabId,
         createdAt: Date.now(),
+        ...(ownership.kept === false ? { kept: false } : {}),
       });
       await writeDesktopRecoveryRecords(journalPath, records);
     } catch {
@@ -289,10 +292,13 @@ export class HerdrMultiplexer implements Multiplexer {
           spaceId: record.spaceId,
           tabId: record.tabId,
           spawnToken: record.spawnToken,
+          ...(record.kept === false ? { kept: false } : {}),
         };
         if (
           detail.address !== address ||
           !matchesDesktopOwnershipMarkers(detail, ownership) ||
+          (record.kept === false &&
+            !hasPendingOrExpectedPlacementLabels(detail, ownership)) ||
           !isSweepTitle(detail.labels.omosc)
         ) {
           continue;
@@ -728,136 +734,165 @@ export class HerdrMultiplexer implements Multiplexer {
     }
   }
 
-  async closePane(paneId: string): Promise<boolean> {
+  closePane(paneId: string): Promise<boolean> {
+    return this.closePaneImpl(paneId, false);
+  }
+
+  private async closePaneImpl(
+    paneId: string,
+    topologyLocked: boolean,
+  ): Promise<boolean> {
     if (process.env.HC_TERMINAL_ID?.trim()) {
-      const currentParent = process.env.HC_TERMINAL_ID.trim();
-      const ownership =
-        this.desktopOwnedTerminals.get(paneId) ??
-        this.desktopSweepCandidates.get(paneId);
-      if (!ownership) return false;
-      const hc = await findBinary('hc');
-      if (!hc) return false;
-      const terminalRead = await readCoreTerminalWithRetry(
-        hc,
-        paneId,
-        this.desktopAdoptionWait,
-      );
-      if (terminalRead.kind === 'missing') {
-        this.desktopOwnedTerminals.delete(paneId);
-        this.desktopSweepCandidates.delete(paneId);
-        await this.resizeDesktopAfterClose(ownership, currentParent, paneId);
-        return true;
-      }
-      if (terminalRead.kind !== 'found') return false;
-      const terminal = terminalRead.terminal;
-      if (
-        ownership.parentId !== currentParent ||
-        !matchesOwnedDesktopTerminal(terminal, paneId, ownership)
-      ) {
-        log('[herdr] desktop close refused terminal with changed ownership', {
-          paneId,
-          parentMatches: terminal.parent === currentParent,
-          ownerMatches: terminal.labels['omosc.owner'] === currentParent,
-          sessionMarkerMatches: terminal.labels.omosc === ownership.title,
-          spawnTokenMatches:
-            ownership.spawnToken === undefined ||
-            terminal.labels['omosc.spawn'] === ownership.spawnToken,
+      let release: (() => void) | undefined;
+      if (!topologyLocked) {
+        const prev = this.spawnMutex;
+        this.spawnMutex = new Promise<void>((resolve) => {
+          release = resolve;
         });
-        return false;
+        await prev;
       }
       try {
-        const operation = terminal.state === 'finished' ? 'rm' : 'kill';
-        const proc = crossSpawn([hc, operation, paneId, '--json'], {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
-        const [exitCode, stdout, stderr] = await Promise.all([
-          proc.exited,
-          proc.stdout(),
-          proc.stderr(),
-        ]);
-        if (exitCode !== 0) {
-          log(`[herdr] desktop close: hc ${operation} failed`, {
+        const currentParent = process.env.HC_TERMINAL_ID.trim();
+        const ownership =
+          this.desktopOwnedTerminals.get(paneId) ??
+          this.desktopSweepCandidates.get(paneId);
+        if (!ownership) return false;
+        const hc = await findBinary('hc');
+        if (!hc) return false;
+        const terminalRead = await readCoreTerminalWithRetry(
+          hc,
+          paneId,
+          this.desktopAdoptionWait,
+        );
+        if (terminalRead.kind === 'missing') {
+          this.desktopOwnedTerminals.delete(paneId);
+          this.desktopSweepCandidates.delete(paneId);
+          await this.resizeDesktopAfterClose(ownership, currentParent, paneId);
+          return true;
+        }
+        if (terminalRead.kind !== 'found') return false;
+        const terminal = terminalRead.terminal;
+        if (
+          ownership.parentId !== currentParent ||
+          !matchesOwnedDesktopTerminal(terminal, paneId, ownership)
+        ) {
+          log('[herdr] desktop close refused terminal with changed ownership', {
             paneId,
-            exitCode,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
+            parentMatches: terminal.parent === currentParent,
+            ownerMatches: terminal.labels['omosc.owner'] === currentParent,
+            sessionMarkerMatches: terminal.labels.omosc === ownership.title,
+            spawnTokenMatches:
+              ownership.spawnToken === undefined ||
+              terminal.labels['omosc.spawn'] === ownership.spawnToken,
           });
           return false;
         }
-        if (operation === 'kill') {
-          const afterKill = await readCoreTerminalResult(hc, paneId);
-          if (afterKill.kind === 'missing') {
-            this.desktopOwnedTerminals.delete(paneId);
-            this.desktopSweepCandidates.delete(paneId);
-            await this.resizeDesktopAfterClose(
-              ownership,
-              currentParent,
-              paneId,
-            );
-            return true;
-          }
-          if (afterKill.kind !== 'found') {
-            log('[herdr] desktop close: killed terminal state is unverified', {
-              paneId,
-              readKind: afterKill.kind,
-              detail: afterKill.message,
-            });
-            return false;
-          }
-          if (
-            !matchesOwnedDesktopTerminal(afterKill.terminal, paneId, ownership)
-          ) {
-            log(
-              '[herdr] desktop close: terminal ownership changed after kill',
-              {
-                paneId,
-              },
-            );
-            return false;
-          }
-          if (afterKill.terminal.state !== 'finished') {
-            log('[herdr] desktop close: hc kill has not finished the program', {
-              paneId,
-              state: afterKill.terminal.state,
-            });
-            return false;
-          }
-        }
-
-        const remove =
-          operation === 'kill'
-            ? crossSpawn([hc, 'rm', paneId, '--json'], {
-                stdout: 'pipe',
-                stderr: 'pipe',
-              })
-            : null;
-        if (remove) {
-          const [removeExit, removeStdout, removeStderr] = await Promise.all([
-            remove.exited,
-            remove.stdout(),
-            remove.stderr(),
+        try {
+          const operation = terminal.state === 'finished' ? 'rm' : 'kill';
+          const proc = crossSpawn([hc, operation, paneId, '--json'], {
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+          const [exitCode, stdout, stderr] = await Promise.all([
+            proc.exited,
+            proc.stdout(),
+            proc.stderr(),
           ]);
-          if (removeExit !== 0) {
-            log('[herdr] desktop close: hc rm failed', {
+          if (exitCode !== 0) {
+            log(`[herdr] desktop close: hc ${operation} failed`, {
               paneId,
-              exitCode: removeExit,
-              stdout: removeStdout.trim(),
-              stderr: removeStderr.trim(),
+              exitCode,
+              stdout: stdout.trim(),
+              stderr: stderr.trim(),
             });
             return false;
           }
+          if (operation === 'kill') {
+            const afterKill = await readCoreTerminalResult(hc, paneId);
+            if (afterKill.kind === 'missing') {
+              this.desktopOwnedTerminals.delete(paneId);
+              this.desktopSweepCandidates.delete(paneId);
+              await this.resizeDesktopAfterClose(
+                ownership,
+                currentParent,
+                paneId,
+              );
+              return true;
+            }
+            if (afterKill.kind !== 'found') {
+              log(
+                '[herdr] desktop close: killed terminal state is unverified',
+                {
+                  paneId,
+                  readKind: afterKill.kind,
+                  detail: afterKill.message,
+                },
+              );
+              return false;
+            }
+            if (
+              !matchesOwnedDesktopTerminal(
+                afterKill.terminal,
+                paneId,
+                ownership,
+              )
+            ) {
+              log(
+                '[herdr] desktop close: terminal ownership changed after kill',
+                {
+                  paneId,
+                },
+              );
+              return false;
+            }
+            if (afterKill.terminal.state !== 'finished') {
+              log(
+                '[herdr] desktop close: hc kill has not finished the program',
+                {
+                  paneId,
+                  state: afterKill.terminal.state,
+                },
+              );
+              return false;
+            }
+          }
+
+          const remove =
+            operation === 'kill'
+              ? crossSpawn([hc, 'rm', paneId, '--json'], {
+                  stdout: 'pipe',
+                  stderr: 'pipe',
+                })
+              : null;
+          if (remove) {
+            const [removeExit, removeStdout, removeStderr] = await Promise.all([
+              remove.exited,
+              remove.stdout(),
+              remove.stderr(),
+            ]);
+            if (removeExit !== 0) {
+              log('[herdr] desktop close: hc rm failed', {
+                paneId,
+                exitCode: removeExit,
+                stdout: removeStdout.trim(),
+                stderr: removeStderr.trim(),
+              });
+              return false;
+            }
+          }
+          this.desktopOwnedTerminals.delete(paneId);
+          this.desktopSweepCandidates.delete(paneId);
+          await this.resizeDesktopAfterClose(ownership, currentParent, paneId);
+          return true;
+        } catch (error) {
+          log('[herdr] desktop close: hc operation threw', {
+            paneId,
+            error: String(error),
+          });
+          return false;
         }
-        this.desktopOwnedTerminals.delete(paneId);
-        this.desktopSweepCandidates.delete(paneId);
-        await this.resizeDesktopAfterClose(ownership, currentParent, paneId);
-        return true;
-      } catch (error) {
-        log('[herdr] desktop close: hc operation threw', {
-          paneId,
-          error: String(error),
-        });
-        return false;
+      } finally {
+        release?.();
       }
     }
 
@@ -1339,6 +1374,37 @@ export class HerdrMultiplexer implements Multiplexer {
           }
           return { success: false, error: 'hard' };
         }
+        const currentParent = await readCoreTerminalWithRetry(
+          hc,
+          parentId,
+          this.desktopAdoptionWait,
+        );
+        if (
+          currentParent.kind !== 'found' ||
+          currentParent.terminal.address !== parentId ||
+          currentParent.terminal.state !== 'live' ||
+          currentParent.terminal.labels['herdr.space'] !== spaceId ||
+          currentParent.terminal.labels['herdr.tab'] !== tabId
+        ) {
+          log('[herdr] desktop spawn: parent changed before terminal.keep', {
+            parentId,
+            readKind: currentParent.kind,
+          });
+          const rollback = await this.rollbackDesktopTerminal(
+            address,
+            ownership,
+          );
+          if (rollback !== true) {
+            this.pendingDesktopRollbacks.set(sessionId, {
+              hc,
+              ownership,
+              address,
+            });
+          } else {
+            await this.resolveUnverifiedDesktopSpawn(spawnToken);
+          }
+          return { success: false, error: 'hard' };
+        }
         const keptPane = await runDesktopKeep(
           app,
           {
@@ -1592,7 +1658,7 @@ export class HerdrMultiplexer implements Multiplexer {
           ...ownership,
         });
       }
-      const closed = await this.closePane(address);
+      const closed = await this.closePaneImpl(address, true);
       if (closed) {
         log('[herdr] desktop rollback: owned terminal closed', {
           paneId: address,
@@ -1720,8 +1786,9 @@ function hasPendingOrExpectedPlacementLabels(
 ): boolean {
   const spaceId = terminal.labels['herdr.space'];
   const tabId = terminal.labels['herdr.tab'];
-  const labelsPending =
-    (!spaceId || spaceId.length === 0) && (!tabId || tabId.length === 0);
+  const labelsPending = [spaceId, tabId].every(
+    (label) => label === undefined || label.length === 0,
+  );
   return (
     labelsPending ||
     (spaceId === ownership.spaceId && tabId === ownership.tabId)
