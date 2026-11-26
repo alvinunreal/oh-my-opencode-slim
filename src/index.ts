@@ -274,6 +274,44 @@ export type V2ProfileRefreshResult =
 export const HARD_PROFILE_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
   new Set(['invalid-json', 'invalid-schema', 'read-error']);
 
+function logUnmatchedAgentMcps(
+  registry: ResolvedAgentRegistry,
+  runtime: RuntimeConfig,
+): void {
+  // Later host transforms can add names that Slim's registry did not see.
+  const known = new Set(Object.keys(registry.mcpConfig));
+  for (const name of runtime.disabledMcps) known.add(name);
+  const marketplaceAgents = new Set(registry.marketplaceAgentNames);
+  // Unfiltered plugin-layer overrides hold marketplace explicit selections.
+  const configuredAgents =
+    marketplaceAgents.size > 0 ? runtime.agents() : undefined;
+  // Loader-resolved presets omit failed chains, so membership is the actual
+  // resolution: a raw `preset` name that never applied is not reported.
+  const presetName = runtime.preset;
+  const presets = runtime.plugin?.presets;
+  const preset =
+    presetName && presets && Object.hasOwn(presets, presetName)
+      ? presetName
+      : null;
+  for (const agent of registry.agentNames) {
+    const mcps = marketplaceAgents.has(agent)
+      ? configuredAgents?.[agent]?.mcps
+      : (registry.managedAgentConfig[agent] as { mcps?: unknown } | undefined)
+          ?.mcps;
+    if (!Array.isArray(mcps)) continue;
+    for (const literal of new Set(mcps)) {
+      if (typeof literal !== 'string' || literal === '*') continue;
+      if (literal.startsWith('!')) continue;
+      if (known.has(literal)) continue;
+      log('[plugin] MCP not found in Slim agent registry', {
+        agent,
+        preset,
+        mcp: literal,
+      });
+    }
+  }
+}
+
 export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   initLogger();
   log('[plugin] build info', getBuildInfo());
@@ -1217,6 +1255,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             runtime.everModelSwitched(agentName);
           },
         });
+        logUnmatchedAgentMcps(resolvedAgentRegistry, runtime);
         // Publish the finalized chain generation: marketplace candidates and
         // model-switch disables are merged by the shared publisher — the same
         // path every profile refresh republishes.
