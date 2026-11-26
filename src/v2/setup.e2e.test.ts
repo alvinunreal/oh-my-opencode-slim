@@ -4136,6 +4136,9 @@ describe('createV2Setup e2e', () => {
         presets: {
           'marketplace-test': {
             marketplace: { agents: ['team/v2-marketplace'] },
+            'v2-marketplace-agent': {
+              mcps: ['package-mcp', 'explicit-typo'],
+            },
           },
         },
       }),
@@ -4213,6 +4216,25 @@ describe('createV2Setup e2e', () => {
     const cleanup = await createV2Setup()(ctx);
     try {
       await calls.activatePlugins();
+      await flushLoggerForTesting();
+      const warnings = readPluginLog()
+        .split('\n')
+        .filter((line) => line.includes('MCP not found in Slim agent registry'))
+        .map(
+          (line) =>
+            JSON.parse(line.slice(line.indexOf('{'))) as {
+              agent: string;
+              preset: string | null;
+              mcp: string;
+            },
+        );
+      expect(warnings).toEqual([
+        {
+          agent: 'v2-marketplace-agent',
+          preset: 'marketplace-test',
+          mcp: 'explicit-typo',
+        },
+      ]);
       expect(packageAgent).toBeDefined();
       expect(packageAgent?.model).toMatchObject({
         providerID: 'provider',
@@ -4246,6 +4268,12 @@ describe('createV2Setup e2e', () => {
         packageRules.some(
           (rule) =>
             rule.action === 'host-only-mcp_*' && rule.effect === 'allow',
+        ),
+      ).toBe(false);
+      expect(
+        packageRules.some(
+          (rule) =>
+            rule.action === 'explicit-typo_*' && rule.effect === 'allow',
         ),
       ).toBe(false);
 

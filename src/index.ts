@@ -282,6 +282,9 @@ function logUnmatchedAgentMcps(
   const known = new Set(Object.keys(registry.mcpConfig));
   for (const name of runtime.disabledMcps) known.add(name);
   const marketplaceAgents = new Set(registry.marketplaceAgentNames);
+  // Unfiltered plugin-layer overrides hold marketplace explicit selections.
+  const configuredAgents =
+    marketplaceAgents.size > 0 ? runtime.agents() : undefined;
   // Loader-resolved presets omit failed chains, so membership is the actual
   // resolution: a raw `preset` name that never applied is not reported.
   const presetName = runtime.preset;
@@ -291,10 +294,10 @@ function logUnmatchedAgentMcps(
       ? presetName
       : null;
   for (const agent of registry.agentNames) {
-    if (marketplaceAgents.has(agent)) continue;
-    const config = registry.managedAgentConfig[agent];
-    if (!config || typeof config !== 'object') continue;
-    const mcps = (config as { mcps?: unknown }).mcps;
+    const mcps = marketplaceAgents.has(agent)
+      ? configuredAgents?.[agent]?.mcps
+      : (registry.managedAgentConfig[agent] as { mcps?: unknown } | undefined)
+          ?.mcps;
     if (!Array.isArray(mcps)) continue;
     for (const literal of new Set(mcps)) {
       if (typeof literal !== 'string' || literal === '*') continue;

@@ -125,10 +125,12 @@ snapshot, the plugin logs once per registry setup:
 [plugin] MCP not found in Slim agent registry {"agent":"explorer","preset":"my-preset","mcp":"my-mcp"}
 ```
 
-`preset` is the active resolved preset (`null` when none). Wildcards, `!name`
-exclusions, host-declared names (including host-disabled entries), built-ins,
-and `disabled_mcps` entries never warn. A live profile refresh reuses the
-existing registry, so the check runs again only on the next registry setup.
+`preset` is the active resolved preset (`null` when none). This includes
+marketplace agents customized with an explicit `agents.<runtime-name>.mcps`
+list. Wildcards, `!name` exclusions, host-declared names (including
+host-disabled entries), built-ins, and `disabled_mcps` entries never warn. A
+live profile refresh reuses the existing registry, so the check runs again only
+on the next registry setup.
 
 The v2 host replays MCP transforms in registration order, so Slim sees only the
 inventory configured up to its own snapshot; a name added by a later plugin is
