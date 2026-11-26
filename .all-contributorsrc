@@ -1388,6 +1388,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "vitornp",
+      "name": "Vitor de Moraes",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1016814?v=4",
+      "profile": "https://github.com/vitornp",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
