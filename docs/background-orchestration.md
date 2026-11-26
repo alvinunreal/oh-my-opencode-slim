@@ -65,8 +65,7 @@ verification scope, and keep it for follow-ups or corrections on that same
 deliverable and for an explicit resume. Whether work is independent is a
 semantic call, so Slim neither guesses it nor rewrites arguments. The host starts
 a fresh child when `sessionID` is absent and continues the exact child when it is
-present. The setting is off by default and only reaches new sessions, which keep
-their own frozen tool snapshot.
+present. The setting is off by default and is read when Slim loads.
 
 ## Native completion and continuation
 

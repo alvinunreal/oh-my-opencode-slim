@@ -143,8 +143,8 @@ re-armed on restart.
 `freshForIndependentWork` appends one guideline to the native v2 `subagent` tool
 description. It never inspects or rewrites delegation arguments: the host starts
 a fresh child when `sessionID` is omitted and continues the exact child when it
-is present, so explicit resume keeps working. Existing sessions keep their
-frozen tool snapshot.
+is present, so explicit resume keeps working. Reload the plugin after changing
+this setting; starting a new session alone does not reload it.
 
 Observer is disabled by default. Removing it from `disabled_agents` enables the
 agent; configure a model that accepts images. When `image_routing` is omitted,
