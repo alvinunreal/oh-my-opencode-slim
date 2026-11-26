@@ -119,6 +119,7 @@ active, or as an explicit veto against a nearer layer enabling that feature.
 | `backgroundJobs.mode` | `"native"` | `native` registers Slim task controls; `off` registers none. Both use native execution |
 | `sessionPresetRouting` | Follows task mode | Independently enable persisted per-session inference bindings; `native` defaults on, `off` defaults off |
 | `replaceBuiltinSubagents` | `true` | Hide undeclared native `general`/`explore`; `false` keeps their host configuration |
+| `freshForIndependentWork` | `false` | Native v2 `subagent` guidance: omit `sessionID` for a new deliverable, investigation, or verification scope; keep it for same-deliverable follow-ups and explicit resumes |
 | `tui` | `true` | Enable all Slim TUI surfaces and server-side sidebar recording |
 | `sidebar` | `true` | Sidebar and its state only; other TUI features remain enabled |
 | `compactSidebar` | `true` | Compact rather than expanded sidebar layout |
@@ -138,6 +139,12 @@ active, or as an explicit veto against a nearer layer enabling that feature.
 questions that permit custom responses, never permissions or closed-choice
 requests. Restart the TUI after changing it; an already-open question is not
 re-armed on restart.
+
+`freshForIndependentWork` appends one guideline to the native v2 `subagent` tool
+description. It never inspects or rewrites delegation arguments: the host starts
+a fresh child when `sessionID` is omitted and continues the exact child when it
+is present, so explicit resume keeps working. Existing sessions keep their
+frozen tool snapshot.
 
 Observer is disabled by default. Removing it from `disabled_agents` enables the
 agent; configure a model that accepts images. When `image_routing` is omitted,

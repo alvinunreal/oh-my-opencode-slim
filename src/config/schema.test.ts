@@ -925,6 +925,18 @@ describe('PluginConfigSchema marketplace (root kill switch)', () => {
   });
 });
 
+describe('PluginConfigSchema freshForIndependentWork', () => {
+  it('is unset by default and accepts an explicit opt-in', () => {
+    expect(
+      PluginConfigSchema.parse({}).freshForIndependentWork,
+    ).toBeUndefined();
+    expect(
+      PluginConfigSchema.parse({ freshForIndependentWork: true })
+        .freshForIndependentWork,
+    ).toBe(true);
+  });
+});
+
 describe('PluginConfigSchema backgroundJobs', () => {
   let warnSpy: Mock<typeof console.warn>;
 

@@ -41,6 +41,7 @@ import { RuntimeConfig } from '../config/runtime';
 import { acquireMarketplaceLease } from '../marketplace/lease';
 import { MarketplaceStore } from '../marketplace/store';
 import { flushLoggerForTesting } from '../utils/logger';
+import { FRESH_DELEGATION_POLICY } from './fresh-delegation';
 import { compilePermissionPolicy } from './permissions';
 import { createV2Setup } from './setup';
 import type { V2Context, V2PermissionRule } from './types';
@@ -4733,6 +4734,47 @@ describe('createV2Setup e2e', () => {
         });
         expect(options).toEqual(expected);
       }
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('fresh delegation is off by default and leaves the native subagent description untouched', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        backgroundJobs: { mode: 'off' },
+      }),
+    );
+    const { ctx, nativeSubagent } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(nativeSubagent.description).toBe('Native subagent');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('fresh delegation appends fresh-child guidance without wrapping or rewriting delegation', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        backgroundJobs: { mode: 'off' },
+        freshForIndependentWork: true,
+      }),
+    );
+    const { ctx, nativeSubagent } = makeMockV2Context(projectDir);
+    const originalExecute = nativeSubagent.execute;
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(nativeSubagent.description).toBe(
+        `Native subagent\n\n${FRESH_DELEGATION_POLICY}`,
+      );
+      // The policy is guidance only: the host executor is untouched, so an
+      // explicit resume still reaches native delegation unchanged.
+      expect(nativeSubagent.execute).toBe(originalExecute);
     } finally {
       await cleanup();
     }
