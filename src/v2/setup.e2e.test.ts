@@ -53,6 +53,8 @@ type CapturedTool = {
 
 interface MockCalls {
   agentUpdates: Array<{ id: string }>;
+  /** Latest projected draft per agent id, for permission assertions. */
+  agentDrafts: Map<string, Record<string, unknown>>;
   agentRemoves: string[];
   agentDefault: string | undefined;
   agentTransformCount: number;
@@ -60,6 +62,8 @@ interface MockCalls {
   commandAdds: Array<{ name: string; definition: Record<string, unknown> }>;
   skillAdds: BundledSkillInfo[];
   mcpSets: Array<{ name: string; config: Record<string, unknown> }>;
+  /** Replay the registered MCP transform with the configured inventory. */
+  replayMcp: () => void;
   hooks: string[];
   toolBeforeCb:
     | ((event: Record<string, unknown> & { input: unknown }) => Promise<void>)
@@ -148,6 +152,9 @@ function createEventQueue() {
 function makeMockV2Context(
   projectDir: string,
   skillDraftHasAdd = true,
+  options: {
+    mcpInventory?: ReadonlyArray<readonly [string, Record<string, unknown>]>;
+  } = {},
 ): {
   ctx: V2Context;
   calls: MockCalls;
@@ -167,6 +174,7 @@ function makeMockV2Context(
   };
   const calls: MockCalls = {
     agentUpdates: [],
+    agentDrafts: new Map(),
     agentRemoves: [],
     agentDefault: undefined,
     agentTransformCount: 0,
@@ -174,6 +182,7 @@ function makeMockV2Context(
     commandAdds: [],
     skillAdds: [],
     mcpSets: [],
+    replayMcp: () => {},
     hooks: [],
     toolBeforeCb: undefined,
     toolAfterCb: undefined,
@@ -217,6 +226,7 @@ function makeMockV2Context(
     },
   };
   const events = createEventQueue();
+  const mcpInventory = options.mcpInventory ?? [];
   const reg = (label: string) => ({
     dispose: () => {
       calls.disposed.push(label);
@@ -342,15 +352,18 @@ function makeMockV2Context(
     },
     mcp: {
       transform: async (cb: (draft: unknown) => void) => {
-        cb({
-          list: () => [],
-          get: () => undefined,
+        const draft = () => ({
+          list: () => mcpInventory,
+          get: (name: string) =>
+            mcpInventory.find(([key]) => key === name)?.[1],
           set: (name: string, config: Record<string, unknown>) => {
             calls.mcpSets.push({ name, config });
           },
           update: () => {},
           remove: () => {},
         });
+        calls.replayMcp = () => cb(draft());
+        cb(draft());
         return reg('mcp.transform');
       },
       reload: async () => {},
@@ -374,10 +387,13 @@ function makeMockV2Context(
       },
       update: (id: string, fn: (agent: unknown) => void) => {
         calls.agentUpdates.push({ id });
-        fn({});
+        const draft: Record<string, unknown> = {};
+        fn(draft);
+        calls.agentDrafts.set(id, draft);
       },
       remove: (id: string) => {
         calls.agentRemoves.push(id);
+        calls.agentDrafts.delete(id);
       },
     });
   }
@@ -1869,6 +1885,110 @@ describe('createV2Setup e2e', () => {
       ]);
     } finally {
       await cleanup();
+    }
+  }, 20_000);
+
+  test('warns once for each unmatched explicit agent MCP in the Slim registry scope', async () => {
+    const configPath = path.join(
+      projectDir,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const pluginConfig = {
+      companion: { enabled: false },
+      preset: 'disk-choice',
+      disabled_mcps: ['gh_grep'],
+      presets: {
+        'disk-choice': {
+          explorer: { mcps: ['disk-typo'] },
+        },
+        'runtime-choice': {
+          explorer: { mcps: ['context7', 'runtime-typo', 'runtime-typo'] },
+          designer: { mcps: ['designer-typo'] },
+          fixer: {
+            mcps: ['host-tool', 'host-off', 'host-off-flag', 'gh_grep'],
+          },
+          oracle: { mcps: ['*', '!missing-negated'] },
+        },
+      },
+    };
+    await Bun.write(configPath, JSON.stringify(pluginConfig));
+    RuntimeConfig.reset(projectDir);
+    RuntimeConfig.init(
+      projectDir,
+      pluginConfig as never,
+      'v2',
+    ).setRuntimePreset('runtime-choice');
+
+    const mcpInventory: Array<[string, Record<string, unknown>]> = [
+      ['host-tool', { type: 'local', command: ['host-tool'] }],
+      ['host-off', { type: 'local', command: ['host-off'], enabled: false }],
+      [
+        'host-off-flag',
+        { type: 'local', command: ['host-off-flag'], disabled: true },
+      ],
+    ];
+    const expectedWarnings = [
+      { agent: 'explorer', preset: 'runtime-choice', mcp: 'runtime-typo' },
+      { agent: 'designer', preset: 'runtime-choice', mcp: 'designer-typo' },
+    ];
+    const warningRecords = () =>
+      readPluginLog()
+        .split('\n')
+        .filter((line) => line.includes('MCP not found in Slim agent registry'))
+        .map(
+          (line) =>
+            JSON.parse(line.slice(line.indexOf('{'))) as {
+              agent: string;
+              preset: string | null;
+              mcp: string;
+            },
+        );
+
+    const { ctx, calls } = makeMockV2Context(projectDir, true, {
+      mcpInventory,
+    });
+    const cleanupFirst = await createV2Setup()(ctx);
+    let cleanupSecond: (() => Promise<void>) | undefined;
+    let firstDisposed = false;
+    try {
+      await flushLoggerForTesting();
+      expect(warningRecords()).toEqual(expectedWarnings);
+      // The removed built-in is never injected by Slim, and host-owned keys
+      // stay untouched.
+      expect(calls.mcpSets.map((m) => m.name)).toEqual(['context7']);
+
+      const permissionActions = (agent: string) =>
+        (
+          (calls.agentDrafts.get(agent)?.permissions ?? []) as Array<
+            Record<string, unknown>
+          >
+        ).map((rule) => rule.action);
+      expect(permissionActions('explorer')).toContain('context7_*');
+      expect(permissionActions('explorer')).not.toContain('runtime-typo_*');
+      expect(permissionActions('designer')).not.toContain('designer-typo_*');
+
+      await ctx.agent.reload?.();
+      calls.replayMcp();
+      calls.replayMcp();
+      await flushLoggerForTesting();
+      expect(warningRecords()).toEqual(expectedWarnings);
+      await cleanupFirst();
+      firstDisposed = true;
+
+      // A new registry setup is a new diagnostic scope. A live profile
+      // refresh reuses the existing registry and does not re-run this check.
+      const second = makeMockV2Context(projectDir, true, { mcpInventory });
+      cleanupSecond = await createV2Setup()(second.ctx);
+      await flushLoggerForTesting();
+      expect(warningRecords()).toEqual([
+        ...expectedWarnings,
+        ...expectedWarnings,
+      ]);
+    } finally {
+      if (!firstDisposed) await cleanupFirst();
+      await cleanupSecond?.();
+      RuntimeConfig.reset(projectDir);
     }
   }, 20_000);
 
