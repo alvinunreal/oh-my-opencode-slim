@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { MultiplexerLayout } from '../../config/schema';
+import { createTimerHarness } from '../../utils/test-timers';
+import { PaneLifecycle } from '../client/lifecycle';
 
 type SpawnResult = {
   exited: Promise<number>;
@@ -310,7 +312,7 @@ describe('RexMultiplexer', () => {
         'http://server',
         '/repo',
       ),
-    ).toEqual({ success: false, error: 'hard' });
+    ).toEqual({ success: false, error: 'hard', creationUncertain: true });
     expect(splits()).toHaveLength(1);
     expect(closes()).toHaveLength(0);
   });
@@ -350,7 +352,7 @@ describe('RexMultiplexer', () => {
           'http://server',
           '/repo',
         ),
-      ).toEqual({ success: false, error: 'hard' });
+      ).toEqual({ success: false, error: 'hard', creationUncertain: true });
       expect(splits()).toHaveLength(1);
       expect(closes()).toHaveLength(0);
     }
@@ -372,9 +374,75 @@ describe('RexMultiplexer', () => {
         'http://server',
         '/repo',
       ),
-    ).toEqual({ success: false, error: 'hard' });
+    ).toEqual({ success: false, error: 'hard', creationUncertain: true });
     expect(splits()).toHaveLength(1);
   });
+
+  test.each(['malformed', 'lost'] as const)(
+    'lifecycle does not repeat a split after a %s response',
+    async (failure) => {
+      const createdBlocks: string[] = [];
+      installMock((command) => {
+        if (!command.includes('split')) return;
+        createdBlocks.push(`block:created-${createdBlocks.length}`);
+        return failure === 'lost'
+          ? {
+              ...createSpawnResult(),
+              stdout: async () => {
+                throw new Error('reply lost');
+              },
+            }
+          : createSpawnResult(0, 'malformed reply');
+      });
+      const { RexMultiplexer } = await importFreshRex();
+      const adapter = new RexMultiplexer();
+      const timers = createTimerHarness();
+      const statuses = new Map([['child', 'busy' as const]]);
+      const lifecycle = new PaneLifecycle(
+        {
+          clock: timers,
+          statusReader: { readStatus: async () => ({ statuses }) },
+          sessionListReader: {
+            listSessions: async () => ({ sessions: [{ sessionId: 'child' }] }),
+          },
+          adapterFactory: { create: () => adapter },
+          resolveServerUrl: () => ({ url: 'http://server' }),
+        },
+        {
+          directory: '/repo',
+          displayedSessionId: 'parent',
+          adapter: 'rex',
+          stableIdleMs: 10,
+          readiness: { maxAttempts: 1, retryDelayMs: 0 },
+        },
+        { log: logMock },
+      );
+      try {
+        const event = {
+          kind: 'created' as const,
+          sessionId: 'child',
+          parentSessionId: 'parent',
+          directory: '/repo',
+        };
+        await lifecycle.handleEvent(event);
+        for (let i = 0; i < 3; i++) {
+          await lifecycle.onReconnect();
+          await lifecycle.handleEvent({
+            ...event,
+            kind: 'status',
+            status: 'busy',
+          });
+          await lifecycle.handleEvent(event);
+        }
+        expect(createdBlocks).toHaveLength(1);
+        expect(splits()).toHaveLength(1);
+        expect(lifecycle.getPane('child')).toBeUndefined();
+      } finally {
+        await lifecycle.dispose();
+      }
+      expect(closes()).toHaveLength(0);
+    },
+  );
 
   test('refuses remote viewer credentials before splitting and never logs them', async () => {
     const { RexMultiplexer } = await importFreshRex();

@@ -12,6 +12,8 @@ export interface PaneResult {
   success: boolean;
   paneId?: string;
   orphanPaneId?: string;
+  /** Creation may have happened without a usable handle; never retry blindly. */
+  creationUncertain?: boolean;
   error?: 'unavailable' | 'not_found' | 'invalid_state' | 'hard';
 }
 

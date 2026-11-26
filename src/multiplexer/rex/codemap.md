@@ -27,7 +27,10 @@ busy rebuilds and reconciliation; Rex adds no parallel lifecycle.
   `OPENCODE_SERVER_PASSWORD !== undefined` refuses before mutation, including
   empty values. Credentials never enter viewer command text or labels.
 - Only a new non-anchor block ID from `block_ids` may become a pane handle;
-  a reported anchor must match. Splits are never retried after a failure.
+  a reported anchor must match. Dispatched splits with an uncertain
+  outcome set `PaneResult.creationUncertain`; the shared lifecycle retains
+  that child in its existing watch map and blocks automatic retries until
+  authoritative session removal. Preflight failures remain retryable.
   The in-memory `ownedBlocks` map scopes `rex block close --session <session>
   <block>` to this instance's returned blocks and their original sessions.
   Only exit 0 removes the handle; a failed close keeps it tracked.

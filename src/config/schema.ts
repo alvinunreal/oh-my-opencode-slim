@@ -650,7 +650,7 @@ function emitBackgroundJobsDiagnostic(message: string): void {
 }
 
 /** Issue #1291: drop invalid `backgroundJobs` keys instead of rejecting the whole config layer. */
-export function sanitizeBackgroundJobsConfig(value: unknown): unknown {
+function sanitizeBackgroundJobsConfig(value: unknown): unknown {
   if (value === undefined) return value;
   if (!isPlainConfigObject(value)) {
     emitBackgroundJobsDiagnostic(
@@ -675,8 +675,6 @@ export const BackgroundJobsConfigSchema = z.preprocess(
   sanitizeBackgroundJobsConfig,
   BackgroundJobsConfigStrictSchema,
 );
-
-export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
 
 /** Resolved background-task lifecycle mode. */
 export type BackgroundJobsMode = 'managed' | 'native' | 'off';

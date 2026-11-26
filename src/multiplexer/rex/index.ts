@@ -103,6 +103,7 @@ export class RexMultiplexer implements Multiplexer {
       buildViewCommand(sessionId, serverUrl, directory, options),
     );
     const [direction, ratio] = splitLayout(this.layout, this.mainPaneSize);
+    let dispatched = false;
     try {
       const proc = crossSpawn(
         [
@@ -131,24 +132,25 @@ export class RexMultiplexer implements Multiplexer {
         ],
         { stdout: 'pipe', stderr: 'ignore' },
       );
+      dispatched = true;
       const [exitCode, stdout] = await Promise.all([
         proc.exited,
         proc.stdout(),
       ]);
       if (exitCode !== 0) {
         log('[rex] spawnPane: split command failed', { exitCode });
-        return { success: false, error: 'hard' };
+        return { success: false, error: 'hard', creationUncertain: true };
       }
 
       const split = parseSplitResult(stdout);
       if (!split || split.anchor !== context.block) {
         log('[rex] spawnPane: invalid split response');
-        return { success: false, error: 'hard' };
+        return { success: false, error: 'hard', creationUncertain: true };
       }
       const paneId = split.blocks.find((block) => block !== context.block);
       if (!paneId || this.ownedBlocks.has(paneId)) {
         log('[rex] spawnPane: split response has no new block');
-        return { success: false, error: 'hard' };
+        return { success: false, error: 'hard', creationUncertain: true };
       }
 
       this.ownedBlocks.set(paneId, context.session);
@@ -160,7 +162,11 @@ export class RexMultiplexer implements Multiplexer {
       log('[rex] spawnPane: split failed', {
         error: error instanceof Error ? error.message : String(error),
       });
-      return { success: false, error: 'hard' };
+      return {
+        success: false,
+        error: 'hard',
+        ...(dispatched ? { creationUncertain: true } : {}),
+      };
     }
   }
 

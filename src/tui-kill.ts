@@ -15,7 +15,7 @@ import {
 import type { TimerSeam } from './utils/timer-seam';
 
 export const KILL_ALL_COMMAND_ID = 'omo.kill_all';
-export const KILL_ALL_STOP_NOTICE =
+const KILL_ALL_STOP_NOTICE =
   "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.";
 
 /**

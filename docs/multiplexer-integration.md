@@ -231,8 +231,12 @@ when the value is empty. No password is put in command text, argv or labels.
 Shared-service viewers do not need this transport. Crash-leftover sweeping
 is not implemented; close leftover Rex views manually.
 
-Failed or malformed split responses are not retried, because the split may
-already have happened. Any resulting untracked block needs manual cleanup.
+After a dispatched split times out or returns an unusable response, the
+client suppresses automatic splits for that child, including reconciliation
+and repeated busy events. Preflight failures remain retryable. This guard
+lasts for the client lifecycle until authoritative session removal; it does
+not discover or close an unknown block, and does not persist across client
+restarts. Any resulting untracked block needs manual cleanup.
 
 CLI reference: [automation](https://www.superlogical.com/rex/docs/automate/cli.md)
 and [commands](https://www.superlogical.com/rex/docs/reference/cli.md).
