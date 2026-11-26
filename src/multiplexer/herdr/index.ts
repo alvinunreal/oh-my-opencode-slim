@@ -58,6 +58,7 @@ interface DesktopRecoveryRecord {
   spaceId: string;
   tabId: string;
   createdAt: number;
+  kept?: boolean;
 }
 
 function isDesktopRecoveryRecord(
@@ -70,7 +71,8 @@ function isDesktopRecoveryRecord(
     typeof value.parentId === 'string' &&
     typeof value.title === 'string' &&
     typeof value.spaceId === 'string' &&
-    typeof value.tabId === 'string'
+    typeof value.tabId === 'string' &&
+    (value.kept === undefined || typeof value.kept === 'boolean')
   );
 }
 
@@ -133,6 +135,19 @@ interface DesktopOwnership {
   spaceId: string;
   tabId: string;
   spawnToken?: string;
+  kept?: boolean;
+}
+
+interface DesktopPlacement {
+  parentPane: string;
+  spaceId: string;
+  tabId: string;
+  direction: HerdrPaneDirection;
+}
+
+interface DesktopPaneAddress {
+  address: string;
+  pane: string;
 }
 
 interface PendingDesktopRollback {
@@ -216,6 +231,7 @@ export class HerdrMultiplexer implements Multiplexer {
         spaceId: ownership.spaceId,
         tabId: ownership.tabId,
         createdAt: Date.now(),
+        ...(ownership.kept === false ? { kept: false } : {}),
       });
       await writeDesktopRecoveryRecords(journalPath, records);
     } catch {
@@ -276,10 +292,13 @@ export class HerdrMultiplexer implements Multiplexer {
           spaceId: record.spaceId,
           tabId: record.tabId,
           spawnToken: record.spawnToken,
+          ...(record.kept === false ? { kept: false } : {}),
         };
         if (
           detail.address !== address ||
           !matchesDesktopOwnershipMarkers(detail, ownership) ||
+          (record.kept === false &&
+            !hasPendingOrExpectedPlacementLabels(detail, ownership)) ||
           !isSweepTitle(detail.labels.omosc)
         ) {
           continue;
@@ -715,127 +734,165 @@ export class HerdrMultiplexer implements Multiplexer {
     }
   }
 
-  async closePane(paneId: string): Promise<boolean> {
+  closePane(paneId: string): Promise<boolean> {
+    return this.closePaneImpl(paneId, false);
+  }
+
+  private async closePaneImpl(
+    paneId: string,
+    topologyLocked: boolean,
+  ): Promise<boolean> {
     if (process.env.HC_TERMINAL_ID?.trim()) {
-      const currentParent = process.env.HC_TERMINAL_ID.trim();
-      const ownership =
-        this.desktopOwnedTerminals.get(paneId) ??
-        this.desktopSweepCandidates.get(paneId);
-      if (!ownership) return false;
-      const hc = await findBinary('hc');
-      if (!hc) return false;
-      const terminalRead = await readCoreTerminalWithRetry(
-        hc,
-        paneId,
-        this.desktopAdoptionWait,
-      );
-      if (terminalRead.kind === 'missing') {
-        this.desktopOwnedTerminals.delete(paneId);
-        this.desktopSweepCandidates.delete(paneId);
-        return true;
-      }
-      if (terminalRead.kind !== 'found') return false;
-      const terminal = terminalRead.terminal;
-      if (
-        ownership.parentId !== currentParent ||
-        !matchesDesktopTerminal(terminal, paneId, ownership)
-      ) {
-        log('[herdr] desktop close refused terminal with changed ownership', {
-          paneId,
-          parentMatches: terminal.parent === currentParent,
-          ownerMatches: terminal.labels['omosc.owner'] === currentParent,
-          sessionMarkerMatches: terminal.labels.omosc === ownership.title,
-          spawnTokenMatches:
-            ownership.spawnToken === undefined ||
-            terminal.labels['omosc.spawn'] === ownership.spawnToken,
+      let release: (() => void) | undefined;
+      if (!topologyLocked) {
+        const prev = this.spawnMutex;
+        this.spawnMutex = new Promise<void>((resolve) => {
+          release = resolve;
         });
-        return false;
+        await prev;
       }
       try {
-        const operation = terminal.state === 'finished' ? 'rm' : 'kill';
-        const proc = crossSpawn([hc, operation, paneId, '--json'], {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
-        const [exitCode, stdout, stderr] = await Promise.all([
-          proc.exited,
-          proc.stdout(),
-          proc.stderr(),
-        ]);
-        if (exitCode !== 0) {
-          log(`[herdr] desktop close: hc ${operation} failed`, {
+        const currentParent = process.env.HC_TERMINAL_ID.trim();
+        const ownership =
+          this.desktopOwnedTerminals.get(paneId) ??
+          this.desktopSweepCandidates.get(paneId);
+        if (!ownership) return false;
+        const hc = await findBinary('hc');
+        if (!hc) return false;
+        const terminalRead = await readCoreTerminalWithRetry(
+          hc,
+          paneId,
+          this.desktopAdoptionWait,
+        );
+        if (terminalRead.kind === 'missing') {
+          this.desktopOwnedTerminals.delete(paneId);
+          this.desktopSweepCandidates.delete(paneId);
+          await this.resizeDesktopAfterClose(ownership, currentParent, paneId);
+          return true;
+        }
+        if (terminalRead.kind !== 'found') return false;
+        const terminal = terminalRead.terminal;
+        if (
+          ownership.parentId !== currentParent ||
+          !matchesOwnedDesktopTerminal(terminal, paneId, ownership)
+        ) {
+          log('[herdr] desktop close refused terminal with changed ownership', {
             paneId,
-            exitCode,
-            stdout: stdout.trim(),
-            stderr: stderr.trim(),
+            parentMatches: terminal.parent === currentParent,
+            ownerMatches: terminal.labels['omosc.owner'] === currentParent,
+            sessionMarkerMatches: terminal.labels.omosc === ownership.title,
+            spawnTokenMatches:
+              ownership.spawnToken === undefined ||
+              terminal.labels['omosc.spawn'] === ownership.spawnToken,
           });
           return false;
         }
-        if (operation === 'kill') {
-          const afterKill = await readCoreTerminalResult(hc, paneId);
-          if (afterKill.kind === 'missing') {
-            this.desktopOwnedTerminals.delete(paneId);
-            this.desktopSweepCandidates.delete(paneId);
-            return true;
-          }
-          if (afterKill.kind !== 'found') {
-            log('[herdr] desktop close: killed terminal state is unverified', {
-              paneId,
-              readKind: afterKill.kind,
-              detail: afterKill.message,
-            });
-            return false;
-          }
-          if (!matchesDesktopTerminal(afterKill.terminal, paneId, ownership)) {
-            log(
-              '[herdr] desktop close: terminal ownership changed after kill',
-              {
-                paneId,
-              },
-            );
-            return false;
-          }
-          if (afterKill.terminal.state !== 'finished') {
-            log('[herdr] desktop close: hc kill has not finished the program', {
-              paneId,
-              state: afterKill.terminal.state,
-            });
-            return false;
-          }
-        }
-
-        const remove =
-          operation === 'kill'
-            ? crossSpawn([hc, 'rm', paneId, '--json'], {
-                stdout: 'pipe',
-                stderr: 'pipe',
-              })
-            : null;
-        if (remove) {
-          const [removeExit, removeStdout, removeStderr] = await Promise.all([
-            remove.exited,
-            remove.stdout(),
-            remove.stderr(),
+        try {
+          const operation = terminal.state === 'finished' ? 'rm' : 'kill';
+          const proc = crossSpawn([hc, operation, paneId, '--json'], {
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+          const [exitCode, stdout, stderr] = await Promise.all([
+            proc.exited,
+            proc.stdout(),
+            proc.stderr(),
           ]);
-          if (removeExit !== 0) {
-            log('[herdr] desktop close: hc rm failed', {
+          if (exitCode !== 0) {
+            log(`[herdr] desktop close: hc ${operation} failed`, {
               paneId,
-              exitCode: removeExit,
-              stdout: removeStdout.trim(),
-              stderr: removeStderr.trim(),
+              exitCode,
+              stdout: stdout.trim(),
+              stderr: stderr.trim(),
             });
             return false;
           }
+          if (operation === 'kill') {
+            const afterKill = await readCoreTerminalResult(hc, paneId);
+            if (afterKill.kind === 'missing') {
+              this.desktopOwnedTerminals.delete(paneId);
+              this.desktopSweepCandidates.delete(paneId);
+              await this.resizeDesktopAfterClose(
+                ownership,
+                currentParent,
+                paneId,
+              );
+              return true;
+            }
+            if (afterKill.kind !== 'found') {
+              log(
+                '[herdr] desktop close: killed terminal state is unverified',
+                {
+                  paneId,
+                  readKind: afterKill.kind,
+                  detail: afterKill.message,
+                },
+              );
+              return false;
+            }
+            if (
+              !matchesOwnedDesktopTerminal(
+                afterKill.terminal,
+                paneId,
+                ownership,
+              )
+            ) {
+              log(
+                '[herdr] desktop close: terminal ownership changed after kill',
+                {
+                  paneId,
+                },
+              );
+              return false;
+            }
+            if (afterKill.terminal.state !== 'finished') {
+              log(
+                '[herdr] desktop close: hc kill has not finished the program',
+                {
+                  paneId,
+                  state: afterKill.terminal.state,
+                },
+              );
+              return false;
+            }
+          }
+
+          const remove =
+            operation === 'kill'
+              ? crossSpawn([hc, 'rm', paneId, '--json'], {
+                  stdout: 'pipe',
+                  stderr: 'pipe',
+                })
+              : null;
+          if (remove) {
+            const [removeExit, removeStdout, removeStderr] = await Promise.all([
+              remove.exited,
+              remove.stdout(),
+              remove.stderr(),
+            ]);
+            if (removeExit !== 0) {
+              log('[herdr] desktop close: hc rm failed', {
+                paneId,
+                exitCode: removeExit,
+                stdout: removeStdout.trim(),
+                stderr: removeStderr.trim(),
+              });
+              return false;
+            }
+          }
+          this.desktopOwnedTerminals.delete(paneId);
+          this.desktopSweepCandidates.delete(paneId);
+          await this.resizeDesktopAfterClose(ownership, currentParent, paneId);
+          return true;
+        } catch (error) {
+          log('[herdr] desktop close: hc operation threw', {
+            paneId,
+            error: String(error),
+          });
+          return false;
         }
-        this.desktopOwnedTerminals.delete(paneId);
-        this.desktopSweepCandidates.delete(paneId);
-        return true;
-      } catch (error) {
-        log('[herdr] desktop close: hc operation threw', {
-          paneId,
-          error: String(error),
-        });
-        return false;
+      } finally {
+        release?.();
       }
     }
 
@@ -1025,6 +1082,33 @@ export class HerdrMultiplexer implements Multiplexer {
     return this.binaryPath;
   }
 
+  private async resizeDesktopAfterClose(
+    ownership: DesktopOwnership,
+    parentId: string,
+    removedAddress: string,
+  ): Promise<void> {
+    if (!this.equalizePanes || !this.isMainLayout()) return;
+    const [app, hc] = await Promise.all([
+      findBinary('herdr-app'),
+      findBinary('hc'),
+    ]);
+    if (!app || !hc) return;
+    const capabilities = await readDesktopCapabilities(app);
+    if (!capabilities.sizeManaged) return;
+    await sizeManagedDesktopTab(
+      app,
+      hc,
+      parentId,
+      ownership.spaceId,
+      ownership.tabId,
+      this.desktopOwnedTerminals,
+      this.layout,
+      this.mainPaneSize,
+      removedAddress,
+      this.desktopAdoptionWait,
+    );
+  }
+
   private async spawnDesktopTerminal(
     parentId: string,
     sessionId: string,
@@ -1070,6 +1154,12 @@ export class HerdrMultiplexer implements Multiplexer {
     const ownTitle = `omosc:${process.pid}:${sessionId}`;
     let parentSpaceId = '';
     let parentTabId = '';
+    let explicitPlacement: DesktopPlacement | null = null;
+    let expectedPaneId: string | undefined;
+    let keepSupported = false;
+    let sizeSupported = false;
+    let explicitPlacementActive = false;
+    let explicitKeepComplete = false;
     try {
       const parentRead = await readCoreTerminalWithRetry(
         hc,
@@ -1114,6 +1204,23 @@ export class HerdrMultiplexer implements Multiplexer {
         spawnToken,
       };
 
+      const capabilities = await readDesktopCapabilities(app);
+      keepSupported = capabilities.keep;
+      sizeSupported = capabilities.sizeManaged;
+      if (keepSupported && sizeSupported && this.isMainLayout()) {
+        explicitPlacement = await findDesktopPlacement(
+          app,
+          hc,
+          parent,
+          this.desktopOwnedTerminals,
+          this.stackDirection,
+          this.paneDirection,
+        );
+      }
+      const useExplicitPlacement = explicitPlacement !== null;
+      explicitPlacementActive = useExplicitPlacement;
+      if (useExplicitPlacement) ownership.kept = false;
+
       const executable = resolveHostOpencodeBinary() ?? 'opencode';
       const viewerOptions = {
         ...options,
@@ -1142,10 +1249,14 @@ export class HerdrMultiplexer implements Multiplexer {
           ...(viewerNeedsPaneCwd(viewerOptions) ? ['--cwd', directory] : []),
           '--name',
           name,
-          '--label',
-          `herdr.space=${spaceId}`,
-          '--label',
-          `herdr.tab=${tabId}`,
+          ...(!useExplicitPlacement
+            ? [
+                '--label',
+                `herdr.space=${spaceId}`,
+                '--label',
+                `herdr.tab=${tabId}`,
+              ]
+            : []),
           '--label',
           `omosc.owner=${parentId}`,
           '--label',
@@ -1216,7 +1327,11 @@ export class HerdrMultiplexer implements Multiplexer {
         createdRead.kind === 'found' ? createdRead.terminal : null;
       if (
         !created ||
-        !matchesDesktopTerminal(created, address, ownership) ||
+        !matchesDesktopOwnershipMarkers(created, ownership) ||
+        (useExplicitPlacement &&
+          !hasPendingOrExpectedPlacementLabels(created, ownership)) ||
+        (!useExplicitPlacement &&
+          !matchesDesktopTerminal(created, address, ownership)) ||
         created.state !== 'live'
       ) {
         log('[herdr] desktop spawn: child ownership or state not verified', {
@@ -1231,15 +1346,107 @@ export class HerdrMultiplexer implements Multiplexer {
       }
       this.desktopOwnedTerminals.set(address, ownership);
 
+      if (useExplicitPlacement && explicitPlacement) {
+        const childVisibleToApp = await waitForDesktopSubAgent(
+          app,
+          address,
+          parentId,
+          explicitPlacement.spaceId,
+          explicitPlacement.tabId,
+          this.desktopAdoptionWait,
+        );
+        if (!childVisibleToApp) {
+          log('[herdr] desktop spawn: child is absent from parent sub_agents', {
+            paneId: address,
+          });
+          const rollback = await this.rollbackDesktopTerminal(
+            address,
+            ownership,
+          );
+          if (rollback !== true) {
+            this.pendingDesktopRollbacks.set(sessionId, {
+              hc,
+              ownership,
+              address,
+            });
+          } else {
+            await this.resolveUnverifiedDesktopSpawn(spawnToken);
+          }
+          return { success: false, error: 'hard' };
+        }
+        const currentParent = await readCoreTerminalWithRetry(
+          hc,
+          parentId,
+          this.desktopAdoptionWait,
+        );
+        if (
+          currentParent.kind !== 'found' ||
+          currentParent.terminal.address !== parentId ||
+          currentParent.terminal.state !== 'live' ||
+          currentParent.terminal.labels['herdr.space'] !== spaceId ||
+          currentParent.terminal.labels['herdr.tab'] !== tabId
+        ) {
+          log('[herdr] desktop spawn: parent changed before terminal.keep', {
+            parentId,
+            readKind: currentParent.kind,
+          });
+          const rollback = await this.rollbackDesktopTerminal(
+            address,
+            ownership,
+          );
+          if (rollback !== true) {
+            this.pendingDesktopRollbacks.set(sessionId, {
+              hc,
+              ownership,
+              address,
+            });
+          } else {
+            await this.resolveUnverifiedDesktopSpawn(spawnToken);
+          }
+          return { success: false, error: 'hard' };
+        }
+        const keptPane = await runDesktopKeep(
+          app,
+          {
+            terminal: address,
+            place: explicitPlacement.direction,
+            pane: explicitPlacement.parentPane,
+            focus: false,
+          },
+          explicitPlacement.tabId,
+        );
+        if (!keptPane) {
+          log('[herdr] desktop spawn: terminal.keep failed', {
+            paneId: address,
+          });
+          const rollback = await this.rollbackDesktopTerminal(
+            address,
+            ownership,
+          );
+          if (rollback !== true) {
+            this.pendingDesktopRollbacks.set(sessionId, {
+              hc,
+              ownership,
+              address,
+            });
+          } else {
+            await this.resolveUnverifiedDesktopSpawn(spawnToken);
+          }
+          return { success: false, error: 'hard' };
+        }
+        expectedPaneId = keptPane;
+      }
+
       const paneVisible = await waitForDesktopPane(
         app,
         hc,
         address,
         ownership,
         this.desktopAdoptionWait,
+        expectedPaneId,
       );
       if (!paneVisible) {
-        log('[herdr] desktop spawn: Herdr did not adopt the labeled child', {
+        log('[herdr] desktop spawn: Herdr did not place the child', {
           paneId: address,
           spaceId,
           tabId,
@@ -1258,6 +1465,29 @@ export class HerdrMultiplexer implements Multiplexer {
         }
         return { success: false, error: 'hard' };
       }
+      if (useExplicitPlacement) {
+        ownership.kept = true;
+        explicitKeepComplete = true;
+        this.desktopOwnedTerminals.set(address, ownership);
+      }
+
+      if (
+        this.equalizePanes &&
+        useExplicitPlacement &&
+        explicitPlacement &&
+        sizeSupported
+      ) {
+        await sizeManagedDesktopTab(
+          app,
+          hc,
+          parentId,
+          explicitPlacement.spaceId,
+          explicitPlacement.tabId,
+          this.desktopOwnedTerminals,
+          this.layout,
+          this.mainPaneSize,
+        );
+      }
 
       await this.resolveUnverifiedDesktopSpawn(spawnToken);
       return { success: true, paneId: address };
@@ -1270,6 +1500,7 @@ export class HerdrMultiplexer implements Multiplexer {
           spaceId: parentSpaceId,
           tabId: parentTabId,
           spawnToken,
+          ...(explicitPlacementActive ? { kept: explicitKeepComplete } : {}),
         };
         const rollback = await this.rollbackDesktopTerminal(
           spawnedAddress,
@@ -1291,6 +1522,7 @@ export class HerdrMultiplexer implements Multiplexer {
           spaceId: parentSpaceId,
           tabId: parentTabId,
           spawnToken,
+          ...(explicitPlacementActive ? { kept: explicitKeepComplete } : {}),
         };
         await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
       }
@@ -1426,7 +1658,7 @@ export class HerdrMultiplexer implements Multiplexer {
           ...ownership,
         });
       }
-      const closed = await this.closePane(address);
+      const closed = await this.closePaneImpl(address, true);
       if (closed) {
         log('[herdr] desktop rollback: owned terminal closed', {
           paneId: address,
@@ -1531,6 +1763,35 @@ function matchesDesktopTerminal(
     terminal.labels['herdr.space'] === ownership.spaceId &&
     terminal.labels['herdr.tab'] === ownership.tabId &&
     matchesDesktopOwnershipMarkers(terminal, ownership)
+  );
+}
+
+function matchesOwnedDesktopTerminal(
+  terminal: CoreTerminal,
+  address: string,
+  ownership: DesktopOwnership,
+): boolean {
+  return (
+    terminal.address === address &&
+    matchesDesktopOwnershipMarkers(terminal, ownership) &&
+    (ownership.kept === false
+      ? hasPendingOrExpectedPlacementLabels(terminal, ownership)
+      : matchesDesktopTerminal(terminal, address, ownership))
+  );
+}
+
+function hasPendingOrExpectedPlacementLabels(
+  terminal: CoreTerminal,
+  ownership: DesktopOwnership,
+): boolean {
+  const spaceId = terminal.labels['herdr.space'];
+  const tabId = terminal.labels['herdr.tab'];
+  const labelsPending = [spaceId, tabId].every(
+    (label) => label === undefined || label.length === 0,
+  );
+  return (
+    labelsPending ||
+    (spaceId === ownership.spaceId && tabId === ownership.tabId)
   );
 }
 
@@ -1769,6 +2030,13 @@ function cliErrorKind(output: string): string | null {
 interface DesktopListedTerminal {
   terminal: string;
   pane?: unknown;
+  subAgents?: string[];
+}
+
+interface DesktopListedTerminalInput {
+  terminal: string;
+  pane?: unknown;
+  sub_agents?: unknown;
 }
 
 interface DesktopListedTab {
@@ -1781,12 +2049,259 @@ interface DesktopListedSpace {
   tabs: DesktopListedTab[];
 }
 
+async function readDesktopCapabilities(app: string): Promise<{
+  keep: boolean;
+  sizeManaged: boolean;
+}> {
+  try {
+    const proc = crossSpawn([app, 'commands'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, stdout] = await Promise.all([proc.exited, proc.stdout()]);
+    if (exitCode !== 0) return { keep: false, sizeManaged: false };
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) return { keep: false, sizeManaged: false };
+    const commands = parsed.filter(
+      (entry): entry is Record<string, unknown> =>
+        isRecord(entry) && typeof entry.name === 'string',
+    );
+    if (commands.length !== parsed.length) {
+      return { keep: false, sizeManaged: false };
+    }
+    const keep = commands.find((command) => command.name === 'terminal.keep');
+    const sizeManaged = commands.some(
+      (command) => command.name === 'pane.size_managed',
+    );
+    const args = keep ? (keep.args ?? keep.arguments ?? keep.parameters) : null;
+    const argumentNames = Array.isArray(args)
+      ? args.flatMap((entry) => {
+          if (typeof entry === 'string') return [entry];
+          return isRecord(entry) && typeof entry.name === 'string'
+            ? [entry.name]
+            : [];
+        })
+      : isRecord(args)
+        ? Object.keys(args)
+        : [];
+    return {
+      keep: argumentNames.includes('pane') && argumentNames.includes('focus'),
+      sizeManaged,
+    };
+  } catch {
+    return { keep: false, sizeManaged: false };
+  }
+}
+
+async function findDesktopPlacement(
+  app: string,
+  hc: string,
+  parent: CoreTerminal,
+  owned: Map<string, DesktopOwnership>,
+  stackDirection: HerdrPaneDirection,
+  paneDirection: HerdrPaneDirection,
+): Promise<DesktopPlacement | null> {
+  const spaceId = parent.labels['herdr.space'];
+  const tabId = parent.labels['herdr.tab'];
+  if (!spaceId || !tabId) return null;
+  const listed = await readDesktopSpaces(app);
+  if (listed.kind !== 'found') return null;
+  const tab = listed.spaces
+    .find((space) => space.id === spaceId)
+    ?.tabs.find((entry) => entry.id === tabId);
+  if (!tab?.terminals.length) return null;
+  const parentTerminal = tab.terminals.find(
+    (terminal) => terminal.terminal === parent.address,
+  );
+  if (!parentTerminal?.subAgents) return null;
+
+  const members: DesktopPaneAddress[] = [];
+  for (const terminal of tab.terminals) {
+    if (typeof terminal.pane !== 'string' || terminal.pane.length === 0) {
+      return null;
+    }
+    const detail =
+      terminal.terminal === parent.address
+        ? { kind: 'found' as const, terminal: parent }
+        : await readCoreTerminalResult(hc, terminal.terminal);
+    if (detail.kind !== 'found') return null;
+    if (terminal.terminal === parent.address) {
+      if (detail.terminal.address !== parent.address) return null;
+    } else {
+      const ownership = owned.get(terminal.terminal);
+      if (
+        !ownership ||
+        ownership.parentId !== parent.address ||
+        !matchesDesktopTerminal(detail.terminal, terminal.terminal, ownership)
+      ) {
+        return null;
+      }
+    }
+    members.push({ address: terminal.terminal, pane: terminal.pane });
+  }
+  const parentPane = members.find(
+    (member) => member.address === parent.address,
+  );
+  if (!parentPane) return null;
+  const existingAgent = members.find(
+    (member) => member.address !== parent.address,
+  );
+  return {
+    parentPane: existingAgent?.pane ?? parentPane.pane,
+    spaceId,
+    tabId,
+    direction: existingAgent ? stackDirection : paneDirection,
+  };
+}
+
+async function runDesktopKeep(
+  app: string,
+  args: {
+    terminal: string;
+    place: HerdrPaneDirection;
+    pane: string;
+    focus: false;
+  },
+  expectedTab: string,
+): Promise<string | null> {
+  try {
+    const proc = crossSpawn(
+      [app, 'do', 'terminal.keep', JSON.stringify(args)],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      proc.stdout(),
+      proc.stderr(),
+    ]);
+    if (exitCode !== 0) {
+      log('[herdr] desktop terminal.keep failed', {
+        exitCode,
+        stderr: stderr.trim(),
+      });
+      return null;
+    }
+    const response: unknown = JSON.parse(stdout);
+    if (
+      isRecord(response) &&
+      response.pending === true &&
+      typeof response.pane === 'string' &&
+      response.pane.length > 0 &&
+      response.tab === expectedTab
+    ) {
+      return response.pane;
+    }
+    return null;
+  } catch (error) {
+    log('[herdr] desktop terminal.keep failed', { error: String(error) });
+    return null;
+  }
+}
+
+async function waitForDesktopSubAgent(
+  app: string,
+  childAddress: string,
+  parentAddress: string,
+  spaceId: string,
+  tabId: string,
+  wait: DesktopAdoptionWait,
+): Promise<boolean> {
+  for (let retry = 0; retry <= DESKTOP_ADOPTION_RETRIES; retry += 1) {
+    const listed = await readDesktopSpaces(app);
+    if (listed.kind === 'invalid-shape') return false;
+    if (listed.kind === 'found') {
+      const parent = listed.spaces
+        .find((space) => space.id === spaceId)
+        ?.tabs.find((tab) => tab.id === tabId)
+        ?.terminals.find((terminal) => terminal.terminal === parentAddress);
+      if (parent?.subAgents?.includes(childAddress)) return true;
+    }
+    if (retry === DESKTOP_ADOPTION_RETRIES) return false;
+    await wait(DESKTOP_ADOPTION_POLL_MS);
+  }
+  return false;
+}
+
+async function sizeManagedDesktopTab(
+  app: string,
+  hc: string,
+  parentId: string,
+  spaceId: string,
+  tabId: string,
+  owned: Map<string, DesktopOwnership>,
+  layout: MultiplexerLayout,
+  mainPercent: number,
+  removedAddress?: string,
+  wait?: DesktopAdoptionWait,
+): Promise<void> {
+  let tab: DesktopListedTab | undefined;
+  for (let retry = 0; ; retry += 1) {
+    const listed = await readDesktopSpaces(app);
+    if (listed.kind !== 'found') return;
+    tab = listed.spaces
+      .find((space) => space.id === spaceId)
+      ?.tabs.find((entry) => entry.id === tabId);
+    const removedStillListed =
+      removedAddress &&
+      tab?.terminals.some((entry) => entry.terminal === removedAddress);
+    if (!removedStillListed) break;
+    if (retry === DESKTOP_ADOPTION_RETRIES) return;
+    await (wait ?? defaultDesktopAdoptionWait)(DESKTOP_ADOPTION_POLL_MS);
+  }
+  if (!tab?.terminals.length) return;
+  const main = tab.terminals.find((entry) => entry.terminal === parentId);
+  if (!main || typeof main.pane !== 'string' || !main.pane) return;
+  const agents: string[] = [];
+  for (const terminal of tab.terminals) {
+    if (terminal.terminal === parentId) continue;
+    const ownership = owned.get(terminal.terminal);
+    if (!ownership || ownership.parentId !== parentId) return;
+    const detail = await readCoreTerminalResult(hc, terminal.terminal);
+    if (
+      detail.kind !== 'found' ||
+      !matchesDesktopTerminal(detail.terminal, terminal.terminal, ownership) ||
+      typeof terminal.pane !== 'string' ||
+      !terminal.pane
+    ) {
+      return;
+    }
+    agents.push(terminal.pane);
+  }
+  if (!agents.length) return;
+  try {
+    const proc = crossSpawn(
+      [
+        app,
+        'do',
+        'pane.size_managed',
+        JSON.stringify({
+          main: main.pane,
+          agents,
+          direction: layout === 'main-vertical' ? 'right' : 'down',
+          main_percent: mainPercent,
+        }),
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    const [exitCode, stderr] = await Promise.all([proc.exited, proc.stderr()]);
+    if (exitCode !== 0) {
+      log('[herdr] desktop managed sizing failed', {
+        exitCode,
+        stderr: stderr.trim(),
+      });
+    }
+  } catch (error) {
+    log('[herdr] desktop managed sizing failed', { error: String(error) });
+  }
+}
+
 async function waitForDesktopPane(
   app: string,
   hc: string,
   address: string,
   ownership: DesktopOwnership,
   wait: DesktopAdoptionWait,
+  expectedPane?: string,
 ): Promise<boolean> {
   for (let retry = 0; retry <= DESKTOP_ADOPTION_RETRIES; retry += 1) {
     const terminalRead = await readCoreTerminalResult(hc, address);
@@ -1815,11 +2330,36 @@ async function waitForDesktopPane(
       continue;
     }
     const terminal = terminalRead.terminal;
-    if (!matchesDesktopTerminal(terminal, address, ownership)) {
+    if (
+      expectedPane
+        ? !matchesDesktopOwnershipMarkers(terminal, ownership)
+        : !matchesDesktopTerminal(terminal, address, ownership)
+    ) {
       log('[herdr] desktop spawn: child ownership changed during adoption', {
         paneId: address,
       });
       return false;
+    }
+    if (expectedPane) {
+      const spaceLabel = terminal.labels['herdr.space'];
+      const tabLabel = terminal.labels['herdr.tab'];
+      const labelsPending =
+        (!spaceLabel || spaceLabel.length === 0) &&
+        (!tabLabel || tabLabel.length === 0);
+      if (labelsPending) {
+        if (retry === DESKTOP_ADOPTION_RETRIES) return false;
+        await wait(DESKTOP_ADOPTION_POLL_MS);
+        continue;
+      }
+      if (spaceLabel !== ownership.spaceId || tabLabel !== ownership.tabId) {
+        log(
+          '[herdr] desktop spawn: child received conflicting placement labels',
+          {
+            paneId: address,
+          },
+        );
+        return false;
+      }
     }
     if (terminal.state !== 'live') {
       log('[herdr] desktop spawn: viewer exited before pane adoption', {
@@ -1843,12 +2383,33 @@ async function waitForDesktopPane(
                 (terminal) =>
                   terminal.terminal === address &&
                   typeof terminal.pane === 'string' &&
-                  terminal.pane.length > 0,
+                  terminal.pane.length > 0 &&
+                  (!expectedPane || terminal.pane === expectedPane),
               ),
           ),
       ) === true
     ) {
       return true;
+    }
+    if (
+      expectedPane &&
+      spacesRead.kind === 'found' &&
+      spacesRead.spaces.some((space) =>
+        space.tabs.some((tab) =>
+          tab.terminals.some(
+            (terminal) =>
+              terminal.terminal === address &&
+              typeof terminal.pane === 'string' &&
+              terminal.pane !== expectedPane,
+          ),
+        ),
+      )
+    ) {
+      log('[herdr] desktop spawn: pane id differs from terminal.keep result', {
+        paneId: address,
+        expectedPane,
+      });
+      return false;
     }
     if (retry === DESKTOP_ADOPTION_RETRIES) return false;
     if (spacesRead.kind === 'temporary-error') {
@@ -1933,16 +2494,41 @@ async function readDesktopSpaces(app: string): Promise<DesktopSpacesRead> {
           });
           return { kind: 'invalid-shape', message: 'invalid terminals array' };
         }
-        const terminals = tab.terminals.filter(
-          (terminal): terminal is DesktopListedTerminal =>
+        const listedTerminals = tab.terminals.filter(
+          (terminal): terminal is DesktopListedTerminalInput =>
             isRecord(terminal) && typeof terminal.terminal === 'string',
         );
-        if (terminals.length !== tab.terminals.length) {
+        if (listedTerminals.length !== tab.terminals.length) {
           log('[herdr] desktop pane scan found an invalid terminal entry', {
             spaceId: space.id,
             tabId: tab.id,
           });
           return { kind: 'invalid-shape', message: 'invalid terminal entry' };
+        }
+        const terminals: DesktopListedTerminal[] = [];
+        for (const terminal of listedTerminals) {
+          if (
+            'sub_agents' in terminal &&
+            (!Array.isArray(terminal.sub_agents) ||
+              terminal.sub_agents.some((id) => typeof id !== 'string'))
+          ) {
+            log('[herdr] desktop pane scan found invalid sub_agents shape', {
+              spaceId: space.id,
+              tabId: tab.id,
+              terminal: terminal.terminal,
+            });
+            return {
+              kind: 'invalid-shape',
+              message: 'invalid sub_agents array',
+            };
+          }
+          terminals.push({
+            terminal: terminal.terminal,
+            ...(terminal.pane !== undefined ? { pane: terminal.pane } : {}),
+            ...(Array.isArray(terminal.sub_agents)
+              ? { subAgents: terminal.sub_agents as string[] }
+              : {}),
+          });
         }
         tabs.push({ id: tab.id, terminals });
       }

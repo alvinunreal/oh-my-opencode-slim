@@ -181,11 +181,18 @@ parent, owner, and session marker before it closes a candidate. The sweep lists
 terminals scoped to the current parent and verifies each terminal's parent and
 `omosc` marker. Herdr checks core events every 500 ms, so the adapter polls for
 pane adoption up to three times at that interval. If the current
-terminal lacks Herdr's space/tab labels, it creates no pane. Windows and remote
-v2 viewer credentials
-are not supported by this MVP, so those modes fail closed.
-Herdr Desktop ignores `multiplexer.layout` and `main_pane_size`. The adapter
-does not resize or rebalance other panes.
+terminal lacks Herdr's space/tab labels, it creates no pane. When
+`herdr-app commands` advertises both `terminal.keep` and
+`pane.size_managed`, the adapter starts an unlabelled child and asks Herdr to
+place it beside the parent or an owned agent pane. It uses that path only when
+the target tab contains the parent and terminals this client owns. Otherwise,
+it keeps the labelled automatic-adoption path. After placement, it applies the
+configured `main-*` layout and `main_pane_size` when `equalize_panes` is enabled.
+Before `terminal.keep`, it waits for the parent terminal's `sub_agents` cache to
+list the child. It then waits for the returned pane ID and both placement labels
+to match before reporting success.
+Windows and remote v2 viewer credentials are not supported by this MVP, so
+those modes fail closed.
 
 **Legacy Herdr** — detected via `HERDR_PANE_ID`. Herdr's own OpenCode lifecycle
 integration can be installed separately:

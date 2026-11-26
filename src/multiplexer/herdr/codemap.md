@@ -10,18 +10,21 @@
 ## Design
 
 - `HerdrMultiplexer` in `index.ts` implements `Multiplexer`.
-- In Herdr Desktop, `HC_TERMINAL_ID` selects the herdr-core route: it verifies
-  the exact parent terminal's `herdr.space` and `herdr.tab` labels, starts a
-  child with `hc run --parent --no-notify`, and copies those Herdr labels so
-  the app adopts it in the parent's tab. A unique `omosc.spawn` label lets
-  cleanup find malformed `hc run` results and close a terminal only after
-  parent and ownership checks. The adapter polls for the pane at the
-  500 ms core-event cadence, up to three times. Both `hc kill` and `hc rm`
-  require a tracked `omosc.owner`/`omosc` marker plus a fresh parent check;
-  sweep queries the
-  owner label and verifies the exact parent. The old `HERDR_PANE_ID` route
-  remains unchanged.
-- `layout-equalize.ts` speaks Herdr's socket API one request per connection: `layout.export` returns the tab's binary split tree, then `layout.set_split_ratio` rewrites every agent-only node to `span(first)/(span(first)+span(second))`. `paneSpan` counts panes along the split axis (perpendicular splits take the larger side), and the walker recurses through — but never rewrites — any split whose subtree contains the main pane. Zoomed tabs are skipped; the whole step is best-effort (logged, never thrown). On Windows the socket is a named pipe, so `herdrSocketEndpoint` maps `HERDR_SOCKET_PATH` onto `\\.\pipe\<path>` before connecting.
+- In Herdr Desktop, `HC_TERMINAL_ID` selects the herdr-core route. It verifies
+  the exact parent terminal's `herdr.space` and `herdr.tab` labels. When the
+  app advertises both `terminal.keep` and `pane.size_managed`, and the target
+  tab contains only the parent and terminals this client owns, the adapter
+  launches an unlabelled child and places it beside the parent or agent pane.
+  Otherwise it copies the Herdr labels and keeps automatic adoption. A unique
+  `omosc.spawn` label lets cleanup find malformed `hc run` results and close a
+  terminal only after parent and ownership checks. Before keep, it waits for
+  the parent's `sub_agents` cache to list the child, then verifies the returned
+  pane ID and placement labels. Both waits use the 500 ms core-event cadence
+  and have a three-retry limit. Both `hc kill`
+  and `hc rm` require a tracked `omosc.owner`/`omosc` marker plus a fresh parent
+  check; sweep queries the owner label and verifies the exact parent. The old
+  `HERDR_PANE_ID` route remains unchanged.
+- `layout-equalize.ts` handles legacy Herdr splits through its socket API. Desktop sizing uses `pane.size_managed` only for a verified tab that contains the parent and explicitly owned child terminals; the native handler validates topology before changing ratios. Both paths honor `multiplexer.equalize_panes` and `main_pane_size`.
 - `findBinary` is a `which/where herdr` probe with a cached path; `HERDR_BIN_PATH` overrides the probe when set.
 - `isInsideSession` checks `HC_TERMINAL_ID` or `HERDR_PANE_ID`. Desktop availability probes `hc` and `herdr-app`; the legacy route probes `herdr` and honors `HERDR_BIN_PATH`.
 - `spawnPane` requires the parent pane from `HERDR_PANE_ID` (no `--current` fallback; missing → fail closed), splits it in the configured direction, renames the new pane to the agent description, and runs `opencode attach` via `herdr pane run`. Pane IDs are parsed from the newline-delimited JSON of `herdr pane split` (`result.pane.pane_id`). `pane run` types the command into the pane's own shell, so on Windows the command position is quoted for PowerShell (`& '<path>'`), and every quoted value uses PowerShell escaping (an embedded apostrophe, ASCII or typographic U+2018–U+201B, is doubled) because the POSIX `'\''` form is unreadable to PowerShell.
