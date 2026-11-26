@@ -212,9 +212,9 @@ This allows consumers to import directly from `src/config` rather than individua
 - `default_preset`: Default preset name to use
 
 ### MultiplexerConfig
-- `type`: "auto", "tmux", "zellij", "herdr", "cmux", "kitty", "wezterm", "orca", or "none" (client-local admission)
+- `type`: "auto", "tmux", "zellij", "herdr", "rex", "cmux-tui", "kitty", "wezterm", "orca", or "none" (client-local admission)
 - `layout`: Pane layout (main-horizontal, main-vertical, tiled, even-horizontal, even-vertical)
-- `main_pane_size`: Percentage for main pane (20-80), tmux main-* layouts and the first WezTerm main-* split
+- `main_pane_size`: Percentage for main pane (20-80), tmux main-* layouts, first legacy Herdr/WezTerm main-* split, and each Rex main-* parent split (new pane gets `100 - main_pane_size`)
 - `zellij_pane_mode`: removed; stripped with a warning by the loader
 
 ## Environment Variable Support

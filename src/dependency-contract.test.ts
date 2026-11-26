@@ -90,6 +90,7 @@ const ADAPTER_DIRS = [
   'tmux',
   'zellij',
   'herdr',
+  'rex',
   'kitty',
   'cmux',
   'wezterm',

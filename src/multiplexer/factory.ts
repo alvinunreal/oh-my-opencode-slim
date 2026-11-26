@@ -8,6 +8,7 @@ import { CmuxMultiplexer } from './cmux';
 import { HerdrMultiplexer } from './herdr';
 import { KittyMultiplexer } from './kitty';
 import { OrcaMultiplexer } from './orca';
+import { RexMultiplexer, resolveRexContext } from './rex';
 import { TmuxMultiplexer } from './tmux';
 import type { Multiplexer } from './types';
 import { WeztermMultiplexer } from './wezterm';
@@ -49,6 +50,10 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
         equalizePanes: config.equalize_panes,
       });
       actualType = 'herdr';
+      break;
+    case 'rex':
+      multiplexer = new RexMultiplexer(config.layout, config.main_pane_size);
+      actualType = 'rex';
       break;
     case 'cmux-tui':
       multiplexer = new CmuxMultiplexer(config.layout, config.main_pane_size, {
@@ -99,6 +104,9 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
           { equalizePanes: config.equalize_panes },
         );
         actualType = 'herdr';
+      } else if (resolveRexContext(process.env)) {
+        multiplexer = new RexMultiplexer(config.layout, config.main_pane_size);
+        actualType = 'rex';
       } else if (process.env.KITTY_WINDOW_ID) {
         multiplexer = new KittyMultiplexer(
           config.layout,

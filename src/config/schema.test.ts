@@ -530,6 +530,7 @@ describe('MultiplexerConfigSchema', () => {
       'tmux',
       'zellij',
       'herdr',
+      'rex',
       'kitty',
       'wezterm',
       'orca',
@@ -1114,6 +1115,11 @@ describe('PluginConfigSchema removed legacy keys', () => {
     expect(parsed.type).toBe('orca');
     expect(parsed.layout).toBe('main-horizontal');
     expect(parsed.main_pane_size).toBe(40);
+  });
+
+  it('accepts rex and lists it in the invalid multiplexer value message', () => {
+    expect(MultiplexerConfigSchema.parse({ type: 'rex' }).type).toBe('rex');
+    expect(MULTIPLEXER_INVALID_VALUE_MESSAGE).toContain('rex');
   });
 
   it('lists orca in the invalid multiplexer value message', () => {

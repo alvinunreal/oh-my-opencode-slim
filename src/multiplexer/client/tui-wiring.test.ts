@@ -694,6 +694,11 @@ describe('client adapter detection (FR-9)', () => {
     expect(detectClientAdapter({ ZELLIJ_PANE_ID: '3' })).toBe('zellij');
     expect(detectClientAdapter({ HERDR_PANE_ID: 'wP:p4' })).toBe('herdr');
     expect(detectClientAdapter({ HC_TERMINAL_ID: 't7' })).toBe('herdr');
+    expect(detectClientAdapter({ REX_SESSION: 's1', REX_BLOCK: 'b1' })).toBe(
+      'rex',
+    );
+    expect(detectClientAdapter({ REX_SESSION: 's1' })).toBeNull();
+    expect(detectClientAdapter({ REX_BLOCK: 'b1' })).toBeNull();
     expect(detectClientAdapter({ KITTY_WINDOW_ID: '4' })).toBe('kitty');
     expect(detectClientAdapter({ WEZTERM_PANE: '7' })).toBe('wezterm');
     expect(detectClientAdapter({ ORCA_TERMINAL_HANDLE: 'pane-1' })).toBe(
@@ -726,6 +731,37 @@ describe('client adapter detection (FR-9)', () => {
         ZELLIJ_PANE_ID: '3',
       }),
     ).toBe('zellij');
+  });
+
+  test('prefers nested tmux and zellij over Rex, and Rex over kitty', () => {
+    expect(
+      detectClientAdapter({
+        REX_SESSION: 's1',
+        REX_BLOCK: 'b1',
+        KITTY_WINDOW_ID: '4',
+      }),
+    ).toBe('rex');
+    expect(
+      detectClientAdapter({
+        REX_SESSION: 's1',
+        REX_BLOCK: 'b1',
+        TMUX_PANE: '%1',
+      }),
+    ).toBe('tmux');
+    expect(
+      detectClientAdapter({
+        REX_SESSION: 's1',
+        REX_BLOCK: 'b1',
+        ZELLIJ_PANE_ID: '3',
+      }),
+    ).toBe('zellij');
+    expect(
+      detectClientAdapter({
+        REX_SESSION: 's1',
+        REX_BLOCK: 'b1',
+        HERDR_PANE_ID: 'wP:p4',
+      }),
+    ).toBe('herdr');
   });
 
   test('prefers wezterm over orca when both host handles are present', () => {
@@ -999,6 +1035,37 @@ describe('TUI pane wiring admission variants', () => {
 
     expect(h.createdTypes).toEqual(['orca']);
     expect(h.adapters.get('orca')?.spawns).toHaveLength(1);
+    await h.wiring.dispose();
+  });
+
+  test('explicit rex in a Rex client is admitted and creates the pane', async () => {
+    const h = await createHarness({
+      env: { REX_SESSION: 'session-1', REX_BLOCK: 'block-1' },
+      config: defaultConfig('rex'),
+    });
+
+    expect(h.wiring.admission).toMatchObject({ enabled: true, adapter: 'rex' });
+    expect(
+      resolveAnchoredTarget('rex', {
+        REX_SESSION: 'session-1',
+        REX_BLOCK: 'block-1',
+      }),
+    ).toBe('block-1');
+    h.bus.emit('session.created', createdEvent());
+    await flush();
+    expect(h.createdTypes).toEqual(['rex']);
+    expect(h.adapters.get('rex')?.spawns).toHaveLength(1);
+    await h.wiring.dispose();
+  });
+
+  test('auto admission does not treat a partial Rex environment as a multiplexer', async () => {
+    const h = await createHarness({ env: { REX_SESSION: 'session-1' } });
+
+    expect(h.wiring.admission).toMatchObject({
+      enabled: false,
+      reason: 'admission-unavailable',
+    });
+    expect(h.createdTypes).toEqual([]);
     await h.wiring.dispose();
   });
 
@@ -1527,6 +1594,15 @@ describe('serverUrl reflection and probe (D3)', () => {
     expect(
       resolveAnchoredTarget('orca', { ORCA_TERMINAL_HANDLE: 'pane-1' }),
     ).toBe('pane-1');
+    expect(
+      resolveAnchoredTarget('rex', {
+        REX_SESSION: 'session-1',
+        REX_BLOCK: 'block-1',
+      }),
+    ).toBe('block-1');
+    expect(
+      resolveAnchoredTarget('rex', { REX_SESSION: 'session-1' }),
+    ).toBeNull();
     expect(
       resolveAnchoredTarget('cmux-tui', { CMUX_TUI_TERMINAL_ID: 'term_1' }),
     ).toBe('term_1');

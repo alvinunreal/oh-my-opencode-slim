@@ -110,6 +110,11 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
    └─ Deletion racing spawn closes pane right after registration
 
 3. Adapter failure → adapter-not-found / adapter-hard / adapter-unavailable
+   An opt-in creationUncertain result retains the child in the existing
+   closed-watch map and gates all automatic creation paths. Uncertain
+   entries are not evicted by the retryable-watch limit; deletion or an
+   authoritative absent-child snapshot removes them. No unknown pane is
+   closed and no state persists across client restart.
 ```
 
 ### Pane Close and Rebuild Flow

@@ -72,7 +72,7 @@ export const UNKNOWN_ANCHORED_TARGET = 'unknown';
 /** Why a pane was closed; only idle closes stay eligible for rebuild (FR-11). */
 type PaneCloseReason = 'idle' | 'deleted' | 'backfill-gone';
 
-/** Upper bound on the closed-but-watched set, keeping memory flat. */
+/** Upper bound on retryable closed watches; unresolved splits cannot be evicted. */
 const MAX_REMEMBERED_CLOSED = 64;
 const CLOSE_RETRY_MS = 1_000;
 const MAX_CLOSE_ATTEMPTS = 4;
@@ -99,8 +99,8 @@ export class PaneLifecycle {
   >();
   private readonly closeAttempts = new Map<string, number>();
   /**
-   * Children this client closed on stable idle (not terminal deletion), kept
-   * so a later busy event can rebuild them (FR-11). The entry carries the
+   * Closed/failed children eligible for rebuild (FR-11), plus uncertain
+   * creations that must stay gated until authoritative removal. Carries the
    * subagent type observed at creation so the rebuild produces the same
    * display name as the first spawn.
    */
@@ -111,6 +111,8 @@ export class PaneLifecycle {
       directory: string;
       subagentType?: string;
       historical: boolean;
+      /** A dispatched split may exist but has no safely usable handle. */
+      creationUncertain: boolean;
     }
   >();
   /**
@@ -375,6 +377,7 @@ export class PaneLifecycle {
           this.closedWatch.delete(childSessionId);
           continue;
         }
+        if (watched.creationUncertain) continue;
         const live = statuses?.get(childSessionId);
         if (live !== 'busy' && live !== 'retry') continue;
         if (!this.isDisplayed(parentSessionId, directory)) break;
@@ -532,7 +535,7 @@ export class PaneLifecycle {
   ): Promise<void> {
     if (event.status !== 'busy' && event.status !== 'retry') return;
     const watched = this.closedWatch.get(event.sessionId);
-    if (watched === undefined) return;
+    if (watched === undefined || watched.creationUncertain) return;
 
     await this.rebuildWatched(
       event.sessionId,
@@ -600,7 +603,8 @@ export class PaneLifecycle {
       this.disposed ||
       this.panes.has(childSessionId) ||
       this.spawnsInFlight.has(childSessionId) ||
-      this.deletedSessions.has(childSessionId)
+      this.deletedSessions.has(childSessionId) ||
+      this.closedWatch.get(childSessionId)?.creationUncertain
     )
       return;
 
@@ -675,6 +679,20 @@ export class PaneLifecycle {
         subagentType,
       );
       if (!result.success || !result.paneId) {
+        if (
+          result.creationUncertain &&
+          !this.disposed &&
+          !this.deletedSessions.has(childSessionId)
+        ) {
+          this.rememberClosed(
+            childSessionId,
+            parentSessionId,
+            directory,
+            subagentType,
+            false,
+            true,
+          );
+        }
         logNoPane(this.logger, this.adapterFailureReason(result.error), {
           childSessionId,
           parentSessionId,
@@ -1014,26 +1032,34 @@ export class PaneLifecycle {
     this.idleTimers.set(childSessionId, { handle, provisional });
   }
 
-  /** Remembers an idle-closed child for FR-11 rebuilds, bounded in size. */
+  /** Remembers retryable children and unresolved creation outcomes. */
   private rememberClosed(
     childSessionId: string,
     parentSessionId: string,
     directory: string,
     subagentType?: string,
     historical = false,
+    creationUncertain = false,
   ): void {
+    if (this.closedWatch.get(childSessionId)?.creationUncertain) return;
     this.closedWatch.delete(childSessionId);
     this.closedWatch.set(childSessionId, {
       parentSessionId,
       directory,
       subagentType,
       historical,
+      creationUncertain,
     });
     this.ports.onChildTracked?.(childSessionId, directory);
-    if (this.closedWatch.size <= MAX_REMEMBERED_CLOSED) return;
+    // Only retryable watches may be evicted. Losing an uncertain outcome
+    // would turn a later event into a blind split. Authoritative session
+    // removal clears these entries through the existing reconciliation path.
+    const retryable = [...this.closedWatch].filter(
+      ([, watch]) => !watch.creationUncertain,
+    );
+    if (retryable.length <= MAX_REMEMBERED_CLOSED) return;
     const oldest =
-      [...this.closedWatch].find(([, watch]) => watch.historical)?.[0] ??
-      this.closedWatch.keys().next().value;
+      retryable.find(([, watch]) => watch.historical)?.[0] ?? retryable[0]?.[0];
     if (oldest !== undefined) this.closedWatch.delete(oldest);
   }
 }

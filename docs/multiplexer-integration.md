@@ -1,6 +1,6 @@
 # Multiplexer Integration Guide
 
-Use tmux, Zellij, Herdr, cmux-tui, kitty, WezTerm, or Orca to watch subagents
+Use tmux, Zellij, Herdr, Superlogical Rex, cmux-tui, kitty, WezTerm, or Orca to watch subagents
 work in live views (split panes, or for cmux-tui sibling tabs) anchored to the
 TUI client that displays their parent session.
 
@@ -21,6 +21,7 @@ TUI client that displays their parent session.
 - [Overview](#overview)
 - [Deployment Modes](#deployment-modes)
 - [Quick Start](#quick-start)
+  - [Rex setup and limitations](#rex)
 - [Configuration](#configuration)
 - [Layouts](#layouts)
 - [Per-client view semantics](#per-client-view-semantics)
@@ -52,7 +53,7 @@ How it works:
    variables.
 2. Every **TUI client** that displays the parent session subscribes to the
    host session events and, for each eligible child session, creates a view in
-   **the pane it is itself running in** — a split pane (tmux / Zellij / Herdr /
+   **the pane it is itself running in** — a split pane (tmux / Zellij / Herdr / Rex /
    kitty / WezTerm / Orca), or a sibling tab appended to that pane (cmux-tui).
 3. The pane runs a view command for an existing child session:
 
@@ -85,7 +86,7 @@ Pane behavior is fixed per host mode:
 | `opencode run` | no TUI host | — | No pane (child runs in the host's native background mode) |
 | `opencode mini` | TUI host does not load plugins | — | No pane |
 | shared background service (default) | TUI client of the user-level shared service | discovered via the service registration | Supported: default viewers run `opencode mini --session <id>` and rediscover the same service; `viewer: "tui"` uses `opencode --session <id> <dir>` |
-| `--server <url>` | TUI client of an explicit server | `--server` URL | Supported: default viewers run `opencode mini --server <url> --session <id>`; `viewer: "tui"` uses `opencode --server <url> --session <id> <dir>`. The `OPENCODE_PASSWORD` secret comes from the parent process environment and is injected at pane creation through the multiplexer's spawn-time environment mechanism (see [Secret handling](#known-limitations)), never through the viewer's command line |
+| `--server <url>` | TUI client of an explicit server | `--server` URL | Supported where the adapter can transport any required credentials: default viewers run `opencode mini --server <url> --session <id>`; `viewer: "tui"` uses `opencode --server <url> --session <id> <dir>`. The `OPENCODE_PASSWORD` secret comes from the parent process environment and is injected at pane creation through the multiplexer's spawn-time environment mechanism (see [Secret handling](#known-limitations)), never through the viewer's command line. Rex refuses password-bearing viewers before splitting |
 | `--standalone` | private stdio server (no registration, random password, exits with the parent) | ephemeral loopback | **Not supported**: fail-closed + exactly one diagnostic; `/subagent` navigates to the latest child session, or use the host's native subagent picker |
 
 If the v2 shared service cannot initially resolve its URL, pane setup retries
@@ -137,7 +138,7 @@ only enables panes when the configured adapter matches what it detects.
 **Single machine (shared service):**
 
 ```bash
-tmux            # or zellij / herdr / kitty / wezterm / orca / cmux-tui
+tmux            # or launch OpenCode inside Zellij / Herdr / Rex / kitty / WezTerm / Orca / cmux-tui
 opencode
 ```
 
@@ -214,6 +215,39 @@ failures are logged and never affect pane creation or closure. Set
 `multiplexer.equalize_panes` to `false` to skip this step and keep manual pane
 sizes.
 
+#### Rex
+
+**Superlogical Rex** — set `multiplexer.type` to `"rex"` or `"auto"` and
+start OpenCode inside a Rex terminal with `rex` on the client's `PATH`.
+Both `REX_SESSION` and `REX_BLOCK` must be non-empty after trimming; the
+adapter never falls back to the focused block. Detection order is cmux-tui →
+tmux → Zellij → Herdr → Rex → kitty → WezTerm → Orca, so nested tmux/Zellij
+sessions take precedence over Rex.
+
+Each viewer is a split of the original parent block, explicitly addressed
+with `--session` and `--block`, with `--focus=false`, `--cwd` and `--label`.
+The shared viewer helpers select full TUI or mini for the host version.
+Layout settings select a direction and new-pane percentage only; there is no
+dedicated agent area, equalization or layout rebalancing. Close targets the
+returned child block in its original Rex session.
+
+Windows is unsupported. Rex's CLI has no spawn-time environment injection:
+v2 remote viewers with a defined `viewerPassword`, and v1 viewers with a
+defined `OPENCODE_SERVER_PASSWORD`, fail closed before any split, including
+when the value is empty. No password is put in command text, argv or labels.
+Shared-service viewers do not need this transport. Crash-leftover sweeping
+is not implemented; close leftover Rex views manually.
+
+After a dispatched split times out or returns an unusable response, the
+client suppresses automatic splits for that child, including reconciliation
+and repeated busy events. Preflight failures remain retryable. This guard
+lasts for the client lifecycle until authoritative session removal; it does
+not discover or close an unknown block, and does not persist across client
+restarts. Any resulting untracked block needs manual cleanup.
+
+CLI reference: [automation](https://www.superlogical.com/rex/docs/automate/cli.md)
+and [commands](https://www.superlogical.com/rex/docs/reference/cli.md).
+
 **cmux-tui** — the `cmux-tui` value of `multiplexer.type` selects the
 cross-platform Rust TUI (`cmux.protocol/2`; `cmux-tui-v0.13.3+` is the
 practical floor). Detected via `CMUX_TUI_SOCKET` (preferred) or legacy
@@ -268,8 +302,8 @@ created, and verify with `kitten @ ls` from a normal shell.
 drives it through the `wezterm` CLI installed next to the running GUI
 (falling back to `PATH`), always with `--no-auto-start` so a stale socket
 fails instead of starting a background mux server. Verify with
-`wezterm cli list` from a normal shell. Auto detection checks WezTerm last,
-so tmux or Zellij running inside WezTerm still wins. Native Windows is
+`wezterm cli list` from a normal shell. Auto detection checks WezTerm after
+Rex and kitty, so tmux or Zellij running inside WezTerm still wins. Native Windows is
 unsupported and untested: without `SHELL` the adapter reports unavailable,
 and an MSYS-style `SHELL` may not resolve for native `wezterm.exe`.
 
@@ -281,7 +315,7 @@ splits of that anchor terminal (`orca terminal split --terminal <handle>
 --direction … --command …`), and the returned split handle is the pane id the
 plugin closes with (`orca terminal close --terminal <handle>`). Verify with
 `orca terminal list --json`. Auto detection checks Orca after cmux, tmux,
-Zellij, Herdr and kitty, so a nested session inside an Orca terminal still
+Zellij, Herdr, Rex, kitty and WezTerm, so a nested session inside an Orca terminal still
 wins. Two limits: `terminal split` has no `--cwd`, so panes open at the
 worktree path, and Windows hosts are refused (see
 [Known Limitations](#known-limitations)).
@@ -326,13 +360,13 @@ child session; only its pane is skipped. Restart the OpenCode TUI after changing
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"cmux-tui"`, `"kitty"`, `"wezterm"`, `"orca"`, or `"none"` |
+| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"rex"`, `"cmux-tui"`, `"kitty"`, `"wezterm"`, `"orca"`, or `"none"` |
 | `agents` | string[] | `["*"]` | Which subagents get a pane, using the same `"*"` / `"!name"` list syntax as agent `skills` and `mcps`: `["*"]` opens a pane for every child, `["*", "!explorer"]` opens one for every child except the excluded names, and `["oracle", "fixer"]` opens one only for the listed names. A filtered-out subagent still runs normally — only its pane is skipped |
-| `layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression; cmux-tui has no layout expression and ignores it, and Orca only maps it to a split direction at spawn time (see [Layouts](#layouts)). Herdr builds an agent area for both `main-*` layouts and re-equalizes only its agent panes after each spawn/close |
-| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts, and by Herdr (first agent-area split of the `main-*` layouts; the agent panes in the resulting column or row are then re-equalized after each spawn/close while the main pane keeps this share) and WezTerm (first agent split); ignored by Zellij, kitty, cmux-tui, and Orca |
+| `layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression; cmux-tui ignores it, Orca uses split direction only, and Rex uses split direction and percentage (see [Layouts](#layouts)). Legacy Herdr builds an agent area for both `main-*` layouts and re-equalizes only its agent panes after each spawn/close; Herdr Desktop ignores it |
+| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts, and by legacy Herdr (first agent-area split; subsequent agent panes are re-equalized), WezTerm (first agent split), and Rex (each parent split uses `100 - main_pane_size` as the new-pane percentage); ignored by Herdr Desktop, Zellij, kitty, cmux-tui, and Orca |
 | `equalize_panes` | boolean | `true` | Herdr only: after each spawn and agent-pane close, equalize the `main-*` agent panes and re-assert the main pane's `main_pane_size` share through Herdr's socket API. Set `false` to keep manual pane sizes |
 | `cmux_tui_binary` | string | omitted | Explicit path to the cmux-tui binary. When omitted, the client resolves `cmux-tui` first, then `cmux`, on `PATH` |
-| `viewer` | string | `"mini"` | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. The mini viewer runs `opencode mini` without a positional directory, so adapters pin the cwd (herdr/kitty/WezTerm natively, tmux `-c`, Zellij `--cwd`, cmux-tui and Orca `cd` for POSIX shells and fish). Changing the value takes effect on the next opencode start |
+| `viewer` | string | v1 `"tui"`, v2 `"mini"` | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v2 the mini viewer runs `opencode mini` without a positional directory, so adapters pin the cwd (Herdr/Rex/kitty/WezTerm natively, tmux `-c`, Zellij `--cwd`, cmux-tui and Orca `cd` for POSIX shells and fish). Changing the value takes effect on the next opencode start |
 
 All `multiplexer.*` values are read by the client only. An invalid value
 disables pane management (fail-closed) with a once-per-process diagnostic.
@@ -341,12 +375,28 @@ disables pane management (fail-closed) with a once-per-process diagnostic.
 
 The five standard layouts and their fixed mapping per adapter. Where an adapter
 has no exact equivalent, it uses the nearest native expression (marked
-*approximate*); `main_pane_size` applies to tmux `main-*` layouts and the first
-Herdr/WezTerm agent split. Herdr then equalizes only its agent panes after each
+*approximate*); `main_pane_size` applies to tmux `main-*` layouts, each Rex
+`main-*` parent split, and the first legacy Herdr/WezTerm agent split.
+Legacy Herdr then equalizes only its agent panes after each
 spawn/close, leaving the main pane's share intact, while cmux-tui ignores both
 settings entirely (its child views are tabs inside the parent pane, not panes in
 a layout) and Orca ignores `main_pane_size` (it has no layout primitives, so the
 layout only picks the split direction at spawn time).
+
+Rex also approximates layouts with individual parent-block splits:
+
+| Layout | Rex direction | New-pane percentage (`--ratio`) |
+|--------|---------------|--------------------------------|
+| `main-vertical` | `right` | `100 - main_pane_size` |
+| `main-horizontal` | `below` | `100 - main_pane_size` |
+| `even-horizontal` | `right` | `50` |
+| `even-vertical` | `below` | `50` |
+| `tiled` | `right` | `50` |
+
+Every Rex child splits the original parent again. These percentages apply to
+that split, not to the entire window; repeated splits can shrink the parent.
+Neither `even-*` nor `tiled` promises a globally even or tiled layout.
+`equalize_panes` has no effect on Rex.
 
 | Layout | tmux | Zellij | Herdr | kitty | WezTerm | Orca | cmux-tui |
 |--------|------|--------|-------|-------|---------|------|------|
@@ -483,8 +533,9 @@ produces one `multiplexer.host-unsupported` record per process; shared and
 
 ## Known Limitations
 
-- **Crash-leftover views are best-effort.** Views carry adapter-specific
-  metadata encoding the owner pid and child session id (except WezTerm, whose
+- **Crash-leftover views are best-effort.** Rex has no crash-leftover sweep,
+  even though its blocks are labeled; close its leftovers manually. Other
+  views carry adapter-specific metadata encoding the owner pid and child session id (except WezTerm, whose
   CLI cannot set a pane title, and Orca, which sets none because the pane's
   shell auto-titles over it — neither adapter's leftovers are ever swept). tmux /
   Zellij / Herdr / kitty write it into the pane title (`omosc:<owner pid>:<child session id>`);
@@ -578,7 +629,9 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   the process environment its shell commands use (the last client to open it
   wins), and unread/attention state is shared across clients by the server.
 - **Secret handling (v2 `--server` hosts).** The viewer authenticates with
-  `OPENCODE_PASSWORD`. Where the multiplexer CLI has a spawn-time env flag,
+  `OPENCODE_PASSWORD`. [Rex](#rex) refuses password-bearing viewers before
+  mutation because it has no supported credential transport. For other adapters,
+  where the multiplexer CLI has a spawn-time env flag,
   the secret is injected there and exists only in the new pane's environment:
   tmux `split-window -e OPENCODE_PASSWORD=…`, herdr `pane split --env …`,
   kitty `kitten @ launch --env …`. Zellij, WezTerm, cmux-tui, and Orca have no
@@ -654,7 +707,7 @@ removed or changed behavior, with migration guidance:
 **Panes open in the wrong place**
 
 - The view is always created in the pane that displays the parent session at
-  spawn time: a split for tmux / Zellij / Herdr / kitty / WezTerm / Orca, or a
+  spawn time: a split for tmux / Zellij / Herdr / Rex / kitty / WezTerm / Orca, or a
   tab inside that
   pane for cmux-tui. Move the parent session to another pane/multiplexer first;
   a rebuild after the child turns busy follows the new position.
@@ -666,6 +719,16 @@ removed or changed behavior, with migration guidance:
 - Older than 0.44.1 → the adapter reports unavailable and is skipped.
 - In a crowded tab, the directed split is retried without a direction; the pane
   still lands in the same tab.
+
+**Rex**
+
+- Both `REX_SESSION` and `REX_BLOCK` must be non-empty, and `rex` must be on
+  the TUI client's `PATH`. Explicit `"rex"` still requires admission to match;
+  a nested tmux or Zellij session wins detection.
+- No pane with a password-bearing viewer or on Windows is intentional; see
+  [Rex](#rex). The child still runs on the server.
+- Repeated splits shrinking the parent are expected; Rex does not build
+  Herdr's agent area or rebalance the layout.
 
 **Kitty**
 
@@ -707,7 +770,7 @@ removed or changed behavior, with migration guidance:
 
 **Leftover views after a client crash**
 
-- The sweep is best-effort, and WezTerm and Orca panes are never swept (close
+- The sweep is best-effort, and Rex, WezTerm and Orca panes are never swept (close
   them manually). For older tmux / Zellij / Herdr / kitty it often cannot
   match a pane whose title was rewritten by `opencode attach`. For cmux-tui it
   identifies views by the `# omosc:...` argv marker; exited terminals keep that

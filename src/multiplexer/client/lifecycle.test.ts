@@ -2109,3 +2109,45 @@ describe('pane title metadata (FR-8)', () => {
     expect(h.adapter.spawnCalls[0]?.subagentType).toBe('oracle');
   });
 });
+
+describe('uncertain pane creation', () => {
+  test('keeps unresolved children gated beyond watch eviction and leaves ordinary retries available', async () => {
+    const h = createHarness();
+    h.adapter.spawnResult = {
+      success: false,
+      error: 'hard',
+      creationUncertain: true,
+    };
+    const ids = Array.from({ length: 70 }, (_, i) => `uncertain-${i}`);
+    try {
+      for (const id of ids) {
+        h.reader.statuses.set(id, 'busy');
+        await h.lifecycle.handleEvent(createdEvent({ sessionId: id }));
+      }
+      h.list.setSessionIds(...ids);
+      await h.lifecycle.onReconnect();
+      for (const id of ids) {
+        await h.lifecycle.handleEvent(
+          lifecycleEvent('status', { sessionId: id, status: 'busy' }),
+        );
+        await h.lifecycle.handleEvent(createdEvent({ sessionId: id }));
+      }
+      expect(h.adapter.spawnCalls).toHaveLength(70);
+      h.adapter.spawnResult = { success: false, error: 'unavailable' };
+      h.reader.statuses.set(CHILD, 'busy');
+      await h.lifecycle.handleEvent(createdEvent());
+      expect(h.adapter.spawnCalls).toHaveLength(71);
+      h.adapter.spawnResult = { success: true, paneId: 'ordinary-pane' };
+      await h.lifecycle.handleEvent(
+        lifecycleEvent('status', { status: 'busy' }),
+      );
+      expect(h.lifecycle.getPane(CHILD)?.paneId).toBe('ordinary-pane');
+      expect(h.adapter.spawnCalls).toHaveLength(72);
+      h.list.setSessionIds(CHILD);
+      await h.lifecycle.onReconnect();
+      expect(h.lifecycle.directoryOf(ids[0])).toBeUndefined();
+    } finally {
+      await h.lifecycle.dispose();
+    }
+  });
+});
