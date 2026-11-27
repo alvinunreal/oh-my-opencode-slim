@@ -77,7 +77,11 @@ describe('buildV2EventSubscriptionTypes', () => {
       ...off,
       cacheMonitor: true,
     });
-    expect(cache).toEqual([...IDENTITY, 'session.step.ended']);
+    expect(cache).toEqual([
+      ...IDENTITY,
+      'session.step.started',
+      'session.step.ended',
+    ]);
   });
 
   test('forms and permissions follow Companion only', () => {

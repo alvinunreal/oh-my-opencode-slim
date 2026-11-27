@@ -124,6 +124,14 @@ logs three warning shapes (observation only, to the plugin log):
   plateau; re-arms when the read value changes). The issue #874 signature:
   the reusable prefix has stopped growing even though nothing reads zero.
 
+Changing the agent, model, or provider re-arms the monitor for the first
+request under the new configuration: each renders a different prompt prefix,
+so its cold cache is expected rather than a regression. v2 completed-step
+telemetry carries no agent/model identity, so the baseline is cleared when a
+step starts under a new configuration (a session runs one step at a time).
+Variants are not tracked
+because OpenCode keeps prompt-cache settings at the model level.
+
 This is the field safety net for provider-side behavior no offline test can
 model.
 

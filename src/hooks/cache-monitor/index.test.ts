@@ -46,6 +46,20 @@ function assistantMessageEvent(options: {
   };
 }
 
+function stepStarted(agent: string) {
+  return {
+    event: {
+      type: 'session.step.started',
+      data: {
+        sessionID: 'ses_monitor',
+        assistantMessageID: 'msg',
+        agent,
+        model: { id: 'model-a', providerID: 'provider-a' },
+      },
+    },
+  };
+}
+
 describe('createCacheMonitorHook', () => {
   test('warns when a cache-hitting session drops to zero cache reads', async () => {
     const { hook, warnings } = createHarness();
@@ -131,7 +145,7 @@ describe('createCacheMonitorHook', () => {
       assistantMessageEvent({ messageID: 'g3', input: 146000, cacheRead: 0 }),
     );
     expect(warnings).toHaveLength(1);
-    expect(warnings[0].message).toContain('never hit the provider cache');
+    expect(warnings[0].message).toContain('not hitting the provider cache');
     expect(warnings[0].data).toMatchObject({
       sessionID: 'ses_monitor',
       consecutiveUncachedRequests: 3,
@@ -338,6 +352,21 @@ describe('createCacheMonitorHook', () => {
         cacheRead: 0,
       }),
     );
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('re-arms the cache baseline after an agent switch', async () => {
+    const { hook, warnings } = createHarness();
+
+    await hook.event(stepStarted('agent-a'));
+    await hook.event(
+      assistantMessageEvent({ messageID: 'm1', input: 8000, cacheRead: 6000 }),
+    );
+    await hook.event(stepStarted('agent-b'));
+    await hook.event(
+      assistantMessageEvent({ messageID: 'm2', input: 20000, cacheRead: 0 }),
+    );
+
     expect(warnings).toHaveLength(0);
   });
 
