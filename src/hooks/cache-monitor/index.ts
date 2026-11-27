@@ -160,7 +160,13 @@ export function createCacheMonitorHook(options: CacheMonitorOptions = {}) {
 
   function getSessionState(sessionID: string): SessionCacheState {
     const existing = sessions.get(sessionID);
-    if (existing) return existing;
+    if (existing) {
+      // Refresh recency for every observed event (start or completion), so
+      // the cap evicts the least recently observed session.
+      sessions.delete(sessionID);
+      sessions.set(sessionID, existing);
+      return existing;
+    }
 
     if (sessions.size >= MAX_TRACKED_SESSIONS) {
       const oldest = sessions.keys().next().value;
@@ -210,10 +216,6 @@ export function createCacheMonitorHook(options: CacheMonitorOptions = {}) {
       state.processedMessageIDs.clear();
     }
     state.processedMessageIDs.add(message.messageID);
-
-    // Re-insert so eviction drops the least recently observed session.
-    sessions.delete(message.sessionID);
-    sessions.set(message.sessionID, state);
 
     state.completedRequests += 1;
 
