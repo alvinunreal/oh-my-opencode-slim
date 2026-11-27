@@ -124,7 +124,7 @@ active, or as an explicit veto against a nearer layer enabling that feature.
 | `compactSidebar` | `true` | Compact rather than expanded sidebar layout |
 | `sidebarShowHiddenAgents` | `false` | Show Council internals as sidebar rows; registration and native agent visibility are unchanged |
 | `liveConfigRefresh` | `true` | Watch configuration candidates for inference-profile refresh; no watcher is created without a consumer |
-| `stripOrchestratorModel` | `false` | Omit the configured Orchestrator model/variant so native session selection can win; an explicitly selected preset model is retained |
+| `stripOrchestratorModel` | `false` | Omit Orchestrator `model`/`variant` from agent registration unless the selected resolved preset defines `orchestrator.model`; session selections and configured fallback entries are unchanged |
 | `autoUpdate` | `true` | Enable Slim TUI update checks and notices; host package management is separate |
 | `questionTimeoutMs` | Unset/`0` | Opt-in automatic answer for eligible unanswered questions; enabled range 60,000–2,147,483,647 ms |
 | `image_routing` | Observer-dependent | `auto` relays supported attachments when native vision is unavailable; `direct` leaves them inline |
@@ -227,6 +227,9 @@ routing off, children use registered agent settings. `disabled_commands:
 routing switch. Live refresh only updates inference fields, not prompts,
 permissions, skills, MCPs or registration; those require a new host generation.
 
+For Orchestrator model precedence and session overrides, see
+[Orchestrator model selection](#orchestrator-model-selection).
+
 ### Independent agent model inheritance
 
 - A scalar `model` wins over `inheritModelFrom` in the same effective override.
@@ -238,13 +241,35 @@ permissions, skills, MCPs or registration; those require a new host generation.
   inheritance; set an agent-level variant when it should apply regardless.
 - Without either field, normal precedence applies; unconfigured Fixer retains
   its Explorer-model default.
-- Do not put array + `inheritModelFrom: "session"` on Orchestrator itself: there
-  is no separate model to follow, and it would clear its native selection.
+- Do not combine an array `model` with `inheritModelFrom: "session"` on
+  Orchestrator if you want the array to set its agent default: the combined
+  policy leaves the array for fallback rather than using its head as the agent
+  default.
 
 Independent specialists move from their primary only after a confirmed parent
 fallback abandons that provider. Request/content-policy failures and manual
 selections do not cause that move. Each child otherwise uses its own chain;
 see [Model fallback](#model-fallback).
+
+### Orchestrator model selection
+
+By default, the first entry of Orchestrator's resolved `model` array is its
+agent default. OpenCode uses an existing session selection first, then the
+agent default if available, then its own default. For a new TUI session, a
+valid pick remembered for the location and agent takes precedence over the
+agent default. Applying a session preset changes delegation settings without
+changing the running root's model.
+
+The same array supplies ordered fallback candidates. If the selected model is
+outside the chain, failover scans from the first configured entry, skipping
+models already tried. The chain does not cap spending.
+
+`/api/agent` shows the registered agent default, not the session's model. The
+plugin's `foreground-fallback` logs show model switches, not a complete usage
+history.
+
+When `stripOrchestratorModel` applies, it can suppress a host-configured agent
+default in the registered agent. It does not edit the config file.
 
 ### Agent Display Names
 

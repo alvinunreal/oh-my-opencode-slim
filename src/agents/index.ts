@@ -151,9 +151,7 @@ function isSafeDisplayName(displayName: string): boolean {
 /**
  * Apply user-provided overrides to an agent's configuration.
  * Supports overriding model (string or priority array), variant, and temperature.
- * When model is an array, stores it as _modelArray for runtime fallback resolution
- * and selects its primary entry for ephemeral subagents. The orchestrator leaves
- * config.model unset so its live runtime selection is not overwritten.
+ * Stores model arrays as _modelArray for runtime fallback resolution.
  */
 function applyOverrides(
   agent: AgentDefinition,
@@ -166,22 +164,8 @@ function applyOverrides(
         typeof m === 'string' ? { id: m } : m,
       );
       const primaryModel = agent._modelArray[0];
-      // Subagents are ephemeral, freshly-created sessions with no prior
-      // runtime state to preserve, so giving them a concrete config.model
-      // at launch time (the array's primary entry) is safe — see #9100e59.
-      // ForegroundFallbackManager handles runtime failover to the
-      // remaining entries in _modelArray.
-      //
-      // The orchestrator is different: it's a long-lived, foreground
-      // session where a user's runtime `/model` selection must survive
-      // across plugin re-inits (triggered by client.config.update() ->
-      // Instance.dispose(), e.g. on every subagent dispatch). Setting
-      // config.model here unconditionally would stomp that live
-      // selection every time this function re-runs, because it runs
-      // BEFORE the config() hook's merge with the live
-      // opencodeConfig.agent.orchestrator.model (see src/index.ts:524-528,
-      // added by #639). Leaving it undefined for the orchestrator lets
-      // that later, precedence-aware guard be the sole source of truth.
+      // Defer the orchestrator's agent default to registry inference.
+      // OpenCode resolves the session's model separately from that default.
       agent.config.model =
         agent.name === 'orchestrator' ? undefined : primaryModel.id;
       // Subagents launch with the primary model, so carry its inline variant
