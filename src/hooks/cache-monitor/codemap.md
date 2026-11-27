@@ -24,7 +24,10 @@ unexpected event shape. See `docs/cache-verification.md` for the full story.
   request count, `everReportedCache`, last `cache.read`, warned-since-last-hit
   flag, never-cached streak/input totals, and plateau streak/input totals.
   Deduplicated by processed message IDs; bounded at `MAX_TRACKED_SESSIONS`
-  (256) and `MAX_TRACKED_MESSAGES_PER_SESSION` (512).
+  (256, least-recently-observed eviction) and
+  `MAX_TRACKED_MESSAGES_PER_SESSION` (512). It also records the latest
+  `session.step.started` agent/model; a change there clears the cache baseline
+  before that request is judged, so its cold prefix is not reported as drift.
 - **Three detection modes**:
   1. **Mid-session bust** — a session that previously hit the cache reports
      `cacheRead === 0` on a request ≥ 2048 input tokens (the classic
@@ -42,11 +45,13 @@ unexpected event shape. See `docs/cache-verification.md` for the full story.
 ## Flow
 
 ```
+session.step.started → configuration change? → clear cache baseline (request count and dedupe stay)
+
 message.updated (completed assistant, role=assistant, time.completed set)
     ↓
 parseCompletedAssistantMessage() → { sessionID, messageID, inputTokens, cacheRead, cacheWrite }
     ↓
-observe() (dedup by messageID)
+observe() (dedup by messageID; re-insert for LRU)
     ├─ busted? (everReportedCache && cacheRead === 0 && inputTokens ≥ 2048) → warn (once per hit)
     ├─ never cached? (cacheRead === 0 && cacheWrite === 0 && sizeable)
     │     → extend streak; warn at thresholds
@@ -80,5 +85,5 @@ session.deleted → drop per-session state
 ## Performance Considerations
 
 - Observation only — no timers, no I/O, no message mutation.
-- Bounded state per session and capped session count; message-ID sets are
+- Bounded state per session and a capped session count; message-ID sets are
   cleared when they hit the cap.

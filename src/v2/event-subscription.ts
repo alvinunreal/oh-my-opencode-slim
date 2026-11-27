@@ -64,7 +64,10 @@ export function buildV2EventSubscriptionTypes(
   if (options.fallback) {
     for (const type of STEP_TYPES) types.add(type);
   }
-  if (options.cacheMonitor) types.add('session.step.ended');
+  if (options.cacheMonitor) {
+    types.add('session.step.started');
+    types.add('session.step.ended');
+  }
   if (options.interview) {
     types.add('session.step.failed');
     for (const type of INTERVIEW_TEXT_TYPES) types.add(type);
