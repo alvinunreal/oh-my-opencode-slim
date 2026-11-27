@@ -1132,6 +1132,35 @@ describe('PluginConfigSchema removed legacy keys', () => {
   });
 });
 
+describe('PluginConfigSchema autoinvoke_skills', () => {
+  it('accepts boolean, string array, and boolean map shapes', () => {
+    expect(
+      PluginConfigSchema.parse({ autoinvoke_skills: false }).autoinvoke_skills,
+    ).toBe(false);
+    expect(
+      PluginConfigSchema.parse({
+        autoinvoke_skills: ['*', '!deepwork'],
+      }).autoinvoke_skills,
+    ).toEqual(['*', '!deepwork']);
+    expect(
+      PluginConfigSchema.parse({
+        autoinvoke_skills: { deepwork: false, reflect: true },
+      }).autoinvoke_skills,
+    ).toEqual({ deepwork: false, reflect: true });
+  });
+
+  it('rejects invalid autoinvoke_skills values', () => {
+    expect(
+      PluginConfigSchema.safeParse({ autoinvoke_skills: 'deepwork' }).success,
+    ).toBe(false);
+    expect(
+      PluginConfigSchema.safeParse({
+        autoinvoke_skills: { deepwork: 'no' },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('retired config keys', () => {
   it('does not advertise routingBlock or agent subagents', () => {
     const schema = z.toJSONSchema(PluginConfigSchema, { io: 'input' });

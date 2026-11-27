@@ -1267,6 +1267,29 @@
         "type": "string"
       }
     },
+    "autoinvoke_skills": {
+      "description": "Control whether registered bundled skills are advertised in the model's <available_skills> system prompt list (OpenCode Skill.Info.autoinvoke). Accepts a boolean for all bundled skills, a list using the shared \"*\" / \"!name\" filter syntax (e.g. [\"*\", \"!deepwork\"] or [\"codemap\"]), or a map of skill names (or \"*\") to booleans. Skills with autoinvoke set to false remain registered and manually invocable.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      ]
+    },
     "disabled_hooks": {
       "description": "Hook names to disable completely. Valid values: phase-reminder, foreground-fallback, deepwork-goal, chat-headers, cache-monitor, tool-loop-guard, search-path-guard, absolute-path-rescue, apply-patch, council-inject. \"phase-reminder\" is not registered, so orchestrator phase reminders are never injected; \"foreground-fallback\" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); \"chat-headers\" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); \"cache-monitor\" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards (\"tool-loop-guard\", \"search-path-guard\", \"absolute-path-rescue\", \"apply-patch\" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so repeated identical calls and invalid or guessed paths surface raw to the model; \"council-inject\" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
       "type": "array",

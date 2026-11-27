@@ -89,6 +89,70 @@ describe('buildBundledSkillInfos', () => {
     expect(infos).toHaveLength(1);
     expect(infos[0].id).toBe('deepwork');
   });
+
+  test('applies autoinvoke config to registered bundled skills', () => {
+    const root = tmpDir();
+    writeSkill(
+      root,
+      'deepwork',
+      '---\nname: deepwork\ndescription: Heavy workflow\n---\nbody',
+    );
+    writeSkill(
+      root,
+      'reflect',
+      '---\nname: reflect\ndescription: Reflect workflow\n---\nbody',
+    );
+
+    const unconfigured = buildBundledSkillInfos(root, []);
+    expect(unconfigured).toHaveLength(2);
+    expect(unconfigured[0].autoinvoke).toBeUndefined();
+    expect(unconfigured[1].autoinvoke).toBeUndefined();
+
+    const falseAll = buildBundledSkillInfos(root, [], false);
+    expect(
+      falseAll.map((s) => ({ id: s.id, autoinvoke: s.autoinvoke })),
+    ).toEqual([
+      { id: 'deepwork', autoinvoke: false },
+      { id: 'reflect', autoinvoke: false },
+    ]);
+
+    const allowOnlyReflect = buildBundledSkillInfos(root, [], ['reflect']);
+    expect(
+      allowOnlyReflect.map((s) => ({ id: s.id, autoinvoke: s.autoinvoke })),
+    ).toEqual([
+      { id: 'deepwork', autoinvoke: false },
+      { id: 'reflect', autoinvoke: true },
+    ]);
+
+    const denyDeepwork = buildBundledSkillInfos(root, [], ['*', '!deepwork']);
+    expect(
+      denyDeepwork.map((s) => ({ id: s.id, autoinvoke: s.autoinvoke })),
+    ).toEqual([
+      { id: 'deepwork', autoinvoke: false },
+      { id: 'reflect', autoinvoke: true },
+    ]);
+
+    const recordOverride = buildBundledSkillInfos(root, [], {
+      '*': false,
+      reflect: true,
+    });
+    expect(
+      recordOverride.map((s) => ({ id: s.id, autoinvoke: s.autoinvoke })),
+    ).toEqual([
+      { id: 'deepwork', autoinvoke: false },
+      { id: 'reflect', autoinvoke: true },
+    ]);
+
+    const partialRecord = buildBundledSkillInfos(root, [], {
+      deepwork: false,
+    });
+    expect(
+      partialRecord.map((s) => ({ id: s.id, autoinvoke: s.autoinvoke })),
+    ).toEqual([
+      { id: 'deepwork', autoinvoke: false },
+      { id: 'reflect', autoinvoke: undefined },
+    ]);
+  });
 });
 
 describe('removeLegacySkillSyncState', () => {

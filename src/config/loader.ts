@@ -738,6 +738,11 @@ export function mergePluginConfigs(
         ? mergeAgentOverrides(base.agents ?? {}, override.agents ?? {})
         : undefined,
     presets: mergePresetMaps(base.presets, override.presets),
+    autoinvoke_skills:
+      isPlainRecord(base.autoinvoke_skills) &&
+      isPlainRecord(override.autoinvoke_skills)
+        ? { ...base.autoinvoke_skills, ...override.autoinvoke_skills }
+        : (override.autoinvoke_skills ?? base.autoinvoke_skills),
     multiplexer: deepMerge(base.multiplexer, override.multiplexer),
     interview: deepMerge(base.interview, override.interview),
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),

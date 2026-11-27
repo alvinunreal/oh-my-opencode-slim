@@ -158,6 +158,7 @@ saved by this relay.
 | `disabled_commands` | Remove only the named Slim command; see [Slash Commands](#slash-commands) |
 | `disabled_mcps` | Do not register the selected built-in MCP servers |
 | `disabled_skills` | Do not register/grant selected bundled skills, even if a preset requests them |
+| `autoinvoke_skills` | Control whether registered bundled skills are advertised in the model's `<available_skills>` prompt list (`boolean`, `"*"` / `"!name"` filter list, or `{ "<skill>": boolean }`); `false` entries remain manually invocable |
 
 Disabling Slim `webfetch` preserves the native tool. Disabling `acp_run` also
 removes wrapper agents that cannot execute. Council is absent when unconfigured;

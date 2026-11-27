@@ -1567,6 +1567,45 @@ describe('onWarning callback', () => {
     );
   });
 
+  test('merges record autoinvoke_skills across layers and replaces with array/boolean overrides', () => {
+    const userConfigDir = path.join(tempDir, 'user-config');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigDir, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    process.env.OPENCODE_CONFIG_DIR = userConfigDir;
+
+    fs.writeFileSync(
+      path.join(userConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        autoinvoke_skills: { deepwork: false, reflect: false },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        autoinvoke_skills: { reflect: true, codemap: false },
+      }),
+    );
+
+    expect(loadPluginConfig(projectDir).autoinvoke_skills).toEqual({
+      deepwork: false,
+      reflect: true,
+      codemap: false,
+    });
+
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        autoinvoke_skills: ['*', '!deepwork'],
+      }),
+    );
+    expect(loadPluginConfig(projectDir).autoinvoke_skills).toEqual([
+      '*',
+      '!deepwork',
+    ]);
+  });
+
   test('normalizes string disabled_commands instead of rejecting the config', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
