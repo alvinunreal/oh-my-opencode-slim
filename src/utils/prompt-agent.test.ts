@@ -370,10 +370,8 @@ describe('resolveSessionAgent', () => {
 // ---------------------------------------------------------------------------
 // Regression guard: no agent-less session prompt may re-enter the codebase.
 //
-// An agent-less `session.prompt` / `session.promptAsync` body makes OpenCode
-// resolve the default (`build`) agent and permanently rewrite the target
-// session's agent — see docs/agents/build-agent-empty-input-diagnosis.md
-// ("Empirical confirmation", probe A2). This scan fails with
+// Agent-less shared-factory prompts can select the host default instead of
+// preserving the session's agent. This scan fails with
 // file:line for every prompt call site that neither passes `agent:` inline nor
 // routes its body through `withAgent()`.
 // ---------------------------------------------------------------------------

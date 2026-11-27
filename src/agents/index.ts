@@ -1,8 +1,5 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
-import {
-  getSkillPermissionsForAgent,
-  summarizeSkillGrants,
-} from '../cli/skills';
+import { getSkillPermissionsForAgent } from '../cli/skills';
 import {
   AGENT_ALIASES,
   type AgentOverrideConfig,
@@ -18,15 +15,11 @@ import type { HostAgentConfig, RuntimeConfig } from '../config/runtime';
 import { hostLegacyAgent } from '../config/runtime';
 import { applyOrchestratorModelConfig } from '../config/strip-orchestrator-model';
 import { lookupWithAliases, mergeWithAliases } from '../config/utils';
-import {
-  escapeRegExp,
-  normalizeAgentName,
-  resolveRuntimeAgentName,
-} from '../utils/agent-variant';
+import { escapeRegExp, normalizeAgentName } from '../utils/agent-variant';
 import { parseModelRef } from '../v2/adapters';
 
 import { createCouncilAgent, ensureCouncilPrompt } from './council';
-import { buildCouncillorAgents, councillorSeatNames } from './council-agents';
+import { buildCouncillorAgents } from './council-agents';
 import { createCouncillorAgent } from './councillor';
 import { createDesignerAgent } from './designer';
 import { createExplorerAgent } from './explorer';
@@ -39,7 +32,6 @@ import {
   resolvePrompt,
 } from './orchestrator';
 import { mergeTaskStance, TASK_NO_NESTED_DISPATCH } from './permissions';
-import type { AgentSkillGrants } from './role-routing';
 import {
   appendObserverDispatchInstruction,
   appendTaskRejectionInstruction,
@@ -626,71 +618,6 @@ function hasCustomAgentModel(
   return !Array.isArray(override.model) || override.model.length > 0;
 }
 
-/**
- * Normalize a `subagents` allowlist to internal agent names (issue #1591):
- * entries accept internal names, display names, or @-mentions, but the
- * host's `task` stance keys and the catalog both work on internal names.
- * Deduped; `'*'` is reserved for the scope wildcard. Unknown names are
- * dropped with a warning so a typo cannot mint a dead stance key and a
- * ghost catalog line.
- */
-function normalizeSubagentScope(
-  scope: readonly string[],
-  runtime: RuntimeConfig,
-  disabled: ReadonlySet<string>,
-): string[] {
-  const known = new Set<string>();
-  // Dispatchable specialists that are neither built-in nor custom-agent
-  // keys: configured ACP wrappers and the active council's real seats.
-  // Marketplace agents are admitted later (registry.ts), so they cannot be
-  // known here; see docs/configuration.md.
-  const runtimeSpecialists = new Set<string>([
-    ...Object.keys(runtime.acpAgents).map(normalizeCustomAgentName),
-    ...councillorSeatNames(runtime, disabled),
-  ]);
-  for (const entry of scope) {
-    const normalized = normalizeAgentName(entry);
-    if (!normalized) {
-      throw new Error(
-        `agents.orchestrator.subagents contains an empty specialist name`,
-      );
-    }
-    const resolved = resolveRuntimeAgentName(runtime, normalized);
-    if (resolved === '*') {
-      throw new Error(
-        "'*' is reserved for the delegation-scope wildcard and is not a specialist name",
-      );
-    }
-    if (
-      !isKnownAgentName(resolved) &&
-      !runtime.customAgentNames.includes(resolved) &&
-      AGENT_ALIASES[resolved] === undefined &&
-      !runtimeSpecialists.has(resolved)
-    ) {
-      console.warn(
-        `[oh-my-opencode-slim] agents.orchestrator.subagents entry '${entry}' does not match a known agent; dropped.`,
-      );
-      continue;
-    }
-    // A scope entry must be a delegatable specialist: a primary cannot be
-    // dispatched, and a disabled agent is not in the roster.
-    if (resolved === 'orchestrator') {
-      console.warn(
-        `[oh-my-opencode-slim] agents.orchestrator.subagents entry '${entry}' refers to a primary agent; primaries are not specialists. Dropped.`,
-      );
-      continue;
-    }
-    if (disabled.has(resolved)) {
-      console.warn(
-        `[oh-my-opencode-slim] agents.orchestrator.subagents entry '${entry}' is disabled; dropped.`,
-      );
-      continue;
-    }
-    known.add(resolved);
-  }
-  return [...known];
-}
-
 function buildCustomAgentDefinition(
   name: string,
   override: AgentOverrideConfig,
@@ -718,7 +645,6 @@ function buildCustomAgentDefinition(
 /**
  * Final `permission.skill` record for an agent: user-authored skill rules
  * first, then the resolved grants (which own `'*'` and every named grant).
- * Shared by the enforced permissions and the orchestrator's routing lines.
  */
 function resolveSkillRules(
   agentName: string,
@@ -797,7 +723,6 @@ function applyDefaultPermissions(
   configuredSkills: readonly string[] | undefined,
   runtime: RuntimeConfig,
   isPrimary = false,
-  subagentScope?: readonly string[],
 ): void {
   // A shorthand string is a user-level rule for every tool. Keep its original
   // form; marketplace tools independently fail closed through their caller
@@ -847,22 +772,10 @@ function applyDefaultPermissions(
     }
   }
 
-  // Delegation stance (issue #1591): the orchestrator's `subagents` allowlist
-  // compiles into the `task` map the host evaluates, wildcard-deny first per
-  // the TASK_NO_NESTED_DISPATCH order contract. An explicit `permission.task`
-  // map wins; a primary without a scope keeps unrestricted delegation.
+  // Preserve authored rules. Default child roles must not dispatch just
+  // because the host's depth limit has been raised.
   const taskStance =
-    existing.task ??
-    (subagentScope !== undefined
-      ? {
-          '*': 'deny',
-          ...Object.fromEntries(
-            subagentScope.map((name) => [name, 'allow'] as const),
-          ),
-        }
-      : !isPrimary
-        ? { ...TASK_NO_NESTED_DISPATCH }
-        : undefined);
+    existing.task ?? (isPrimary ? undefined : { ...TASK_NO_NESTED_DISPATCH });
 
   agent.config.permission = {
     ...existing,
@@ -875,11 +788,6 @@ function applyDefaultPermissions(
       !registeredTools.has('task_report')
         ? 'deny'
         : 'allow'),
-    // Stance defaults above: an explicit `task` entry wins, then the
-    // compiled scope, then the nested-dispatch deny for non-primaries —
-    // the compiled v2 permission base allows every unmatched action, so an
-    // absent entry would let any child spawn once the host depth limit is
-    // raised.
     ...(taskStance !== undefined ? { task: taskStance } : {}),
     question: questionPerm,
     ...pluginDefaultPermissions,
@@ -891,32 +799,6 @@ function applyDefaultPermissions(
       runtime.disabledSkills,
     ),
   } as SDKAgentConfig['permission'];
-}
-
-/**
- * Mirror the orchestrator's compiled `task` stance onto its in-scope
- * specialists' display names (issue #1591). Prompts rewrite @mentions to
- * display names and the finalized registry admits those as dispatchable
- * identities, so the stance must allow both spellings. Display names are
- * already validated unique and identifier-safe by the caller.
- */
-function allowScopedDisplayNames(
-  definition: AgentDefinition,
-  scope: readonly string[],
-  displayNames: ReadonlyMap<string, string>,
-): void {
-  const permission = definition.config.permission;
-  if (typeof permission !== 'object' || permission === null) return;
-  const task = (permission as { task?: unknown }).task;
-  if (typeof task !== 'object' || task === null) return;
-  const stance = task as Record<string, string>;
-  for (const name of scope) {
-    const configured = displayNames.get(name);
-    if (!configured) continue;
-    const displayName = normalizeAgentName(configured);
-    if (displayName === name || stance[displayName] !== undefined) continue;
-    stance[displayName] = 'allow';
-  }
 }
 
 // Agent Classification
@@ -978,23 +860,6 @@ function createAgentViews(
   const registeredTools = inferenceOnly
     ? EMPTY_REGISTERED_TOOLS
     : registeredDefaultToolNames(runtime);
-  // Skill grants as the routing block shows them: same resolver as the
-  // enforced permissions, so the orchestrator never briefs a skill the
-  // delegate cannot load. String-shorthand permissions bypass the resolver.
-  const skillGrants = (names: readonly string[]): AgentSkillGrants =>
-    Object.fromEntries(
-      names.flatMap((name) => {
-        const override = getOverrideFromAgents(mergedAgents, name);
-        if (typeof override?.permission === 'string') return [];
-        const rules = resolveSkillRules(
-          name,
-          override?.permission,
-          override?.skills,
-          runtime.disabledSkills,
-        );
-        return [[name, summarizeSkillGrants(rules)]];
-      }),
-    );
   if (!runtime.council) {
     disabled.add('council');
     // The bare councillor is only meaningful as part of configured Council Mode.
@@ -1131,14 +996,6 @@ function createAgentViews(
       }
       return !disabled.has(name);
     });
-
-  for (const [name, override] of Object.entries(mergedAgents)) {
-    if (name !== 'orchestrator' && override?.subagents !== undefined) {
-      console.warn(
-        `[oh-my-opencode-slim] agents.${name}.subagents is ignored: only the built-in orchestrator supports delegation scopes.`,
-      );
-    }
-  }
 
   const protoCustomAgents = customAgentNames.flatMap((name) => {
     const override = getOverrideFromAgents(mergedAgents, name);
@@ -1339,25 +1196,6 @@ function createAgentViews(
     projectDirectory: options?.projectDirectory,
     hostFlavor: options?.hostFlavor,
   });
-  const orchestratorScope =
-    orchestratorOverride?.subagents !== undefined
-      ? normalizeSubagentScope(
-          orchestratorOverride.subagents,
-          runtime,
-          disabled,
-        )
-      : undefined;
-  // An explicit `permission.task` entry wins over the compiled stance, so
-  // the scoped catalog would advertise delegates the host may deny.
-  const orchestratorPermission = orchestratorOverride?.permission;
-  const orchestratorExplicitTask =
-    typeof orchestratorPermission === 'object' &&
-    orchestratorPermission.task !== undefined;
-  if (orchestratorScope && orchestratorExplicitTask) {
-    console.warn(
-      `[oh-my-opencode-slim] agents.orchestrator.subagents catalog not rendered: an explicit permission.task entry overrides the delegation scope.`,
-    );
-  }
   const orchestrator: AgentDefinition = inferenceOnly
     ? {
         name: 'orchestrator',
@@ -1366,24 +1204,7 @@ function createAgentViews(
             ? { model: orchestratorModel }
             : {},
       }
-    : createOrchestratorAgent(orchestratorModel, undefined, undefined, {
-        disabledAgents: disabled,
-        excludeDescriptions:
-          councillorAgents.length > 0 ? ['council'] : undefined,
-        onlyAgents: orchestratorScope,
-        customDescriptions: orchestratorScope
-          ? Object.fromEntries(
-              orchestratorScope.map((n) => [n, mergedAgents[n]?.description]),
-            )
-          : undefined,
-        agentSkills: skillGrants(
-          orchestratorScope ?? allSubAgents.map((agent) => agent.name),
-        ),
-        hostFlavor: options?.hostFlavor,
-        routingBlock:
-          runtime.routingBlock &&
-          !(orchestratorScope && orchestratorExplicitTask),
-      });
+    : createOrchestratorAgent(orchestratorModel);
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
   if (!inferenceOnly) {
@@ -1417,7 +1238,6 @@ function createAgentViews(
       orchestratorOverride?.skills,
       runtime,
       true,
-      orchestratorScope,
     );
   }
 
@@ -1432,25 +1252,18 @@ function createAgentViews(
     }
   }
 
-  // 3b. Append custom orchestrator hints from built-in and custom agent
-  // overrides. A scoped orchestrator only hears about in-scope specialists
-  // (issue #1591): guidance for out-of-scope agents would contradict the
-  // host's task stance.
-  const inScope = (agentName: string) =>
-    orchestratorScope === undefined || orchestratorScope.includes(agentName);
+  // Explicit project hints are independent of the native tool's roster.
   const extraOrchestratorPromptsList = (
     inferenceOnly ? [] : [...builtInSubAgents, ...customSubAgents]
   )
-    .filter((agent) => inScope(agent.name))
     .map((agent) => {
       const override = getOverrideFromAgents(mergedAgents, agent.name);
       return override?.orchestratorPrompt;
     })
     .filter((prompt): prompt is string => Boolean(prompt));
 
-  const acpOrchestratorPrompts = (inferenceOnly ? [] : acpSubAgents)
-    .filter((agent) => inScope(agent.name))
-    .map((agent) => {
+  const acpOrchestratorPrompts = (inferenceOnly ? [] : acpSubAgents).map(
+    (agent) => {
       const acp = runtime.acpAgents[agent.name];
       if (acp?.orchestratorPrompt) return acp.orchestratorPrompt;
       return [
@@ -1464,7 +1277,8 @@ function createAgentViews(
         '- **Delegation prompt:** Include an explicitly requested inner ACP selector in the delegation brief (for example, "Inner ACP selector: <value>").',
         '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
       ].join('\n');
-    });
+    },
+  );
 
   // Validate display names
   const usedDisplayNames = new Set<string>();
@@ -1496,11 +1310,6 @@ function createAgentViews(
 
   if (inferenceOnly) return [orchestrator, ...allSubAgents];
 
-  // A scoped catalog advertises display names, so the compiled stance must
-  // admit them as dispatch identities too (issue #1591).
-  if (orchestratorScope && !orchestratorExplicitTask) {
-    allowScopedDisplayNames(orchestrator, orchestratorScope, displayNameMap);
-  }
   const rewritePrompt = (promptText: string) => {
     let text = promptText;
     for (const [internalName, displayName] of displayNameMap) {
@@ -1542,14 +1351,7 @@ function createAgentViews(
   // council-inject hook carries it, injected on the FIRST council keyword
   // and then standing in history. The disabled variant keeps a one-line
   // manual hint because with the hook off no block will ever appear.
-  // A scoped primary that cannot dispatch the synthesis agent would see
-  // seats advertised with no way to finish the procedure, so the whole
-  // block is gated on that target (issue #1591).
-  const councillorSeats = inScope('council')
-    ? councillorAgents
-        .filter((agent) => inScope(agent.name))
-        .map((agent) => agent.name)
-    : [];
+  const councillorSeats = councillorAgents.map((agent) => agent.name);
   if (councillorSeats.length > 0) {
     const seatList = councillorSeats.join(', ');
     updatedPrompt = runtime.disabledHooks.has('council-inject')

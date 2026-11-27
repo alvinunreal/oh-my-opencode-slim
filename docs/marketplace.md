@@ -214,6 +214,6 @@ The prompt precedence is inline `agents.chronicler.prompt`, then
 `chronicler.md`, then the assembled marketplace package prompt.
 `chronicler_append.md` appends to whichever base wins. Preset-specific files,
 ancestor lookup and global fallback follow
-[project-local customization](project-local-customization.md#prompt-lookup-precedence).
+[configuration precedence](configuration.md#prompt-lookup-precedence).
 Prompts and capability policies are captured per plugin generation; restart
 OpenCode to apply changes to new sessions.

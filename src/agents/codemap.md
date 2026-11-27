@@ -75,7 +75,6 @@ const orchestrator = createOrchestratorAgent(
   orchestratorModel,
   orchestratorPrompts.prompt,
   orchestratorPrompts.appendPrompt,
-  { disabledAgents: disabled, hostFlavor /* , wakeScheduler, routingBlock */ },
 );
 applyDefaultPermissions(orchestrator, orchestratorOverride?.skills, config?.disabled_skills);
 
@@ -139,18 +138,12 @@ return {
 4. **Model resolution**: ForegroundFallbackManager handles runtime model switching for rate limits
 5. **Permission system**: MCP permissions are injected based on agent's `mcps` list
 
-### Routing Rules (src/agents/orchestrator.ts)
+### Delegation Guidance
 
-The orchestrator's system prompt contains dynamic routing rules that reference agent capabilities:
-
-- **@explorer**: Fast codebase recon, parallel searches, library research, web search
-- **@oracle**: Architecture decisions, code review
-- **@designer**: UI/UX design and polish
-- **@fixer**: Bounded implementation tasks
-- **@observer**: Visual/media analysis
-- **@council**: Multi-model consensus synthesis (orchestrator dispatches councillors directly in flatten mode)
-
-These rules are filtered based on disabled agents and injected into the orchestrator's prompt at startup.
+`role-descriptions.ts` supplies the built-in `description` strings. OpenCode
+renders them in the `subagent` tool's permission-filtered roster. The
+Orchestrator prompt holds coordination policy and user-supplied guidance, not
+a stock specialist directory. It still lists exact hidden Council seat IDs.
 
 ## File Structure
 

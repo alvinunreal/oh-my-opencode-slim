@@ -5,8 +5,8 @@
  * Logging-only — never enters prompt payloads or transforms.
  */
 
-export const BUILD_VERSION = '3.0.7';
-const BUILD_TIME = '2026-11-04T19:10:20.044Z';
+export const BUILD_VERSION = '3.0.8';
+const BUILD_TIME = '2026-11-22T12:31:22.473Z';
 
 /** Plugin build identity for diagnostics logs. */
 export function getBuildInfo(): { version: string; buildTime: string } {

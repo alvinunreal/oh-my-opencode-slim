@@ -474,34 +474,22 @@ export function createSessionContextHandler(
     // Pass the full v2 message as `info` (preserves id/metadata identity;
     // isMessageWithParts only needs info.role + parts) with content as
     // `parts` (shared ref so in-place part edits propagate). The transform
-    // can splice/reorder/replace the array (background-job-board
-    // injection does), so rebuild event.messages from the transformed
-    // v1messages rather than index-based content copy-back.
+    // can splice/reorder/replace the array, so rebuild event.messages from
+    // the transformed v1messages rather than index-based content copy-back.
     if (deps.messagesTransform && Array.isArray(event.messages)) {
       // Transcript identity enrichment (v2-only): stamp missing session IDs
-      // on every role (frozen board replay reads the real-message tail);
-      // reconstruct each user message's agent per request from durable
-      // `agent-switched` markers in stored history (same compaction window
-      // the request loader reads) so switches never re-write attribution.
+      // on every role; reconstruct each user message's agent per request
+      // from durable `agent-switched` markers in stored history (same
+      // compaction window the request loader reads) so switches never
+      // re-write attribution.
       // Envelope-only and absence-gated: host-provided values win; read
       // failure or map miss degrades to the event's current agent. Synthetic
       // wakes need their first text part re-flagged (host drops internal
       // part metadata). Idempotent across context events.
       let storedHistory: Array<Record<string, unknown>> | undefined;
-      // Also read it for untimed native deliveries: their timestamp lives
-      // only in stored history, even when the envelope already has an agent.
       if (
         event.messages.some(
-          (message) =>
-            message.role === 'user' &&
-            (message.agent === undefined ||
-              (!('time' in message) &&
-                message.content.some(
-                  (part) =>
-                    part.type === 'text' &&
-                    typeof part.text === 'string' &&
-                    part.text.startsWith('<subagent sessionID="'),
-                ))),
+          (message) => message.role === 'user' && message.agent === undefined,
         )
       ) {
         try {
@@ -557,43 +545,18 @@ export function createSessionContextHandler(
         }
       }
       try {
-        const syntheticDeliveries = new Map(
-          storedHistory
-            ?.filter(
-              (entry) =>
-                entry.type === 'synthetic' &&
-                typeof entry.id === 'string' &&
-                typeof entry.text === 'string' &&
-                entry.text.startsWith('<subagent sessionID="') &&
-                entry.time !== undefined,
-            )
-            .map((entry) => [entry.id, entry]) ?? [],
-        );
-        const projectedTimes = new WeakSet<object>();
-        const v1messages = event.messages.map((m) => {
-          const stored = syntheticDeliveries.get(m.id);
-          const matches =
-            m.role === 'user' &&
-            !('time' in m) &&
-            stored &&
-            m.content.some(
-              (part) => part.type === 'text' && part.text === stored.text,
-            );
-          const info = matches ? { ...m, time: stored.time } : m;
-          if (matches) projectedTimes.add(info);
-          return {
-            info,
-            parts: m.content.map((part) =>
-              ((part.type === 'tool-call' || part.type === 'tool-result') &&
-                (part.toolName ?? part.name) === 'interview_submit_state') ||
-              (part.type === 'text' &&
-                typeof part.text === 'string' &&
-                part.text.includes('<interview_state'))
-                ? { ...part }
-                : part,
-            ),
-          };
-        });
+        const v1messages = event.messages.map((m) => ({
+          info: m,
+          parts: m.content.map((part) =>
+            ((part.type === 'tool-call' || part.type === 'tool-result') &&
+              (part.toolName ?? part.name) === 'interview_submit_state') ||
+            (part.type === 'text' &&
+              typeof part.text === 'string' &&
+              part.text.includes('<interview_state'))
+              ? { ...part }
+              : part,
+          ),
+        }));
         const requestModel = v1ModelFromContext(event.model);
         await deps.messagesTransform(
           {},
@@ -650,8 +613,7 @@ export function createSessionContextHandler(
             );
         }
         event.messages = v1messages.map((m) => {
-          const info = m.info as { content?: unknown; time?: unknown };
-          if (projectedTimes.has(info)) delete info.time;
+          const info = m.info as { content?: unknown };
           info.content = m.parts;
           return m.info;
         }) as V2SessionContextEvent['messages'];

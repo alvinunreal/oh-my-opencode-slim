@@ -6,9 +6,8 @@ import { createExplorerAgent } from './explorer';
 import { createFixerAgent } from './fixer';
 import { createObserverAgent } from './observer';
 import { createOracleAgent } from './oracle';
-import { buildOrchestratorPrompt } from './orchestrator';
 import { ROLE_DEFINITIONS } from './role-definitions';
-import { ROLE_ROUTING_SLIM_LINES } from './role-routing';
+import { SPECIALIST_DESCRIPTIONS } from './role-descriptions';
 
 const FACTORIES = {
   explorer: createExplorerAgent,
@@ -59,15 +58,16 @@ describe('specialist role definitions', () => {
     );
   });
 
-  test('keeps routing lines available for specialists and council', () => {
-    const prompt = buildOrchestratorPrompt();
+  test('publishes shared routing guidance as native descriptions', () => {
     for (const role of SUPPORTED_SPECIALIST_ROLES) {
-      expect(prompt).toContain(ROLE_ROUTING_SLIM_LINES[role]);
+      expect(FACTORIES[role]('provider/model').description).toBe(
+        SPECIALIST_DESCRIPTIONS[role],
+      );
     }
-    expect(prompt).toContain(ROLE_ROUTING_SLIM_LINES.council);
-    expect(
-      buildOrchestratorPrompt({ disabledAgents: new Set(['explorer']) }),
-    ).not.toContain(ROLE_ROUTING_SLIM_LINES.explorer);
+    expect(SPECIALIST_DESCRIPTIONS.observer).toContain('full file path');
+    expect(SPECIALIST_DESCRIPTIONS.oracle).toContain(
+      'Not for routine verification',
+    );
   });
   test('keeps behavioral steering while fixing local prompt inconsistencies', () => {
     const designerPrompt = ROLE_DEFINITIONS.designer.prompt;
@@ -77,18 +77,15 @@ describe('specialist role definitions', () => {
     );
     expect(designerPrompt).toContain('requested product language');
     expect(designerPrompt).not.toContain('regular english');
-
-    expect(ROLE_ROUTING_SLIM_LINES.council).toContain('multi-model consensus');
-    expect(ROLE_ROUTING_SLIM_LINES.oracle).toContain('escalation');
   });
 
   test('default prompts keep role and guardrails, not tool catalogs', () => {
     const explorerPrompt = ROLE_DEFINITIONS.explorer.prompt;
-    expect(explorerPrompt).toContain(
-      'a fast research specialist for codebases and external knowledge',
-    );
-    expect(explorerPrompt).toContain('**Role**: Codebase navigation');
+    expect(explorerPrompt).toContain('codebase navigation');
+    expect(explorerPrompt).toContain('link official docs');
     expect(explorerPrompt).toContain('READ-ONLY: inspect and report');
+    expect(ROLE_DEFINITIONS.observer.prompt).toContain('never guess');
+    expect(ROLE_DEFINITIONS.observer.prompt).toContain('never paraphrase');
     expect(explorerPrompt).not.toContain('**Tool selection**');
     for (const catalog of [
       'ast_grep_search',

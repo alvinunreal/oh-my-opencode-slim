@@ -78,6 +78,10 @@ const QUOTA_BILLING_PATTERNS = [
   /\bpersonal-team-blocked\b/i,
   /\bspending.?limit\b/i,
   /\b(?:ran|run) out of credits\b/i,
+  // Account-credit refusal (issue #1935): a deterministic billing 400, not a
+  // malformed request, so the chain must advance. Narrow by design: the
+  // adapter's own wording only, never generic "credit"/"billing" text.
+  /insufficient credits|purchase more credits/i,
   // Quoted Zhipu codes also cover non-English JSON error bodies.
   /"1113"/,
   /"1308"/,
@@ -653,12 +657,7 @@ export type ForegroundFallbackOptions = {
     detail?: V2SwitchDetail,
   ) => void;
   /**
-   * Delay before first fallback; gives intercepting plugins time to recover.
-   * @default 0
-   */
-  initialRetryDelayMs?: number;
-  /**
-   * Delay between consecutive fallback attempts.
+   * Delay supplied to the native retry decision after a fallback switch.
    * @default 500
    */
   retryDelayMs?: number;
@@ -677,7 +676,6 @@ export class ForegroundFallbackManager {
   private readonly input: PluginInput;
   private readonly resolveAgentName: (agent: string) => string;
   private readonly maxRetries: number;
-  private readonly initialRetryDelayMs: number;
   private readonly retryDelayMs: number;
   private readonly v2RetryEnabled: boolean;
   private readonly chainSource: Record<
@@ -750,9 +748,6 @@ export class ForegroundFallbackManager {
   private readonly observedUserMessageIds = new Map<string, Set<string>>();
   /** Absorbed host retries in the current fallback descent. */
   private readonly sessionRetries = new Map<string, number>();
-  /** True after the first initial delay or immediate permanent intervention
-   *  has started in the current fallback descent. */
-  private readonly initialDelayUsed = new Set<string>();
   /** Exhaustion stage: 0 before exhaustion, 1 after the sticky fallback,
    *  and 2 when no further switch is attempted. */
   private readonly chainExhaustion = new Map<string, number>();
@@ -973,7 +968,6 @@ export class ForegroundFallbackManager {
       maxRetries = 3,
       coordinator,
       onSessionModelChanged,
-      initialRetryDelayMs = 0,
       retryDelayMs = 500,
       v2RetryEnabled = false,
       timers,
@@ -981,7 +975,6 @@ export class ForegroundFallbackManager {
     this.input = input;
     this.resolveAgentName = options.resolveAgentName ?? ((agent) => agent);
     this.maxRetries = maxRetries;
-    this.initialRetryDelayMs = initialRetryDelayMs;
     this.retryDelayMs = retryDelayMs;
     this.v2RetryEnabled = v2RetryEnabled;
     this.chainSource = chains;
@@ -1029,7 +1022,6 @@ export class ForegroundFallbackManager {
     this.sessionRetries.delete(id);
     this.chainExhaustion.delete(id);
     this.quotaExhaustedProviders.delete(id);
-    this.initialDelayUsed.delete(id);
   }
 
   /** Confirmed fallback serving this session, including unexpired provider failures. */
@@ -1524,23 +1516,6 @@ export class ForegroundFallbackManager {
         event.decision = { retry: true, delay: this.retryDelayMs };
         return;
       }
-      // initialRetryDelayMs has no steering form: the delay exists to give
-      // intercepting plugins a recovery window before a REPLAY, and
-      // steering performs no replay — the host's own retry backoff is
-      // the window. Note the divergence once per session instead of the
-      // old silent skip, which disabled the whole steering path whenever
-      // the delay was configured.
-      if (
-        this.initialRetryDelayMs > 0 &&
-        !this.initialDelayUsed.has(sessionID)
-      ) {
-        this.initialDelayUsed.add(sessionID);
-        log('[foreground-fallback] retry hook ignores initial delay', {
-          sessionID,
-          from,
-          delayMs: this.initialRetryDelayMs,
-        });
-      }
       if (
         this.sessionTried.get(sessionID)?.has(from) &&
         this.sessionModel.get(sessionID) !== from
@@ -2025,7 +2000,6 @@ export class ForegroundFallbackManager {
   private resetRecoveryState(sessionID: string, preserveQuota = false): void {
     this.sessionRetries.delete(sessionID);
     this.chainExhaustion.delete(sessionID);
-    this.initialDelayUsed.delete(sessionID);
     this.authGrace.delete(sessionID);
     this.sessionTried.delete(sessionID);
     if (!preserveQuota) this.quotaExhaustedProviders.delete(sessionID);
@@ -2112,7 +2086,6 @@ export class ForegroundFallbackManager {
     this.quotaExhaustedProviders.delete(sessionID);
     this.sessionRetries.delete(sessionID);
     this.chainExhaustion.delete(sessionID);
-    this.initialDelayUsed.delete(sessionID);
   }
 
   private selectFallbackModel(sessionID: string, error?: unknown) {

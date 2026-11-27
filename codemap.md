@@ -43,10 +43,11 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/hooks/cache-monitor/` | Observation-only runtime watchdog over provider cache telemetry (`tokens.cache.read/write`) that warns on prompt-cache busts and frozen-prefix plateaus. | [View Map](src/hooks/cache-monitor/codemap.md) |
 | `src/interview/` | `/interview` feature: per-session and dashboard prompt/state orchestration, persistence, local UI, and cross-process coordination. | [View Map](src/interview/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and per-provider MCP definitions. | [View Map](src/mcp/codemap.md) |
-| `src/multiplexer/` | Terminal multiplexer abstraction layer: backend selection plus tmux/zellij/herdr/kitty/wezterm/orca/cmux adapters. Pane lifecycle (admission, spawn, stable-idle close, rebuild, leftover sweep) runs in the TUI client process under `client/`; the server does not participate. | [View Map](src/multiplexer/codemap.md) |
+| `src/multiplexer/` | Terminal multiplexer abstraction layer: backend selection plus tmux/zellij/herdr/rex/kitty/wezterm/orca/cmux-tui adapters. Pane lifecycle (admission, spawn, stable-idle close, rebuild, optional leftover sweep) runs in the TUI client process under `client/`; the server does not participate. | [View Map](src/multiplexer/codemap.md) |
 | `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
 | `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
 | `src/multiplexer/herdr/` | herdr backend implementation for pane lifecycle. | [View Map](src/multiplexer/herdr/codemap.md) |
+| `src/multiplexer/rex/` | Superlogical Rex adapter: explicitly scoped parent-block splits and child-block close; no equalization or crash-leftover sweep. | [View Map](src/multiplexer/rex/codemap.md) |
 | `src/multiplexer/cmux/` | cmux new-generation TUI adapter only; no dedicated lifecycle, global state registry, or close policy. | [View Map](src/multiplexer/codemap.md) |
 | `src/multiplexer/client/` | Per-client pane lifecycle core in the TUI client process: admission, event filtering, readiness gating, stable-idle close, busy rebuilds, reconnect backfill, crash-leftover sweep, pane-title metadata, and diagnostics. | [View Map](src/multiplexer/client/codemap.md) |
 | `src/skills/` | Bundled install-time OpenCode skills shipped as static payloads. | [View Map](src/skills/codemap.md) |
@@ -80,7 +81,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 
 3. **Delegated execution**
    - On V2, OpenCode 2.3+ owns native background child execution, same-session continuation, steering, Job persistence, completion delivery, and restart recovery. The plugin registers exact-ID `task_status`/`task_cancel`/`task_reply` and child `task_report`; it reads host sessions on demand, keeps no child-job ledger, and adds no second completion message.
-   - The TUI client (`src/tui.ts` → `src/multiplexer/client/`) optionally mirrors those sessions into tmux, Zellij, Herdr, cmux, kitty, WezTerm, or Orca panes/surfaces; each client anchors new panes to its own pane resolved from the client environment at spawn time (never a shared registry).
+   - The TUI client (`src/tui.ts` → `src/multiplexer/client/`) optionally mirrors those sessions into tmux, Zellij, Herdr, Rex, cmux-tui, kitty, WezTerm, or Orca panes/surfaces; each client anchors new panes to its own pane resolved from the client environment at spawn time (never a shared registry).
    - Results flow back into the parent session through notifications/output polling.
 
 4. **Install/release path**

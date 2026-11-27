@@ -6,6 +6,7 @@ import {
   TASK_NO_NESTED_DISPATCH,
   TASK_OBSERVER_DISPATCH_ONLY,
 } from './permissions';
+import { SPECIALIST_DESCRIPTIONS } from './role-descriptions';
 import {
   DESIGNER_PROMPT,
   EXPLORER_PROMPT,
@@ -33,28 +34,25 @@ export const ROLE_DEFINITIONS: Readonly<
     id: 'explorer',
     prompt: EXPLORER_PROMPT,
     permission: { task: { ...TASK_OBSERVER_DISPATCH_ONLY } },
-    // Routing criteria live in the routing data / slim <Agents> lines; the
-    // description (native dynamic subagent list) stays a single
-    // non-duplicating identifier.
-    description: 'Fast codebase search and external docs/web research.',
+    description: SPECIALIST_DESCRIPTIONS.explorer,
   }),
   oracle: Object.freeze({
     id: 'oracle',
     prompt: ORACLE_PROMPT,
     permission: { task: { ...TASK_OBSERVER_DISPATCH_ONLY } },
-    description: 'Strategic technical advisor.',
+    description: SPECIALIST_DESCRIPTIONS.oracle,
   }),
   designer: Object.freeze({
     id: 'designer',
     prompt: DESIGNER_PROMPT,
     permission: { task: { ...TASK_OBSERVER_DISPATCH_ONLY } },
-    description: 'UI/UX design, review, and implementation.',
+    description: SPECIALIST_DESCRIPTIONS.designer,
   }),
   fixer: Object.freeze({
     id: 'fixer',
     prompt: FIXER_PROMPT,
     permission: { task: { ...TASK_NO_NESTED_DISPATCH } },
-    description: 'Fast implementation specialist.',
+    description: SPECIALIST_DESCRIPTIONS.fixer,
   }),
   observer: Object.freeze({
     id: 'observer',
@@ -63,7 +61,7 @@ export const ROLE_DEFINITIONS: Readonly<
       ...createReadOnlyAgentPermission(),
       task: { ...TASK_NO_NESTED_DISPATCH },
     },
-    description: 'Visual analysis specialist; requires a vision-capable model.',
+    description: SPECIALIST_DESCRIPTIONS.observer,
   }),
 });
 

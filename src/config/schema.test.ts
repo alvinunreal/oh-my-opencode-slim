@@ -145,24 +145,28 @@ describe('PluginConfigSchema ACP wrapper models', () => {
   });
 });
 
-describe('PluginConfigSchema fallback continuation policy', () => {
-  it('defaults to retrying the primary and accepts sticky fallback mode', () => {
-    expect(PluginConfigSchema.parse({ fallback: {} }).fallback).toMatchObject({
-      continuationPolicy: 'retry-primary',
+describe('PluginConfigSchema fallback settings', () => {
+  it('keeps only effective native fallback settings', () => {
+    expect(PluginConfigSchema.parse({ fallback: {} }).fallback).toEqual({
+      enabled: true,
+      maxRetries: 3,
+      retryDelayMs: 500,
     });
     expect(
       PluginConfigSchema.parse({
-        fallback: { continuationPolicy: 'stick-to-fallback' },
+        fallback: { enabled: false, maxRetries: 7, retryDelayMs: 125 },
       }).fallback,
-    ).toMatchObject({ continuationPolicy: 'stick-to-fallback' });
+    ).toEqual({ enabled: false, maxRetries: 7, retryDelayMs: 125 });
   });
 
-  it('rejects unknown continuation policies', () => {
-    expect(
-      PluginConfigSchema.safeParse({
-        fallback: { continuationPolicy: 'sometimes' },
-      }).success,
-    ).toBe(false);
+  it('rejects removed fallback keys instead of pretending they work', () => {
+    for (const fallback of [
+      { continuationPolicy: 'retry-primary' },
+      { initialRetryDelayMs: 0 },
+      { continuationPolicy: 'stick-to-fallback', initialRetryDelayMs: 100 },
+    ]) {
+      expect(PluginConfigSchema.safeParse({ fallback }).success).toBe(false);
+    }
   });
 });
 
@@ -443,7 +447,36 @@ describe('MultiplexerConfigSchema', () => {
       layout: 'main-vertical',
       main_pane_size: 60,
       equalize_panes: true,
+      agents: ['*'],
     });
+  });
+
+  it('defaults agents to ["*"] and keeps the three documented shapes', () => {
+    expect(MultiplexerConfigSchema.parse({}).agents).toEqual(['*']);
+    expect(
+      MultiplexerConfigSchema.parse({ agents: ['*', '!explorer'] }).agents,
+    ).toEqual(['*', '!explorer']);
+    expect(
+      MultiplexerConfigSchema.parse({ agents: ['oracle', 'fixer'] }).agents,
+    ).toEqual(['oracle', 'fixer']);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('disables pane management for a non-array agents value', () => {
+    const result = PluginConfigSchema.safeParse({
+      multiplexer: { type: 'tmux', agents: 'explorer' },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.multiplexer?.type).toBe('none');
+      // The invalid key is dropped, so the documented default applies.
+      expect(result.data.multiplexer?.agents).toEqual(['*']);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain('Invalid multiplexer config value');
+    expect(message).toContain('agents');
   });
 
   it('defaults equalize_panes to true and preserves an explicit false', () => {
@@ -497,6 +530,7 @@ describe('MultiplexerConfigSchema', () => {
       'tmux',
       'zellij',
       'herdr',
+      'rex',
       'kitty',
       'wezterm',
       'orca',
@@ -1083,6 +1117,11 @@ describe('PluginConfigSchema removed legacy keys', () => {
     expect(parsed.main_pane_size).toBe(40);
   });
 
+  it('accepts rex and lists it in the invalid multiplexer value message', () => {
+    expect(MultiplexerConfigSchema.parse({ type: 'rex' }).type).toBe('rex');
+    expect(MULTIPLEXER_INVALID_VALUE_MESSAGE).toContain('rex');
+  });
+
   it('lists orca in the invalid multiplexer value message', () => {
     expect(MULTIPLEXER_INVALID_VALUE_MESSAGE).toContain('orca');
     const result = MultiplexerConfigSchema.safeParse({ type: 'bogus' });
@@ -1093,20 +1132,15 @@ describe('PluginConfigSchema removed legacy keys', () => {
   });
 });
 
-describe('AgentOverrideConfigSchema.subagents', () => {
-  it('accepts a delegation-scope allowlist', () => {
-    const result = PluginConfigSchema.safeParse({
-      agents: {
-        orchestrator: { model: 'x/y', subagents: ['fixer', '@writer'] },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects the reserved * wildcard as a specialist name', () => {
-    const result = PluginConfigSchema.safeParse({
-      agents: { orchestrator: { model: 'x/y', subagents: ['fixer', '*'] } },
-    });
-    expect(result.success).toBe(false);
+describe('retired config keys', () => {
+  it('does not advertise routingBlock or agent subagents', () => {
+    const schema = z.toJSONSchema(PluginConfigSchema, { io: 'input' });
+    expect(schema.properties).not.toHaveProperty('routingBlock');
+    expect(PluginConfigSchema.parse({ routingBlock: false })).toEqual({});
+    expect(
+      PluginConfigSchema.safeParse({
+        agents: { orchestrator: { model: 'x/y', subagents: ['fixer'] } },
+      }).success,
+    ).toBe(false);
   });
 });

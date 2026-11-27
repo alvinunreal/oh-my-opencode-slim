@@ -9,6 +9,7 @@ const BASE_CONFIG: Omit<MultiplexerConfig, 'type'> = {
   layout: 'main-vertical',
   main_pane_size: 60,
   equalize_panes: true,
+  agents: ['*'],
 };
 
 const PANE_ENV_KEYS = [
@@ -23,6 +24,8 @@ const PANE_ENV_KEYS = [
   'KITTY_WINDOW_ID',
   'WEZTERM_PANE',
   'ORCA_TERMINAL_HANDLE',
+  'REX_SESSION',
+  'REX_BLOCK',
   'TERM_PROGRAM',
   'CMUX_TUI_SOCKET',
   'CMUX_MUX_SOCKET',
@@ -123,6 +126,27 @@ describe('multiplexer factory', () => {
 
     expect(multiplexer).not.toBeNull();
     expect(multiplexer?.type).toBe('herdr');
+  });
+
+  test('returns a rex instance when type is rex', async () => {
+    process.env.REX_SESSION = 'session-1';
+    process.env.REX_BLOCK = 'block-1';
+
+    const { getMultiplexer } = await importFreshFactory('rex-explicit');
+
+    expect(getMultiplexer({ ...BASE_CONFIG, type: 'rex' })?.type).toBe('rex');
+  });
+
+  test('auto-detects Rex only when both session and block are present', async () => {
+    process.env.REX_SESSION = 'session-1';
+
+    const { getMultiplexer } = await importFreshFactory('auto-rex-partial');
+    expect(getMultiplexer({ ...BASE_CONFIG, type: 'auto' })).toBeNull();
+
+    process.env.REX_BLOCK = 'block-1';
+    const { getMultiplexer: detectRex } =
+      await importFreshFactory('auto-rex-complete');
+    expect(detectRex({ ...BASE_CONFIG, type: 'auto' })?.type).toBe('rex');
   });
 
   test('forwards equalize_panes to an explicitly configured herdr adapter', async () => {
@@ -368,6 +392,36 @@ describe('multiplexer factory', () => {
     const { getMultiplexer: zellijFirst } =
       await importFreshFactory('auto-orca-zellij');
     expect(zellijFirst({ ...BASE_CONFIG, type: 'auto' })?.type).toBe('zellij');
+  });
+
+  test('auto selects nested tmux and zellij before Rex, and Rex before kitty', async () => {
+    process.env.REX_SESSION = 'session-1';
+    process.env.REX_BLOCK = 'block-1';
+    process.env.KITTY_WINDOW_ID = '4';
+    const { getMultiplexer: rexBeforeKitty } =
+      await importFreshFactory('auto-rex-kitty');
+    expect(rexBeforeKitty({ ...BASE_CONFIG, type: 'auto' })?.type).toBe('rex');
+
+    process.env.HERDR_PANE_ID = 'w1:p1';
+    const { getMultiplexer: herdrBeforeRex } =
+      await importFreshFactory('auto-herdr-rex');
+    expect(herdrBeforeRex({ ...BASE_CONFIG, type: 'auto' })?.type).toBe(
+      'herdr',
+    );
+    delete process.env.HERDR_PANE_ID;
+
+    process.env.TMUX_PANE = '%1';
+    const { getMultiplexer: tmuxBeforeRex } =
+      await importFreshFactory('auto-tmux-rex');
+    expect(tmuxBeforeRex({ ...BASE_CONFIG, type: 'auto' })?.type).toBe('tmux');
+
+    delete process.env.TMUX_PANE;
+    process.env.ZELLIJ_PANE_ID = '3';
+    const { getMultiplexer: zellijBeforeRex } =
+      await importFreshFactory('auto-zellij-rex');
+    expect(zellijBeforeRex({ ...BASE_CONFIG, type: 'auto' })?.type).toBe(
+      'zellij',
+    );
   });
 
   test('auto prefers wezterm over orca when both host handles are present', async () => {

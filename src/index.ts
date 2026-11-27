@@ -274,6 +274,44 @@ export type V2ProfileRefreshResult =
 export const HARD_PROFILE_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
   new Set(['invalid-json', 'invalid-schema', 'read-error']);
 
+function logUnmatchedAgentMcps(
+  registry: ResolvedAgentRegistry,
+  runtime: RuntimeConfig,
+): void {
+  // Later host transforms can add names that Slim's registry did not see.
+  const known = new Set(Object.keys(registry.mcpConfig));
+  for (const name of runtime.disabledMcps) known.add(name);
+  const marketplaceAgents = new Set(registry.marketplaceAgentNames);
+  // Unfiltered plugin-layer overrides hold marketplace explicit selections.
+  const configuredAgents =
+    marketplaceAgents.size > 0 ? runtime.agents() : undefined;
+  // Loader-resolved presets omit failed chains, so membership is the actual
+  // resolution: a raw `preset` name that never applied is not reported.
+  const presetName = runtime.preset;
+  const presets = runtime.plugin?.presets;
+  const preset =
+    presetName && presets && Object.hasOwn(presets, presetName)
+      ? presetName
+      : null;
+  for (const agent of registry.agentNames) {
+    const mcps = marketplaceAgents.has(agent)
+      ? configuredAgents?.[agent]?.mcps
+      : (registry.managedAgentConfig[agent] as { mcps?: unknown } | undefined)
+          ?.mcps;
+    if (!Array.isArray(mcps)) continue;
+    for (const literal of new Set(mcps)) {
+      if (typeof literal !== 'string' || literal === '*') continue;
+      if (literal.startsWith('!')) continue;
+      if (known.has(literal)) continue;
+      log('[plugin] MCP not found in Slim agent registry', {
+        agent,
+        preset,
+        mcp: literal,
+      });
+    }
+  }
+}
+
 export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   initLogger();
   log('[plugin] build info', getBuildInfo());
@@ -744,9 +782,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const councilSeats = agentDefs
         .filter((a) => a.name.startsWith('councillor-'))
         .map((a) => a.name);
-      // The block dispatches the seats in the orchestrator's `## Council`
-      // roster; a delegation scope without `council` drops that roster, so
-      // the procedure would target denied agents (issue #1591).
       const orchestratorPrompt = agentDefs.find(
         (a) => a.name === 'orchestrator',
       )?.config.prompt;
@@ -804,7 +839,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             );
           }
         },
-        initialRetryDelayMs: runtime.fallback.initialRetryDelayMs,
         retryDelayMs: runtime.fallback.retryDelayMs,
         v2RetryEnabled: fallbackUserEnabled,
       });
@@ -1221,6 +1255,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             runtime.everModelSwitched(agentName);
           },
         });
+        logUnmatchedAgentMcps(resolvedAgentRegistry, runtime);
         // Publish the finalized chain generation: marketplace candidates and
         // model-switch disables are merged by the shared publisher — the same
         // path every profile refresh republishes.
@@ -2115,8 +2150,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       companionStartupAbort?.abort();
       marketplaceLeaseAbort.abort();
       registryBridge.retire();
-      // Cancel pending initial-delay fallback timers so a reloaded
-      // generation cannot observe one stale fallback call.
+      // Fence pending fallback work owned by this generation.
       foregroundFallback?.dispose();
       try {
         clearTuiActivities();
@@ -2396,11 +2430,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             ? finalizedConfig.prompt
             : typeof targetDef?.config?.prompt === 'string'
               ? targetDef.config.prompt
-              : buildOrchestratorPrompt({
-                  disabledAgents: runtime.disabledAgents,
-                  hostFlavor,
-                  routingBlock: runtime.routingBlock,
-                });
+              : buildOrchestratorPrompt();
         // Dedup by the EFFECTIVE prompt, not by default-prompt markers:
         // a custom replacement without `<Role>` previously slipped past
         // the marker check and was appended twice (P + host + P).

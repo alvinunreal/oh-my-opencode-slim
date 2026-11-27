@@ -1,265 +1,148 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import type { PluginConfig } from '../config';
+import { CouncilConfigSchema } from '../config';
 import { RuntimeConfig } from '../config/runtime';
-import { createAgents } from './index';
+import { createAgents, getAgentConfigsFromDefinitions } from './index';
 import {
   buildOrchestratorPrompt,
   createOrchestratorAgent,
 } from './orchestrator';
-import { ROLE_ROUTING_SLIM_LINES } from './role-routing';
+import { SPECIALIST_DESCRIPTIONS } from './role-descriptions';
 
-const v1 = (options = {}) => buildOrchestratorPrompt(options);
-const v2 = (options = {}) =>
-  buildOrchestratorPrompt({ ...options, hostFlavor: 'v2' });
+const DIRECTORY = 'runtime-test-orchestrator-native-catalog';
+function agentsFor(config: PluginConfig = {}) {
+  RuntimeConfig.reset(DIRECTORY);
+  const runtime = RuntimeConfig.init(DIRECTORY, config);
+  return { runtime, agents: createAgents(runtime, { hostFlavor: 'v2' }) };
+}
 
-describe('orchestrator prompt: host vocabulary', () => {
-  test('default prompts name no optional delegation, model, or prompt tools', () => {
-    for (const prompt of [v1(), v2()]) {
-      // Tool usage lives in the tool descriptions, not in the prompt.
-      expect(prompt).not.toContain('`task`');
-      expect(prompt).not.toContain('`subagent`');
-      expect(prompt).not.toContain('models tool');
-      expect(prompt).not.toContain('wait_for_user');
-      expect(prompt).not.toContain('`question`');
-      expect(prompt).not.toContain('task_id');
-      expect(prompt).not.toContain('task_message');
-      expect(prompt).not.toContain('task_revive');
-      expect(prompt).not.toContain('task_result');
+afterEach(() => RuntimeConfig.reset(DIRECTORY));
+
+function promptOf(config: PluginConfig = {}): string {
+  return agentsFor(config).agents.find((agent) => agent.name === 'orchestrator')
+    ?.config.prompt as string;
+}
+
+describe('orchestrator prompt', () => {
+  test('keeps coordination policy without a second agent catalog', () => {
+    const prompt = buildOrchestratorPrompt();
+    for (const policy of [
+      'Orchestrator plans, delegates, monitors, reconciles and verifies',
+      'context-heavy docs',
+      'disjoint',
+      '<user_request>',
+      'commands, exit statuses',
+      'Summaries are claims, not evidence',
+      'same child',
+    ]) {
+      expect(prompt).toContain(policy);
+    }
+    for (const duplicate of [
+      '<Agents>',
+      'Skills:',
+      'Available subagents:',
+      '@explorer',
+      '@fixer',
+      'completion notifications resume you',
+      '`subagent`',
+      'task_id',
+      'task_message',
+      'task_revive',
+    ]) {
+      expect(prompt).not.toContain(duplicate);
     }
   });
 
-  test('unknown flavors render the v1 vocabulary', () => {
-    expect(buildOrchestratorPrompt({ hostFlavor: 'v1' })).toBe(v1());
-    expect(buildOrchestratorPrompt({ hostFlavor: 'v3-ish' })).toBe(v1());
+  test('renders deterministic bytes', () => {
+    const first = buildOrchestratorPrompt();
+    expect(buildOrchestratorPrompt()).toBe(first);
+    expect(first).toMatchSnapshot();
   });
 
-  test('shared guidance is identical across hosts', () => {
-    for (const prompt of [v1(), v2()]) {
-      expect(prompt).toContain('You are Orchestrator, a workflow manager');
-      expect(prompt).toContain('Value productivity');
-      expect(prompt).toContain('Build in passes');
-      expect(prompt).toContain('Subagent summaries are claims, not evidence');
-      expect(prompt).not.toContain('## File operations');
-    }
-  });
-});
-
-describe('orchestrator prompt: scoped catalog', () => {
-  const count = (prompt: string, token: string) =>
-    prompt.split(token).length - 1;
-
-  test('a scoped catalog is wrapped exactly once', () => {
-    const prompt = v2({ onlyAgents: ['fixer'] });
-    expect(count(prompt, '<Agents>')).toBe(1);
-    expect(count(prompt, '</Agents>')).toBe(1);
-  });
-
-  test('the unscoped catalog keeps its single wrapping', () => {
-    const prompt = v1();
-    expect(count(prompt, '<Agents>')).toBe(1);
-    expect(count(prompt, '</Agents>')).toBe(1);
-  });
-
-  test('out-of-scope @mentions are scrubbed from a reused routing line', () => {
-    const prompt = v2({ onlyAgents: ['designer'] });
-    expect(prompt).toContain('@designer — owns all UI/UX');
-    expect(prompt).not.toContain('@fixer');
-  });
-
-  test('a fully in-scope built-in line stays byte-identical', () => {
-    const prompt = v2({ onlyAgents: ['fixer'] });
-    expect(prompt).toContain(ROLE_ROUTING_SLIM_LINES.fixer);
-  });
-});
-
-describe('orchestrator prompt: blocking on the user', () => {
-  test('manual-step guidance is tool-neutral on every host', () => {
-    for (const prompt of [v1(), v2()]) {
-      expect(prompt).not.toContain('wait_for_user');
-      expect(prompt).not.toContain('`question`');
-      expect(prompt).toContain('external manual step, give concrete steps');
-      expect(prompt).toContain(
-        'Do not ask the user to wait for background tasks.',
-      );
-    }
-  });
-});
-
-describe('orchestrator prompt: options', () => {
-  test('disabledAgents and excludeDescriptions filter routing lines', () => {
-    for (const render of [v1, v2]) {
-      const full = render();
-      for (const line of Object.values(ROLE_ROUTING_SLIM_LINES)) {
-        expect(full).toContain(line);
-      }
-      const filtered = render({
-        disabledAgents: new Set(['explorer']),
-        excludeDescriptions: ['council'],
-      });
-      expect(filtered).not.toContain('@explorer —');
-      expect(filtered).not.toContain('@council —');
-      expect(filtered).toContain(ROLE_ROUTING_SLIM_LINES.fixer);
-    }
-  });
-
-  test('routingBlock=false removes the whole <Agents> element and nothing else', () => {
-    for (const render of [v1, v2]) {
-      const on = render();
-      const off = render({ routingBlock: false });
-      expect(on.match(/<Agents>/g)?.length).toBe(1);
-      expect(off).not.toContain('<Agents>');
-      expect(off).not.toContain('read-only codebase recon');
-      const [head, tail] = on.split('<Agents>');
-      expect(off).toBe(`${head}${tail.split('</Agents>\n\n')[1]}`);
-    }
-  });
-});
-
-describe('orchestrator prompt: cache safety', () => {
-  test('renders byte-identical output for identical options', () => {
-    // No time, randomness, or per-request state may reach the template.
-    for (const render of [v1, v2]) {
-      const first = render();
-      const second = render();
-      expect(first).toContain('You are Orchestrator, a workflow manager');
-      expect(first).toBe(second);
-    }
-
-    const opts = { disabledAgents: new Set(['explorer']) };
-    const scoped1 = v2(opts);
-    const scoped2 = v2(opts);
-    expect(scoped1).not.toContain('@explorer');
-    expect(scoped1).toContain('@oracle');
-    expect(scoped1).toBe(scoped2);
-  });
-
-  test('v1 render is snapshot-pinned', () => {
-    expect(v1()).toMatchSnapshot();
-  });
-
-  test('v2 render is snapshot-pinned', () => {
-    expect(v2()).toMatchSnapshot();
-  });
-});
-
-describe('createOrchestratorAgent', () => {
-  test('passes prompt options through to the builder', () => {
-    const options = { hostFlavor: 'v2', routingBlock: false };
-    const agent = createOrchestratorAgent(undefined, undefined, undefined, {
-      ...options,
-    });
-    expect(agent.config.prompt).toBe(buildOrchestratorPrompt(options));
-  });
-
-  test('a custom prompt replaces the built one and appends still apply', () => {
-    const agent = createOrchestratorAgent(undefined, 'custom', 'extra');
-    expect(agent.config.prompt).toBe('custom\n\nextra');
-  });
-});
-
-/** `createAgents`-level option resolution for the orchestrator prompt. */
-describe('createAgents orchestrator prompt gates', () => {
-  const TEST_DIRECTORY = 'runtime-test-orchestrator-gates';
-
-  function runtimeFor(config: PluginConfig | undefined = {}) {
-    RuntimeConfig.reset(TEST_DIRECTORY);
-    RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
-    return RuntimeConfig.get(TEST_DIRECTORY);
-  }
-
-  /** What the compact prompt may name: only the wake promise plus the
-   * host-neutral correction policy; no optional lifecycle tool. */
-  const _capabilities = (prompt: string) => ({
-    wakeScheduler: prompt.includes('wake scheduler'),
-    amend: prompt.includes('Amend the same child, never respawn it.'),
-  });
-
-  beforeEach(() => {
-    RuntimeConfig.reset(TEST_DIRECTORY);
-  });
-
-  afterEach(() => {
-    RuntimeConfig.reset(TEST_DIRECTORY);
-  });
-
-  test('v2 lifecycle off keeps the v2 vocabulary and names no managed tool', () => {
-    const agents = createAgents(
-      runtimeFor({ backgroundJobs: { mode: 'off' } }),
-      { hostFlavor: 'v2' },
-    );
-    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
-      .prompt as string;
+  test('manual user steps remain tool-neutral', () => {
+    const prompt = buildOrchestratorPrompt();
+    expect(prompt).toContain('external manual step, give concrete');
+    expect(prompt).toContain('instructions, then ask and end the turn.');
     expect(prompt).not.toContain('wait_for_user');
-    expect(prompt).not.toContain('wake scheduler');
-    expect(prompt).not.toContain('task_message');
-    // The v2 resume promise never included the scheduler.
-    expect(prompt).toContain('completion notifications resume you');
-    expect(prompt).toContain('dispatch in parallel');
-    expect(prompt).not.toContain('`subagent`');
+    expect(prompt).not.toContain('`question`');
   });
 
-  test("routing lines name each specialist's configured skills", () => {
-    const prompt = createAgents(
-      runtimeFor({ agents: { fixer: { skills: ['simplify'] } } }),
-    ).find((a) => a.name === 'orchestrator')?.config.prompt as string;
-    const fixerLine = prompt
-      .split('\n')
-      .find((line) => line.startsWith('@fixer'));
-    expect(fixerLine).toEndWith(' Skills: simplify.');
-    expect(prompt).toContain('A specialist can load only the skills');
-  });
-
-  test('routing lines keep skill grants from permission.skill', () => {
-    const agents = createAgents(
-      runtimeFor({
-        agents: {
-          fixer: {
-            permission: { skill: { '*': 'deny', 'custom-review': 'allow' } },
-          },
-        },
-      }),
+  test('custom replacements and append text are unchanged', () => {
+    expect(
+      createOrchestratorAgent(undefined, 'custom', 'extra').config.prompt,
+    ).toBe('custom\n\nextra');
+    expect(createOrchestratorAgent().config.prompt).toBe(
+      buildOrchestratorPrompt(),
     );
-    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
-      .prompt as string;
-    const fixerLine = prompt
-      .split('\n')
-      .find((line) => line.startsWith('@fixer'));
-    expect(fixerLine).toEndWith(' Skills: custom-review.');
-    const fixerPermission = agents.find((a) => a.name === 'fixer')?.config
-      .permission as { skill?: Record<string, string> } | undefined;
-    const fixerSkill = fixerPermission?.skill;
-    expect(fixerSkill?.['custom-review']).toBe('allow');
   });
+});
 
-  test('defaults keep the snapshot-pinned builder bytes', () => {
-    // No cold-gate is set: the default render must lead to the same bytes
-    // the snapshot-pinned builder produces with the same option defaults.
-    for (const hostFlavor of [undefined, 'v2'] as const) {
-      const agents = createAgents(
-        runtimeFor(undefined),
-        hostFlavor === undefined ? {} : { hostFlavor },
-      );
-      const prompt = agents.find((a) => a.name === 'orchestrator')?.config
-        .prompt as string;
-      expect(prompt).toBe(
-        buildOrchestratorPrompt({
-          disabledAgents: new Set(['observer', 'council', 'councillor']),
-          agentSkills: { oracle: 'simplify' },
-          hostFlavor,
-        }),
-      );
+describe('native agent catalog ownership', () => {
+  test('ordinary roster changes do not alter the coordinator prompt', () => {
+    const expected = buildOrchestratorPrompt();
+    for (const config of [
+      {},
+      { backgroundJobs: { mode: 'off' } },
+      { disabled_agents: ['explorer', 'oracle', 'designer', 'fixer'] },
+      { agents: { fixer: { skills: ['simplify'] } } },
+    ] satisfies PluginConfig[]) {
+      expect(promptOf(config)).toBe(expected);
     }
   });
 
-  test('disabled_tools no longer changes orchestrator prompt bytes', () => {
-    const prompt = (config: PluginConfig | undefined) =>
-      createAgents(runtimeFor(config)).find((a) => a.name === 'orchestrator')
-        ?.config.prompt as string;
-    // The prompt is tool-neutral, so a disabled optional tool cannot be
-    // duplicated in (or removed from) the rendered text.
-    expect(prompt(undefined)).not.toContain('wait_for_user');
-    expect(prompt({ disabled_tools: ['wait_for_user'] })).toBe(
-      prompt(undefined),
+  test('native descriptions carry routing criteria and permission maps stay authored', () => {
+    const { runtime, agents } = agentsFor({
+      disabled_agents: [],
+      agents: {
+        oracle: { displayName: 'Advisor' },
+        orchestrator: {
+          permission: { task: { '*': 'deny', Advisor: 'allow' } },
+        },
+      },
+    });
+    const config = getAgentConfigsFromDefinitions(runtime, agents);
+    expect(config.Advisor.description).toBe(SPECIALIST_DESCRIPTIONS.oracle);
+    const permissions = config.orchestrator.permission as {
+      task: Record<string, string>;
+    };
+    expect(Object.entries(permissions.task)).toEqual([
+      ['*', 'deny'],
+      ['Advisor', 'allow'],
+    ]);
+    expect(config.orchestrator.prompt).not.toContain('<Agents>');
+    expect(config.orchestrator.prompt).not.toContain('@Advisor');
+  });
+
+  test('skill authorization no longer needs a second routing projection', () => {
+    const { agents } = agentsFor({
+      agents: {
+        fixer: {
+          permission: { skill: { '*': 'deny', 'custom-review': 'allow' } },
+        },
+      },
+    });
+    expect(
+      agents.find((agent) => agent.name === 'fixer')?.config.permission,
+    ).toMatchObject({ skill: { '*': 'deny', 'custom-review': 'allow' } });
+    expect(
+      agents.find((agent) => agent.name === 'orchestrator')?.config.prompt,
+    ).not.toContain('Skills:');
+  });
+
+  test('the hidden Council roster and its procedure pointer remain', () => {
+    const { runtime, agents } = agentsFor({
+      backgroundJobs: { mode: 'off' },
+      disabled_agents: ['explorer', 'oracle', 'designer', 'fixer'],
+      council: CouncilConfigSchema.parse({
+        presets: { default: { alpha: { model: 'test/seat' } } },
+      }),
+    });
+    const config = getAgentConfigsFromDefinitions(runtime, agents);
+    expect(config.orchestrator.prompt).toContain(
+      '## Council\nSeats: councillor-alpha',
     );
+    expect(config.orchestrator.prompt).not.toContain('<Agents>');
+    expect(config['councillor-alpha'].hidden).toBe(true);
+    expect(config.observer.description).toBe(SPECIALIST_DESCRIPTIONS.observer);
   });
 });

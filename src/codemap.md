@@ -81,8 +81,14 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 1. **Plugin Registration**: TUI plugin registered with OpenCode's TUI system via `tui` export
 2. **Version Detection**: Reads plugin version from package.json or uses 'dev'
 3. **Config Validation**: Checks if current directory has valid plugin config
-4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
-   from `tui-state.ts`
+4. **Snapshot Loading**: Reads `tui-state.ts` and reconciles sidebar rows against
+   the host catalog after applying the saved session and team projections
+   (#1943). A nonempty roster is cached for a minute even if its agents have no
+   explicit models; failed or empty reads leave rows alone and retry after 5s.
+   Slim config changes, directory switches, and the v2 host's `agent.updated`
+   event (including after `/reload`) bypass the cache. Live models fill gaps
+   without replacing local selections (#1133) or adding unrelated host rows.
+   An unambiguous case-only rename carries the row, not its old model or variant.
 5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
    advances 100ms animation frames only while agents are active; identical
    model-name refreshes do not rebuild the sidebar
@@ -175,7 +181,7 @@ Key event flows:
 - **Agents** (`src/agents/`): Agent personalities and permission sets
 - **Tools** (`src/tools/`): Tool implementations (task lifecycle controls, webfetch, AST operations, ACP)
 - **Hooks** (`src/hooks/`): Phase reminders, cache monitoring, event observations, and tool guards.
-- **Multiplexer** (`src/multiplexer/`): Client-side pane lifecycle (`client/`) plus tmux/Zellij/Herdr/cmux/kitty adapters; wired only from the TUI entry
+- **Multiplexer** (`src/multiplexer/`): Client-side pane lifecycle (`client/`) plus tmux/Zellij/Herdr/Rex/cmux-tui/kitty/WezTerm/Orca adapters; wired only from the TUI entry
 - **Council** (`src/agents/council.ts`, `src/agents/council-agents.ts`): Multi-LLM council orchestration
 - **Companion** (`src/companion/`): Companion version management
 - **Utils** (`src/utils/`): Logger, environment checks, and session status

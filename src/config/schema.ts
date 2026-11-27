@@ -103,22 +103,6 @@ export const AgentOverrideConfigSchema = z
       'Agent display color as #RRGGBB or an OpenCode theme color',
     ),
     description: z.string().min(1).optional(),
-    subagents: z
-      .array(z.string().min(1))
-      .refine((names) => names.every((name) => name.trim().length > 0), {
-        message: 'specialist names must not be empty or whitespace-only',
-      })
-      .refine(
-        (names) => names.every((name) => name.trim().replace(/^@/, '') !== '*'),
-        {
-          message:
-            "'*' is reserved for the delegation-scope wildcard and is not a specialist name",
-        },
-      )
-      .optional()
-      .describe(
-        "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
-      ),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })
   .strict();
@@ -129,6 +113,7 @@ export const MultiplexerTypeSchema = z.enum([
   'tmux',
   'zellij',
   'herdr',
+  'rex',
   'kitty',
   'wezterm',
   'orca',
@@ -177,15 +162,24 @@ const MultiplexerViewerSchema = z.enum(['tui', 'mini']);
 export type MultiplexerViewer = z.infer<typeof MultiplexerViewerSchema>;
 
 /**
+ * Which subagents get a pane, in the shared `"*"` / `"!name"` list syntax.
+ * `["*"]` (default) opens a pane for every child, `["*", "!explorer"]` skips
+ * the excluded ones, and `["oracle", "fixer"]` opens panes only for the
+ * listed names. The filtered-out child still runs; only its pane is skipped.
+ */
+const MultiplexerAgentsSchema = z.array(z.string());
+
+/**
  * Invalid `type` / `layout` / `main_pane_size` / `cmux_tui_binary` / `viewer` /
- * `equalize_panes` values disable pane management with one diagnostic.
+ * `equalize_panes` / `agents` values disable pane management with one
+ * diagnostic.
  */
 export const MULTIPLEXER_INVALID_VALUE_MESSAGE =
   'Invalid multiplexer config value; pane management is disabled. Expected ' +
-  'type (auto|tmux|zellij|herdr|kitty|wezterm|orca|cmux-tui|none), layout ' +
+  'type (auto|tmux|zellij|herdr|rex|kitty|wezterm|orca|cmux-tui|none), layout ' +
   '(main-horizontal|main-vertical|tiled|even-horizontal|even-vertical), ' +
   'main_pane_size (20-80), cmux_tui_binary (non-empty string), ' +
-  'viewer (tui|mini), equalize_panes (boolean).';
+  'viewer (tui|mini), equalize_panes (boolean), agents (string array).';
 
 export const MULTIPLEXER_RENAMED_TYPE_MESSAGE =
   'multiplexer.type "cmux" was renamed to "cmux-tui"; update your config.';
@@ -257,6 +251,12 @@ function invalidMultiplexerKeys(config: Record<string, unknown>): string[] {
   ) {
     invalid.push('equalize_panes');
   }
+  if (
+    'agents' in config &&
+    !MultiplexerAgentsSchema.safeParse(config.agents).success
+  ) {
+    invalid.push('agents');
+  }
   return invalid;
 }
 
@@ -265,9 +265,9 @@ function invalidMultiplexerKeys(config: Record<string, unknown>): string[] {
  *
  * Semantics (spec "配置面"):
  * - an invalid `type` / `layout` / `main_pane_size` / `cmux_tui_binary` /
- *   `viewer` / `equalize_panes` value (or a non-object `multiplexer` value)
- *   disables pane management (`type: "none"`) with a once-per-process
- *   diagnostic instead of failing the whole plugin config;
+ *   `viewer` / `equalize_panes` / `agents` value (or a non-object
+ *   `multiplexer` value) disables pane management (`type: "none"`) with a
+ *   once-per-process diagnostic instead of failing the whole plugin config;
  * - the old `cmux` type value is a hard rename to `cmux-tui` (no alias): it
  *   goes through the same invalid-value path, plus a specific
  *   once-per-process diagnostic naming the replacement.
@@ -335,6 +335,12 @@ export const MultiplexerConfigStrictSchema = z.object({
   equalize_panes: MultiplexerEqualizePanesSchema.default(true).describe(
     'Herdr only: re-equalize the agent panes after each spawn and ' +
       'agent-pane close. Set false to keep manual pane sizes.',
+  ),
+  agents: MultiplexerAgentsSchema.default(['*']).describe(
+    'Which subagents get a pane: ["*"] (default) opens one for every child, ' +
+      '["*", "!explorer"] opens one for every child except the excluded ' +
+      'names, and ["oracle", "fixer"] opens one only for the listed names. A ' +
+      'filtered-out subagent still runs; only its pane is skipped.',
   ),
   zellij_pane_mode: z
     .never({ error: 'multiplexer.zellij_pane_mode was removed' })
@@ -644,7 +650,7 @@ function emitBackgroundJobsDiagnostic(message: string): void {
 }
 
 /** Issue #1291: drop invalid `backgroundJobs` keys instead of rejecting the whole config layer. */
-export function sanitizeBackgroundJobsConfig(value: unknown): unknown {
+function sanitizeBackgroundJobsConfig(value: unknown): unknown {
   if (value === undefined) return value;
   if (!isPlainConfigObject(value)) {
     emitBackgroundJobsDiagnostic(
@@ -670,8 +676,6 @@ export const BackgroundJobsConfigSchema = z.preprocess(
   BackgroundJobsConfigStrictSchema,
 );
 
-export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
-
 /** Resolved background-task lifecycle mode. */
 export type BackgroundJobsMode = 'managed' | 'native' | 'off';
 
@@ -684,22 +688,10 @@ export const FailoverConfigSchema = z
       .min(0)
       .default(3)
       .describe(
-        'Number of current-model retries allowed before Slim switches to ' +
-          'the next fallback model (or aborts when no chain is configured). ' +
-          'The budget is shared across the whole fallback chain and is not ' +
-          'reset by a model switch; it resets only on a successful ' +
-          'assistant response, session deletion, or a new user turn. 0 ' +
-          'switches immediately.',
-      ),
-    initialRetryDelayMs: z
-      .number()
-      .int()
-      .min(0)
-      .default(0)
-      .describe(
-        'Delay in milliseconds before triggering the first fallback on a ' +
-          'failover-worthy error. Gives intercepting plugins time to recover ' +
-          'the current model before the fallback chain advances. 0 disables.',
+        'Host retries tolerated before a model switch. Shared across the ' +
+          'fallback chain and user turns; successful execution or response, ' +
+          'session deletion, or fresh descent from the configured primary ' +
+          're-arms it. 0 switches immediately.',
       ),
     retryDelayMs: z
       .number()
@@ -707,18 +699,8 @@ export const FailoverConfigSchema = z
       .min(0)
       .default(500)
       .describe(
-        'Delay in milliseconds between consecutive fallback attempts ' +
-          'after the initial trigger. 0 disables.',
-      ),
-    continuationPolicy: z
-      .enum(['retry-primary', 'stick-to-fallback'])
-      .default('retry-primary')
-      .describe(
-        'Model policy for unpinned OpenCode v1 internal continuations ' +
-          '(for example, background completion and lifecycle wakes) after ' +
-          'a confirmed fallback. "retry-primary" lets the host try the ' +
-          'configured primary again; "stick-to-fallback" keeps the ' +
-          'confirmed fallback until a new external user turn.',
+        'Delay in milliseconds for the native retry decision when Slim ' +
+          'switches or reconciles fallback. 0 disables that delay.',
       ),
     timeoutMs: z.never({ error: 'fallback.timeoutMs was removed' }).optional(),
     retry_on_empty: z
@@ -898,12 +880,6 @@ const RawPluginConfigSchema = z
       .optional()
       .describe(
         'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
-      ),
-    routingBlock: z
-      .boolean()
-      .optional()
-      .describe(
-        "When false, removes the <Agents> routing block from the built-in orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
       ),
     autoUpdate: z
       .boolean()

@@ -59,7 +59,7 @@ oh-my-opencode-slim은 OpenCode에서 여러 전문 에이전트의 작업을 �
   내장 MCP를 제공합니다.
 - **[폭넓은 사용자 지정](docs/configuration.md)** - 사용자 지정 에이전트,
   프롬프트 재정의, 에이전트별 스킬/MCP 권한 및
-  [프로젝트 로컬 사용자 지정](docs/project-local-customization.md)을 지원합니다.
+  [프로젝트 로컬 사용자 지정](docs/configuration.md)을 지원합니다.
   도구, MCP, 에이전트, 스킬, 훅, 슬래시 명령을 전역 설정으로 비활성화할 수도 있습니다.
 - **[마켓플레이스 패키지](docs/marketplace.md)** - 커뮤니티 에이전트를 설치하고
   관리합니다. 패키지 변경은 OpenCode를 다시 로드한 뒤 적용됩니다.
@@ -624,9 +624,9 @@ bunx oh-my-opencode-slim@latest companion install
 | **[사용자 지정 에이전트](docs/configuration.md#custom-agents)** | 프롬프트, 모델, MCP 접근 권한, Orchestrator 위임 규칙을 지정해 전문 에이전트 정의 |
 | **[ACP 에이전트](docs/acp-agents.md)** | Claude Code ACP, Gemini ACP 등 Agent Client Protocol(ACP) 호환 외부 에이전트에 작업을 위임하고, 도구 실행과 계획 진행 상황을 터미널 UI(TUI)에서 실시간으로 확인 |
 | **[멀티플렉서 통합](docs/multiplexer-integration.md)** | Tmux, Zellij, Herdr, cmux, kitty 또는 WezTerm 분할 창에서 에이전트 작업을 실시간으로 확인 |
-| **[Codemap](docs/codemap.md)** | 계층형 코드맵을 생성하여 대규모 코드베이스를 빠르게 파악 |
-| **[Clonedeps](docs/clonedeps.md)** | 선택한 의존성 소스를 Git 추적에서 제외된 로컬 작업 공간에 복제해 내부 구현 확인 |
-| **[Worktrees](docs/worktrees.md)** | `.slim/worktrees/`의 독립된 작업 공간에서 병렬·고위험 코딩 작업 수행 |
+| **[Codemap](docs/skills.md#codemap)** | 계층형 코드맵을 생성하여 대규모 코드베이스를 빠르게 파악 |
+| **[Clonedeps](docs/skills.md#clonedeps)** | 선택한 의존성 소스를 Git 추적에서 제외된 로컬 작업 공간에 복제해 내부 구현 확인 |
+| **[Worktrees](docs/skills.md#worktrees)** | `.slim/worktrees/`의 독립된 작업 공간에서 병렬·고위험 코딩 작업 수행 |
 | **[프리셋 전환](docs/presets/preset-switching.md)** | `/preset`으로 실행 중에 에이전트 모델 프리셋 전환 |
 | **[Interview](docs/interview.md)** | 브라우저 기반 질의응답으로 아직 구체화되지 않은 아이디어를 구조화된 마크다운 명세로 변환 |
 | **[Companion](docs/companion.md)** | 파싱, 도움말, 타입을 위한 플로팅 창 Companion |
@@ -636,10 +636,10 @@ bunx oh-my-opencode-slim@latest companion install
 | 문서 | 내용 |
 |-----|------|
 | **[설치 가이드](docs/installation.md)** | 플러그인 설치, 명령줄 인터페이스(CLI) 옵션 사용, 설정 초기화, 설치 문제 해결 |
-| **[OpenCode v2 호환성](docs/opencode-v2-compatibility.md)** | `opencode`에서 플러그인 실행, 기능 지원표, v2.3.0+ 호환 기준, 버전 고정 |
+| **[OpenCode 2 어댑터](src/v2/codemap.md)** | 호스트 계약, 요청 처리, 권한 및 검증 |
 | **[설정](docs/configuration.md)** | 설정 파일 위치, 주석을 지원하는 JSON(JSONC), 프롬프트 재정의, 전체 옵션 설명 |
 | **[마켓플레이스](docs/marketplace.md)** | 마켓플레이스 에이전트 패키지 설치, 확인, 활성화, 업데이트 |
-| **[프로젝트별 사용자 지정](docs/project-local-customization.md)** | 저장소별 사용자 지정 에이전트, 프롬프트 재정의, 에이전트별 스킬 및 설정 우선순위 |
+| **[프로젝트별 사용자 지정](docs/configuration.md)** | 저장소별 사용자 지정 에이전트, 프롬프트 재정의, 에이전트별 스킬 및 설정 우선순위 |
 | **[백그라운드 오케스트레이션](docs/background-orchestration.md)** | 기본 백그라운드 서브에이전트 기능을 활용하는 작업 배정 중심의 Orchestrator 운영 방식 |
 | **[유지보수 가이드](docs/maintainers.md)** | 이슈 분류 규칙, 라벨 의미, 지원 요청 전달 경로, 저장소 유지보수 워크플로 |
 | **[스킬](docs/skills.md)** | `simplify`, `codemap`, `clonedeps`, `deepwork`, `verification-planning`, `reflect`, `worktrees`, `oh-my-opencode-slim` 등 번들 스킬 |

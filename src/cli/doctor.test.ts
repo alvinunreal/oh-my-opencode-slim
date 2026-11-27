@@ -125,6 +125,102 @@ describe('runDoctorCheck', () => {
     expect(runDoctorCheck(project, 'v1').ok).toBe(true);
   });
 
+  test('removed fallback keys name the invalid layer without hiding valid disables', () => {
+    const ancestor = path.join(tempDir, 'workspace');
+    const project = path.join(ancestor, 'repo');
+    const userFile = path.join(
+      tempDir,
+      'user-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const ancestorFile = path.join(
+      ancestor,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const projectFile = path.join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    for (const file of [userFile, ancestorFile, projectFile]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+    }
+    fs.writeFileSync(
+      projectFile,
+      JSON.stringify({
+        backgroundJobs: { mode: 'off' },
+        disabled_hooks: ['foreground-fallback'],
+      }),
+    );
+    for (const invalidFile of [userFile, ancestorFile]) {
+      for (const [key, value] of [
+        ['continuationPolicy', 'retry-primary'],
+        ['initialRetryDelayMs', 0],
+      ] as const) {
+        fs.writeFileSync(
+          invalidFile,
+          JSON.stringify({
+            fallback: { [key]: value },
+            disabled_tools: ['webfetch'],
+          }),
+        );
+        const result = runDoctorCheck(project, 'v2');
+        expect(result.ok).toBe(false);
+        expect(
+          JSON.parse(formatJsonDoctorResult(result)).configs,
+        ).toContainEqual(
+          expect.objectContaining({
+            path: invalidFile,
+            ok: false,
+            error: {
+              kind: 'unsupported-host',
+              message: expect.stringContaining(`fallback.${key}`),
+            },
+          }),
+        );
+        const invalid = result.configs.find(
+          (config) => config.path === invalidFile,
+        );
+        expect(invalid?.error?.message).toContain('then run /reload');
+        expect(invalid?.config).toBeUndefined();
+        const valid = result.configs.find(
+          (config) => config.path === projectFile,
+        );
+        expect(valid?.ok).toBe(true);
+        expect(valid?.config).toMatchObject({
+          backgroundJobs: { mode: 'off' },
+          disabled_hooks: ['foreground-fallback'],
+        });
+        fs.writeFileSync(invalidFile, '{}');
+      }
+    }
+  });
+
+  test('reports the retired allowlist with its file and native replacement', () => {
+    const configDir = path.join(tempDir, 'project', '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    const file = path.join(configDir, 'oh-my-opencode-slim.json');
+    fs.writeFileSync(
+      file,
+      '{"agents":{"orchestrator":{"subagents":["fixer"]}}}',
+    );
+    const result = runDoctorCheck(path.dirname(configDir));
+    expect(result.ok).toBe(false);
+    expect(result.configs).toContainEqual(
+      expect.objectContaining({
+        path: file,
+        ok: false,
+        error: {
+          kind: 'unsupported-host',
+          message: expect.stringContaining('agents.orchestrator.subagents'),
+        },
+      }),
+    );
+    expect(formatJsonDoctorResult(result)).toContain('opencode.json[c]');
+  });
+
   test('checks all inherited layers and resolves presets across them', () => {
     const workspace = path.join(tempDir, 'workspace');
     const projectDir = path.join(workspace, 'repo');
@@ -505,6 +601,7 @@ describe('runDoctorCheck', () => {
       layout: 'tiled',
       main_pane_size: 40,
       equalize_panes: true,
+      agents: ['*'],
     });
   });
 

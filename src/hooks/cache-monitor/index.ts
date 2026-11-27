@@ -15,6 +15,7 @@
 
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import { resolveV2EventPayload } from '../../v2/runtime-profiles';
 
 /**
  * Requests below this input size are ignored: tiny prompts sit under
@@ -64,7 +65,26 @@ interface SessionCacheState {
   plateauInputTokens: number;
   plateauWarned: boolean;
   processedMessageIDs: Set<string>;
+  /** Agent/model/provider of the latest started step. */
+  config?: string;
 }
+
+/**
+ * Cleared when the producing configuration changes: the new prompt prefix
+ * makes the next cold cache expected. Request count and message dedupe
+ * survive.
+ */
+const EMPTY_CACHE_BASELINE = {
+  everReportedCache: false,
+  lastCacheRead: 0,
+  warnedSinceLastHit: false,
+  neverCachedStreak: 0,
+  neverCachedInputTokens: 0,
+  neverCachedWarned: false,
+  plateauStreak: 0,
+  plateauInputTokens: 0,
+  plateauWarned: false,
+} satisfies Partial<SessionCacheState>;
 
 export interface CacheMonitorOptions {
   logger?: (message: string, data?: unknown) => void;
@@ -140,27 +160,53 @@ export function createCacheMonitorHook(options: CacheMonitorOptions = {}) {
 
   function getSessionState(sessionID: string): SessionCacheState {
     const existing = sessions.get(sessionID);
-    if (existing) return existing;
+    if (existing) {
+      // Refresh recency for every observed event (start or completion), so
+      // the cap evicts the least recently observed session.
+      sessions.delete(sessionID);
+      sessions.set(sessionID, existing);
+      return existing;
+    }
 
     if (sessions.size >= MAX_TRACKED_SESSIONS) {
       const oldest = sessions.keys().next().value;
       if (oldest !== undefined) sessions.delete(oldest);
     }
     const state: SessionCacheState = {
+      ...EMPTY_CACHE_BASELINE,
       completedRequests: 0,
-      everReportedCache: false,
-      lastCacheRead: 0,
-      warnedSinceLastHit: false,
-      neverCachedStreak: 0,
-      neverCachedInputTokens: 0,
-      neverCachedWarned: false,
-      plateauStreak: 0,
-      plateauInputTokens: 0,
-      plateauWarned: false,
       processedMessageIDs: new Set(),
     };
     sessions.set(sessionID, state);
     return state;
+  }
+
+  /**
+   * v2 completed-step telemetry carries no agent/model; the started event
+   * does. A session runs one step at a time, so the first step under a new
+   * configuration is exactly where the prompt prefix changes — clear the
+   * baseline there, before that step completes.
+   */
+  function observeStepStarted(event: Record<string, unknown>): void {
+    const payload = resolveV2EventPayload(event);
+    const sessionID = payload.sessionID;
+    const model = isRecord(payload.model) ? payload.model : undefined;
+    if (
+      typeof sessionID !== 'string' ||
+      typeof payload.agent !== 'string' ||
+      typeof model?.id !== 'string' ||
+      typeof model.providerID !== 'string'
+    ) {
+      return;
+    }
+    // Variants are excluded: the host keeps prompt-cache settings at the
+    // model level, so a variant-only switch keeps the prefix.
+    const config = JSON.stringify([payload.agent, model.providerID, model.id]);
+    const state = getSessionState(sessionID);
+    if (state.config !== undefined && state.config !== config) {
+      Object.assign(state, EMPTY_CACHE_BASELINE);
+    }
+    state.config = config;
   }
 
   function observe(message: CompletedAssistantMessage): void {
@@ -170,6 +216,7 @@ export function createCacheMonitorHook(options: CacheMonitorOptions = {}) {
       state.processedMessageIDs.clear();
     }
     state.processedMessageIDs.add(message.messageID);
+
     state.completedRequests += 1;
 
     const busted =
@@ -213,7 +260,7 @@ export function createCacheMonitorHook(options: CacheMonitorOptions = {}) {
       ) {
         state.neverCachedWarned = true;
         logger(
-          '[cache-monitor] session has never hit the provider cache: every sizeable request reported 0 cache-read tokens. If this provider supports prompt caching, the prompt prefix is likely changing on every request; if not, this session is re-paying full input each turn — see docs/cache-verification.md.',
+          '[cache-monitor] session is not hitting the provider cache: every sizeable request in the current configuration window reported 0 cache-read tokens. If this provider supports prompt caching, the prompt prefix is likely changing on every request; if not, this session is re-paying full input each turn — see docs/cache-verification.md.',
           {
             sessionID: message.sessionID,
             requestNumber: state.completedRequests,
@@ -268,6 +315,14 @@ export function createCacheMonitorHook(options: CacheMonitorOptions = {}) {
         const deleted = deletedSessionID(input.event);
         if (deleted) {
           sessions.delete(deleted);
+          return;
+        }
+
+        if (
+          isRecord(input.event) &&
+          input.event.type === 'session.step.started'
+        ) {
+          observeStepStarted(input.event);
           return;
         }
 

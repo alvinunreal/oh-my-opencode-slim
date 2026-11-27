@@ -169,7 +169,6 @@ function makeOptions(
     maxRetries: 3,
     coordinator: undefined,
     onSessionModelChanged: undefined,
-    initialRetryDelayMs: 0,
     retryDelayMs: 500,
     timers: undefined,
     ...overrides,
@@ -181,7 +180,6 @@ function makeOptions(
 function makeManager({
   chain = ['test/a', 'test/b', 'test/c'],
   maxRetries = 3,
-  initialRetryDelayMs = 0,
   retryDelayMs = 0,
   hostFlavor,
   onChanged,
@@ -189,7 +187,6 @@ function makeManager({
 }: {
   chain?: ReadonlyArray<string | { id: string; variant?: string }>;
   maxRetries?: number;
-  initialRetryDelayMs?: number;
   retryDelayMs?: number;
   hostFlavor?: 'v2';
   onChanged?: (sessionID: string, model: string) => void;
@@ -210,7 +207,6 @@ function makeManager({
         input: { directory: '/test', hostFlavor } as never,
         maxRetries: maxRetries,
         onSessionModelChanged: onChanged,
-        initialRetryDelayMs: initialRetryDelayMs,
         retryDelayMs: retryDelayMs,
         timers: timers,
       }),
@@ -346,7 +342,6 @@ describe('foreground fallback redo harness', () => {
       },
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -408,7 +403,6 @@ describe('foreground fallback redo harness', () => {
       chains: { orchestrator: chain },
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -451,7 +445,6 @@ describe('foreground fallback redo harness', () => {
       },
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 3,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -672,7 +665,6 @@ describe('foreground fallback redo: host retry budget', () => {
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: false,
     });
@@ -743,32 +735,28 @@ describe('foreground fallback redo: host retry budget', () => {
       capture.mockRestore();
     }
   });
-  test('v2 steering ignores the configured initial delay', async () => {
+  test('v2 steering applies the configured retry delay after switching', async () => {
     const mgr = timedManager({
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 250,
-      // initialRetryDelayMs — no replay to delay on the steering path
-      retryDelayMs: 0,
+      retryDelayMs: 250,
     });
     const switchModel = mock(async () => ({}));
     const event = retryEvent('v2-delay', 'a', { retry: true, delay: 77 });
     await mgr.handleV2Retry(event, switchModel);
-    // No deferred same-model retry: the first failover event switches.
     expect(switchModel).toHaveBeenCalledTimes(1);
     expect(switchModel).toHaveBeenCalledWith('v2-delay', {
       providerID: 'test',
       id: 'b',
     });
-    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(event.decision).toEqual({ retry: true, delay: 250 });
   });
   test('v2 bookkeeping resets descent state without replay interventions', async () => {
     const mgr = timedManager({
       chains: makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       input: { directory: '/test', hostFlavor: 'v2' } as never,
       maxRetries: 0,
-      initialRetryDelayMs: 0,
       retryDelayMs: 0,
       v2RetryEnabled: true,
     });
@@ -861,7 +849,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         } as never,
         maxRetries: options?.maxRetries ?? 0,
         onSessionModelChanged: onChanged,
-        initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: options?.retryEnabled ?? true,
         timers: options?.timers,
@@ -1746,7 +1733,6 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
         chains: { orchestrator: ['p1/a', 'p2/b'] },
         input: { directory: '/test', hostFlavor: 'v2' } as never,
         maxRetries: 0,
-        initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: true,
       }),
@@ -2448,6 +2434,28 @@ describe('isFailoverError', () => {
       isFailoverError({
         type: 'provider.unknown',
         message: 'weekly limit reached for this workspace',
+      }),
+    ).toBe(false);
+  });
+
+  test('returns true for account-credit exhaustion (issue #1935)', () => {
+    // The adapter reports exhausted account credit as provider.invalid-request
+    // with HTTP 400, which would otherwise read as a malformed request.
+    const error = {
+      type: 'provider.invalid-request',
+      status: 400,
+      message:
+        'You have insufficient credits to make this request. Please purchase more credits to continue using the service.',
+    };
+    expect(isFailoverError(error)).toBe(true);
+    // Permanent billing: immediate failover, no initial delay.
+    expect(isPermanentQuotaBillingError(error)).toBe(true);
+    // Narrow by design: a plain 400 without billing wording stays a hard error.
+    expect(
+      isFailoverError({
+        type: 'provider.invalid-request',
+        status: 400,
+        message: 'invalid request: missing field',
       }),
     ).toBe(false);
   });
@@ -3355,7 +3363,6 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'authGrace',
     'observedUserMessageIds',
     'sessionRetries',
-    'initialDelayUsed',
     'chainExhaustion',
     'quotaExhaustedProviders',
   ])('%s entry is removed on session.deleted', (mapName) => {
@@ -3456,7 +3463,6 @@ describe('ForegroundFallbackManager dispose cleanup', () => {
 
 describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {
   test.each([
-    'initialDelayUsed',
     'authGrace',
     'sessionRetries',
     'chainExhaustion',
@@ -3498,7 +3504,6 @@ describe('ForegroundFallbackManager chain generation pins', () => {
         chains: chains,
         input: { directory: '/test', hostFlavor: 'v2' } as never,
         maxRetries: 0,
-        initialRetryDelayMs: 0,
         retryDelayMs: 0,
         v2RetryEnabled: startupEnabled,
       }),
@@ -3968,6 +3973,68 @@ describe('ForegroundFallbackManager failover classification', () => {
     ).toBe(false);
     // 429 is transient backpressure, not a deterministic rejection.
     expect(isFailoverError('request queue is full (429)')).toBe(true);
+  });
+
+  test('v2 account-credit exhaustion switches with provider scope (issue #1935)', async () => {
+    const { manager } = makeManager({
+      chain: ['p1/a', 'p2/b'],
+      hostFlavor: 'v2',
+    });
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'v2-credit-exhaustion',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error: {
+        type: 'provider.invalid-request',
+        status: 400,
+        message:
+          'You have insufficient credits to make this request. Please purchase more credits to continue using the service.',
+      },
+      decision: { retry: true, delay: 2_000 },
+    };
+
+    await manager.handleV2Retry(event, switchModel);
+
+    expect(switchModel).toHaveBeenCalledWith('v2-credit-exhaustion', {
+      providerID: 'p2',
+      id: 'b',
+    });
+    // Permanent billing skips the host-retry wait, and provider scope marks
+    // the failing provider for the descent.
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(
+      manager.getActiveFallback('v2-credit-exhaustion')?.downProviders,
+    ).toEqual(new Set(['p1']));
+  });
+
+  test('v2 plain 400 invalid request stays a hard error (issue #1935)', async () => {
+    const { manager } = makeManager({
+      chain: ['p1/a', 'p2/b'],
+      hostFlavor: 'v2',
+    });
+    const switchModel = mock(async () => {});
+    const error = {
+      type: 'provider.invalid-request',
+      status: 400,
+      message: 'invalid request: missing field',
+    };
+    expect(isFailoverError(error)).toBe(false);
+    const event = {
+      sessionID: 'v2-plain-invalid-request',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error,
+      decision: { retry: false },
+    };
+
+    await manager.handleV2Retry(event, switchModel);
+
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(event.decision).toEqual({ retry: false });
+    expect(
+      manager.getActiveFallback('v2-plain-invalid-request'),
+    ).toBeUndefined();
   });
 });
 

@@ -19,14 +19,14 @@ export interface SessionPresetOutcome {
   message: string;
 }
 
-export interface AvailablePresets {
+interface AvailablePresets {
   names: string[];
   /** The configured default, not the session binding. */
   active: string | undefined;
 }
 
 /** Presets visible from `directory`, deduped and sorted, plus the default. */
-export function readAvailablePresets(
+function readAvailablePresets(
   directory: string,
   hostFlavor = 'v2',
 ): AvailablePresets {

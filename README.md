@@ -47,9 +47,9 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 - **Want to use Claude?** Check out [ACP support](docs/acp-agents.md): bring
   Claude Code in as a subagent the Orchestrator can delegate to.
 - **Make it yours.** oh-my-opencode-slim is built to be customized, globally
-  or [per project](docs/project-local-customization.md): add
+  or [per project](docs/configuration.md#config-files): add
   [new agents](docs/configuration.md#custom-agents), override prompts, and
-  [rewrite the delegation rules](docs/project-local-customization.md#custom-routing-guidance-orchestratorprompt)
+  [rewrite the delegation rules](docs/configuration.md#custom-routing-guidance-orchestratorprompt)
   so the Orchestrator routes work your way.
 - **Own your presets.** Model lineups change fast, so the
   [example presets](#preset-docs) go stale quickly. Use them for ideas, then
@@ -149,7 +149,7 @@ bun run build
 bun dist/cli/index.js install
 ```
 
-The installer adds the local repo path to the `plugin` array in
+The installer adds the local repo path to the `plugins` array in
 `~/.config/opencode/opencode.json`, so OpenCode loads the plugin from that
 folder. To update later:
 
@@ -160,13 +160,9 @@ bun install
 bun run build
 ```
 
-Upgrading from separate Librarian/Explorer agents? See the
-[configuration update guide](docs/configuration.md#updating-configurations-after-the-librarian-merge)
-for restored MCP defaults and custom model/skill precedence.
-
 ### Getting Started
 
-Slim requires OpenCode **2.3.0 or newer**. OpenCode delivers subagent completions to the parent. Slim removed its five-minute idle TODO reminder. See the [upgrade guide](docs/v2-native-upgrade.md) for the host update and configuration changes.
+Slim requires OpenCode **2.3.0 or newer**. OpenCode delivers subagent completions to the parent. Slim removed its five-minute idle TODO reminder. See the [upgrade guide](docs/installation.md#upgrading) for the host update and configuration changes.
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
 
@@ -197,7 +193,7 @@ Then:
 > It's **recommended** to understand how background orchestration works. The **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** contains the scheduler rules, specialist routing logic, and thresholds for when work should be assigned to background agents. You can always delegate manually by calling a subagent via: `@agentName <task>`
 
 > [!TIP]
-> Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, kitty, WezTerm, or Orca pane, so you can watch specialists work live while the Orchestrator continues coordinating the session. On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts cannot host panes (one diagnostic per process; use v2's native subagent surfaces instead).
+> Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens agent views in tmux, Zellij, Herdr, Superlogical Rex, kitty, WezTerm, or Orca split panes, or cmux-tui sibling tabs, so you can watch specialists work live while the Orchestrator continues coordinating the session. On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts cannot host panes (one diagnostic per process; use v2's native subagent surfaces instead). Rex has [platform and authentication limits](docs/multiplexer-integration.md#rex).
 
 The default generated configuration includes both `openai` and `opencode-go` presets.
 
@@ -780,10 +776,10 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer — keyword-triggered via the orchestrator's Council Mode procedure |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | Define your own specialists with custom prompts, models, MCP access, and Orchestrator delegation rules |
 | **[ACP Agents](docs/acp-agents.md)** | Connect external ACP-compatible agents such as Claude Code ACP or Gemini ACP as delegatable subagents; tool and plan progress streams to the TUI while they work |
-| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux, Zellij, Herdr, cmux, kitty, WezTerm, or Orca panes |
-| **[Codemap](docs/codemap.md)** | Generate hierarchical codemaps to understand large codebases faster |
-| **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
-| **[Worktrees](docs/worktrees.md)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
+| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in tmux, Zellij, Herdr, Rex, kitty, WezTerm, or Orca panes, or cmux-tui tabs |
+| **[Codemap](docs/skills.md#codemap)** | Generate hierarchical codemaps to understand large codebases faster |
+| **[Clonedeps](docs/skills.md#clonedeps)** | Clone selected dependency source into an ignored local workspace for inspection |
+| **[Worktrees](docs/skills.md#worktrees)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
 | **[Preset Switching](docs/presets/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
 | **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow, then implement it with `/implement` |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
@@ -793,11 +789,11 @@ Use this section as a map: start with installation, then jump to features, confi
 | Doc | What it covers |
 |-----|----------------|
 | **[Installation Guide](docs/installation.md)** | Install the plugin, use CLI flags, reset config, and troubleshoot setup |
-| **[OpenCode v2 Compatibility](docs/opencode-v2-compatibility.md)** | Host contracts, feature matrix, entrypoints and package loading |
+| **[OpenCode 2 adapter](src/v2/codemap.md)** | Host contracts, request shaping, policy and verification |
 | **[Runtime Efficiency](docs/runtime-efficiency.md)** | Shared configuration reads, request-local facts, optional implementation loading and verification |
 | **[Configuration](docs/configuration.md)** | Config file locations, JSONC support, prompt overrides, and full option reference |
 | **[Marketplace](docs/marketplace.md)** | Install, inspect, activate, and update marketplace agent packages |
-| **[Project Customization](docs/project-local-customization.md)** | Repository-specific custom agents, prompt overrides, per-agent skills, and precedence |
+| **[Project Customization](docs/configuration.md)** | Repository-specific custom agents, prompt overrides, per-agent skills, and precedence |
 | **[Background Orchestration](docs/background-orchestration.md)** | Scheduler-first orchestrator model built around native background subagents |
 | **[Maintainer Guide](docs/maintainers.md)** | Issue triage rules, label meanings, support routing, and repo maintenance workflow |
 | **[Developer Evals](docs/evals.md)** | Source-checkout routing/reliability harness, offline scoring, and advisory model judging |
@@ -814,7 +810,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-152-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-154-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -1028,6 +1024,8 @@ Use this section as a map: start with installation, then jump to features, confi
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://x.com/surlymochan"><img src="https://avatars.githubusercontent.com/u/209239467?v=4?s=100" width="100px;" alt="Nick"/><br /><sub><b>Nick</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=surlymochan" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://begenchgeldyev.com/"><img src="https://avatars.githubusercontent.com/u/83501597?v=4?s=100" width="100px;" alt="Begench"/><br /><sub><b>Begench</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=begenchgeldyev" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/Jack-mi"><img src="https://avatars.githubusercontent.com/u/38183377?v=4?s=100" width="100px;" alt="下一块巧克力"/><br /><sub><b>下一块巧克力</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=Jack-mi" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/vitornp"><img src="https://avatars.githubusercontent.com/u/1016814?v=4?s=100" width="100px;" alt="Vitor de Moraes"/><br /><sub><b>Vitor de Moraes</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=vitornp" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

@@ -8,7 +8,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Orchestrator** — The canonical primary agent. Plans work, delegates to subagents, monitors them, and reconciles their results. One per session; cannot be disabled.
 - **Primary agent** — An agent with SDK mode `primary` that can run a foreground session. Slim registers the built-in orchestrator in this mode.
 - **Subagent** — A specialist agent a primary agent delegates bounded work to.
-- **Delegation scope** — The orchestrator's `agents.orchestrator.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
+- **Delegation scope** — The specialist IDs permitted by the caller's native `subagent` rules. OpenCode uses those rules to filter the visible roster and authorize delegation.
 - **Explorer** — Subagent for fast codebase search, pattern matching, and external documentation/library research.
 - **Oracle** — Subagent for architecture, debugging strategy, and code review.
 - **Designer** — Subagent for UI/UX design and visual polish.
@@ -30,8 +30,8 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Multiplexer & Sessions
 
-- **Multiplexer** — A terminal backend (tmux, zellij, herdr, kitty, wezterm, orca, or cmux) that hosts child agent panes. Set via \`multiplexer.type\`, which also accepts \`auto\` (auto-detect) and \`none\` (disabled).
-- **Multiplexer type** — The selected backend: `auto`, `tmux`, `zellij`, `herdr`, `kitty`, `wezterm`, `orca`, `cmux`, or `none`.
+- **Multiplexer** — A terminal backend (tmux, Zellij, Herdr, Superlogical Rex, kitty, WezTerm, Orca, or cmux-tui) that hosts views of child agent sessions. Set via `multiplexer.type`, which also accepts `auto` (auto-detect) and `none` (disabled).
+- **Multiplexer type** — The selected backend: `auto`, `tmux`, `zellij`, `herdr`, `rex`, `kitty`, `wezterm`, `orca`, `cmux-tui`, or `none`.
 - **Pane** — A terminal region spawned by the multiplexer to run a child agent session.
 - **Child session** — A delegated agent session that may be displayed in a multiplexer pane. V1 managed tracks it on the background job board; V2 leaves its execution and recovery to the host Job lifecycle.
 - **Client pane lifecycle** — The TUI client's in-process pane tracking: admits child sessions of the displayed parent, spawns and closes multiplexer panes anchored to the client's own pane, and reacts to session lifecycle events. There is no server-side or cross-process pane state.

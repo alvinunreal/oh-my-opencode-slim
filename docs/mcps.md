@@ -87,10 +87,11 @@ Control which MCPs each agent can use via the `mcps` array in your preset config
 ```
 
 > **Tip:** Omit `mcps` to inherit defaults. Explicit lists, including `[]`,
-> override them. One historical exception repairs the same-preset pair
-> `librarian.mcps: ["context7", "gh_grep"]` + `explorer.mcps: []` on load.
-> See [Librarian merge configuration updates](configuration.md#updating-configurations-after-the-librarian-merge)
-> for the exact rule and intentional deny-all syntax.
+> override them. The loader's existing repair applies only to the same-preset
+> pair `librarian.mcps: ["context7", "gh_grep"]` + `explorer.mcps: []`: it drops
+> the empty Explorer list so the retained list is inherited, with a warning and
+> no file write. Customized pairs are untouched. Use `explorer.mcps: ["!*"]`
+> for intentional deny-all in that exact legacy shape; use `explorer` in new config.
 
 ---
 
@@ -112,3 +113,26 @@ An explicit `agents.<name>.mcps` list replaces the agent's defaults.
 MCP availability, native core-tool permissions, and host restrictions remain
 separate. For installed packages, see
 [Marketplace customization](marketplace.md#customize-an-installed-agent).
+
+---
+
+## Unknown MCP names in agent selections
+
+If a resolved agent's `mcps` list names an MCP missing from Slim's registry
+snapshot, the plugin logs once per registry setup:
+
+```
+[plugin] MCP not found in Slim agent registry {"agent":"explorer","preset":"my-preset","mcp":"my-mcp"}
+```
+
+`preset` is the active resolved preset (`null` when none). This includes
+marketplace agents customized with an explicit `agents.<runtime-name>.mcps`
+list. Wildcards, `!name` exclusions, host-declared names (including
+host-disabled entries), built-ins, and `disabled_mcps` entries never warn. A
+live profile refresh reuses the existing registry, so the check runs again only
+on the next registry setup.
+
+The v2 host replays MCP transforms in registration order, so Slim sees only the
+inventory configured up to its own snapshot; a name added by a later plugin is
+not visible here. The warning is diagnostic only: it makes no connectivity
+claim and does not change permissions or runtime selection.

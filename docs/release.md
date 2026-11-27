@@ -121,15 +121,16 @@ Compatibility/migration notes, Publish notes). Choose the plugin version
 independently of Companion; bump native only when its code or the required
 state protocol/asset set changes.
 
-For this compatibility break, include the [OpenCode upgrade checklist](v2-native-upgrade.md)
-in the release notes. Call out OpenCode 2.3.0 as the minimum and the config
-keys users must remove.
+For host/configuration compatibility changes, link the
+[upgrade checklist](installation.md#upgrading) in the release notes and state
+the host minimum and keys users must remove.
 
 ### 2. Verify before tagging or publishing
 
 ```bash
 bun run check:ci
 bun run typecheck
+bun run knip --max-issues=0
 bun test
 bun test ./scripts/check-companion-release.test.ts ./scripts/companion-release-scripts.test.ts
 bun run build

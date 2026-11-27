@@ -42,7 +42,7 @@ oh-my-opencode-slim 是一个用于 OpenCode 的智能体编排插件。它内�
 - **[多路复用器集成](docs/multiplexer-integration.md)** —— 在 Tmux、Zellij、Herdr 或 cmux 窗格中实时观察智能体工作。
 - **[预设切换](docs/presets/preset-switching.md)** —— 使用 `/preset` 在运行时更换整支团队的模型。
 - **[代码智能工具](docs/tools.md)** —— LSP 工具、支持 25 种语言的 AST 感知搜索，以及用于文档和 GitHub 代码搜索的内置 MCP。
-- **[完全可定制](docs/configuration.md)** —— 自定义智能体、提示词覆盖、按智能体控制的 Skill/MCP 权限，以及[项目本地定制](docs/project-local-customization.md)。
+- **[完全可定制](docs/configuration.md)** —— 自定义智能体、提示词覆盖、按智能体控制的 Skill/MCP 权限，以及[项目本地定制](docs/configuration.md)。
 
 ### OpenAI GPT-6
 
@@ -566,9 +566,9 @@ bunx oh-my-opencode-slim@latest companion install
 | **[自定义智能体](docs/configuration.md#custom-agents)** | 使用自定义提示词、模型、MCP 访问和 Orchestrator 委派规则定义自己的专家 |
 | **[ACP Agents](docs/acp-agents.md)** | 将 Claude Code ACP 或 Gemini ACP 等外部 ACP 兼容智能体连接为可委派子智能体 |
 | **[多路复用器集成](docs/multiplexer-integration.md)** | 在 Tmux、Zellij、Herdr 或 cmux 窗格中实时观看智能体工作 |
-| **[Codemap](docs/codemap.md)** | 生成层级代码地图，更快理解大型代码库 |
-| **[Clonedeps](docs/clonedeps.md)** | 将选定的依赖源码克隆到被忽略的本地工作区中以供检查 |
-| **[Worktrees](docs/worktrees.md)** | 使用 `.slim/worktrees/` 通道进行隔离的并行或高风险编码工作 |
+| **[Codemap](docs/skills.md#codemap)** | 生成层级代码地图，更快理解大型代码库 |
+| **[Clonedeps](docs/skills.md#clonedeps)** | 将选定的依赖源码克隆到被忽略的本地工作区中以供检查 |
+| **[Worktrees](docs/skills.md#worktrees)** | 使用 `.slim/worktrees/` 通道进行隔离的并行或高风险编码工作 |
 | **[预设切换](docs/presets/preset-switching.md)** | 使用 `/preset` 在运行时切换智能体模型预设 |
 | **[Interview](docs/interview.md)** | 通过基于浏览器的问答流程，将粗略想法转成结构化 markdown 规格 |
 | **[Companion](docs/companion.md)** | 用于解析、帮助和类型信息的浮动窗口 companion |
@@ -579,7 +579,7 @@ bunx oh-my-opencode-slim@latest companion install
 |-----|----------------|
 | **[安装指南](docs/installation.md)** | 安装插件、使用 CLI 标志、重置配置并排查设置问题 |
 | **[配置](docs/configuration.md)** | 配置文件位置、JSONC 支持、提示词覆盖和完整选项参考 |
-| **[项目定制](docs/project-local-customization.md)** | 仓库特定的自定义智能体、提示词覆盖、按智能体分配的 Skill 以及优先级 |
+| **[项目定制](docs/configuration.md)** | 仓库特定的自定义智能体、提示词覆盖、按智能体分配的 Skill 以及优先级 |
 | **[后台编排](docs/background-orchestration.md)** | 围绕原生后台子智能体构建的调度器优先 Orchestrator 模型 |
 | **[维护者指南](docs/maintainers.md)** | issue 分流规则、标签含义、支持路由和仓库维护工作流 |
 | **[Skills](docs/skills.md)** | `simplify`、`codemap`、`clonedeps`、`deepwork`、`verification-planning`、`reflect`、`worktrees` 和 `oh-my-opencode-slim` 等捆绑技能 |

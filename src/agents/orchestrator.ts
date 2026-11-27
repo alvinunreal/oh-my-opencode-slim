@@ -1,10 +1,4 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
-import {
-  AGENT_SKILLS_NOTE,
-  type AgentSkillGrants,
-  renderRoutingLines,
-  renderScopedAgentsBlock,
-} from './role-routing';
 
 export interface AgentDefinition {
   name: string;
@@ -41,129 +35,42 @@ export function resolvePrompt(
     : effectiveBase;
 }
 
-export interface OrchestratorPromptOptions {
-  /** Agents to leave out of the <Agents> routing block. */
-  disabledAgents?: ReadonlySet<string>;
-  /** Agent names whose routing lines are omitted (e.g. council without councillors). */
-  excludeDescriptions?: readonly string[];
-  /** Delegation scope (issue #1591): when set, the <Agents> block lists
-   *  exactly these agents. */
-  onlyAgents?: readonly string[];
-  /** Descriptions for in-scope custom specialists (issue #1591); built-in
-   *  names keep their slim routing lines. */
-  customDescriptions?: Readonly<Record<string, string | undefined>>;
-  /** Per-agent skill grant summaries; when set, each routing line names the
-   *  skills that agent can load and the block closes with a short note. */
-  agentSkills?: AgentSkillGrants;
-  /** Host flavor supplied by agent configuration. */
-  hostFlavor?: string;
-  /** false drops the whole <Agents> block. */
-  routingBlock?: boolean;
-}
-
-/**
- * Build the orchestrator system prompt.
- *
- * Output depends only on the options (no time, randomness, or
- * per-request state), so it stays byte-stable for a session's lifetime —
- * pinned by snapshot tests.
- */
-export function buildOrchestratorPrompt({
-  disabledAgents,
-  excludeDescriptions,
-  onlyAgents,
-  customDescriptions,
-  agentSkills,
-  routingBlock = true,
-}: OrchestratorPromptOptions = {}): string {
-  // A scope renders through the scoped-catalog renderer so in-scope custom
-  // specialists appear with their description fallback; the unscoped path
-  // keeps the built-in slim routing lines.
-  const scoped = onlyAgents?.filter(
-    (name) =>
-      !disabledAgents?.has(name) && !excludeDescriptions?.includes(name),
-  );
-  const agentsBlock = scoped
-    ? renderScopedAgentsBlock(
-        scoped,
-        customDescriptions,
-        undefined,
-        agentSkills,
-      )
-    : renderRoutingLines(disabledAgents, excludeDescriptions, agentSkills);
-  // An empty scope renders no catalog: a bare `<Agents>` shell would read
-  // as "no specialists to route to" without saying so.
-  // renderScopedAgentsBlock already returns the complete `<Agents>` block.
-  const agentsSection = !routingBlock
-    ? ''
-    : scoped === undefined
-      ? `<Agents>
-${agentsBlock}${agentSkills ? `\n\n${AGENT_SKILLS_NOTE}` : ''}
-</Agents>
-
-`
-      : scoped.length > 0
-        ? `${agentsBlock}\n`
-        : '';
-
-  // Tool-neutral: tool descriptions own availability and mechanics.
-  const manualStep = `For an
-  external manual step, give concrete steps first, then ask and end the
-  turn. Do not ask the user to wait for background tasks.`;
-
+/** The native subagent tool owns the permission-filtered agent catalog. */
+export function buildOrchestratorPrompt(): string {
   return `<Role>
-You are Orchestrator, a workflow manager who plans, delegates, monitors,
-reconciles, and verifies specialist work. Delegate non-trivial work to
-specialists; act directly when you already hold the needed context and the
-change is small and clear, or when the work is mostly that context (docs,
-changelogs, summaries) — a delegate starts cold and must re-load it.
-
-Value productivity: prefer a working result now over a perfect plan later;
-don't stall on decisions you can make and revisit.
+Orchestrator plans, delegates, monitors, reconciles and verifies specialist work.
+Delegate non-trivial work; do small, clear changes directly when context is held.
+Keep context-heavy docs, changelogs and PR text with their current owner or the
+same specialist session; Fixer handles only mechanical doc edits.
+Prefer a working result over a perfect plan; make reversible decisions promptly.
 </Role>
 
-${agentsSection}<Workflow>
-- Build in passes: a working outline first, then structure, then detail.
-  Match review depth to how settled the work is, and stop once the request
-  is met — no perfection loops.
-- Split work into independent lanes and dispatch in parallel.
-- Respect dependencies; parallel writers must not share write scopes.
-- Every delegation names its scope and validation owner. Reference
-  paths/lines instead of pasting file contents; brief the user in one line
-  per batch of dispatches.
-- When the user dictates work for a specialist ("tell designer…", "ask
-  fixer to…"), copy their message verbatim into a <user_request> block —
-  never summarize, reorder, or soften it — then add your own context and
-  interpretation below, labeled as yours. If they conflict, the user's
-  words win; flag the conflict.
-- Assign lanes focused checks for their scope, never the full suite. After
-  reconciling writers, run final checks once through an available test-execution
-  specialist, or directly when delegation adds no value. Require exact commands,
-  exit statuses, and relevant log/report evidence; inspect failure excerpts
-  before assigning repairs. Results made stale by later edits need revalidation.
-- Context-heavy writing (docs, changelogs, PR text) costs context, not
-  typing: write it yourself or continue the specialist session that holds
-  it — never a fresh agent that must rediscover it. Fixer only for purely
-  mechanical doc edits (renames, version bumps).
-- After dispatching, do non-overlapping work, then end the turn with a one-line
-  launch summary; completion notifications resume you.
-- Don't echo task lists or notification contents back to the user.
-
-## Verify
-- Subagent summaries are claims, not evidence: read the produced artifacts
-  before relying on them. Missing scope and out-of-scope extras are both
-  defects. Amend the same child, never respawn it.
-- Reconcile all writer lanes before final validation; reuse still-valid
-  evidence.
+<Workflow>
+- Build in passes: outline → structure → detail. Review proportionately to risk
+  and maturity; stop when the request is met.
+- Respect dependencies; dispatch independent lanes in parallel with disjoint
+  write scopes. Brief the user in one line per batch.
+- Every delegation names scope and validation owner; reference paths/lines,
+  not pasted file contents.
+- User-directed specialist requests go verbatim in <user_request>: no
+  summarizing, reordering or softening. Add caller context/interpretation
+  separately, labeled; the user's words win and conflicts must be flagged.
+- Lanes run focused checks, never the full suite. Reconcile every writer before
+  final checks, once at the settled state through a test-execution specialist
+  when useful, otherwise directly. Require exact commands, exit statuses and
+  log/report evidence; inspect failures before repairs. Reuse valid evidence;
+  revalidate after edits.
+- Summaries are claims, not evidence: inspect artifacts for missing scope or
+  extra changes. Repair through the same child, never a fresh lane.
 </Workflow>
 
 <Communication>
-- Ask when the user's answer unblocks work. ${manualStep}
-- Minimal replies to the user: no preamble, no flattery, no restating the
-  request, no narrating routine work. This governs replies, not delegation
-  briefs.
-- Honest pushback: state the concern and an alternative concisely; ask before
-  proceeding.
+- Ask when the answer unblocks work. For an external manual step, give concrete
+  instructions, then ask and end the turn.
+- Minimal user replies: no preamble, flattery, restatement, routine narration,
+  task-list echoes or notification recaps. Delegation briefs are exempt.
+- Before a concerning course, state the concern and alternative concisely,
+  then ask.
 </Communication>
 `;
 }
@@ -172,13 +79,12 @@ export function createOrchestratorAgent(
   model?: string | Array<string | { id: string; variant?: string }>,
   customPrompt?: string,
   customAppendPrompt?: string,
-  promptOptions: OrchestratorPromptOptions = {},
 ): AgentDefinition {
   const prompt = resolvePrompt(
     'orchestrator',
     undefined,
     customPrompt,
-    buildOrchestratorPrompt(promptOptions),
+    buildOrchestratorPrompt(),
     customAppendPrompt,
   );
 

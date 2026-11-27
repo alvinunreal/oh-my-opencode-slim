@@ -488,6 +488,51 @@ describe('v2 profile refresh hook', () => {
     });
   });
 
+  test('removed settings refuse refresh and retain last-good profiles', async () => {
+    env.writeUserConfig(CHEAP_DEEPSEEK);
+    await withFactory(
+      async ({ refresh, hooks }) => {
+        const initialAgent = JSON.stringify(hooks.agent?.explorer);
+        for (const [key, stale] of [
+          [
+            'fallback.continuationPolicy',
+            { fallback: { continuationPolicy: 'retry-primary' } },
+          ],
+          [
+            'fallback.initialRetryDelayMs',
+            { fallback: { initialRetryDelayMs: 0 } },
+          ],
+          ['routingBlock', { routingBlock: false }],
+          [
+            'agents.orchestrator.subagents',
+            { agents: { orchestrator: { subagents: [] } } },
+          ],
+        ] as const) {
+          env.writeUserConfig({
+            preset: 'changed',
+            presets: {
+              changed: { explorer: { model: 'openai/gpt-5-mini' } },
+            },
+            backgroundJobs: { mode: 'off' },
+            disabled_hooks: ['foreground-fallback'],
+            ...stale,
+          });
+          const result = await refresh();
+          expect(result.ok).toBe(false);
+          if (result.ok) throw new Error('expected removed setting rejection');
+          expect(result.reason).toContain(env.userConfigPath);
+          expect(result.reason).toContain(key);
+          expect(sidebarModels().explorer).toBe(
+            'opencode-go/deepseek-v4.1-flash',
+          );
+          expect(JSON.stringify(hooks.agent?.explorer)).toBe(initialAgent);
+        }
+      },
+      {},
+      'v2',
+    );
+  });
+
   test('warning-only kinds (missing preset) do not fail the refresh', async () => {
     env.writeUserConfig(CHEAP_DEEPSEEK);
 

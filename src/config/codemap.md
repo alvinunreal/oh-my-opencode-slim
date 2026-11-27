@@ -30,6 +30,7 @@ The config system follows a layered architecture:
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
 | `AgentMcpPolicy` | Per-agent default MCP lists and wildcard/exclusion parsing | agent-mcps.ts |
+| `ListFilter` | Shared `"*"` / `"!name"` list splitter and predicate (agent skills/MCPs, multiplexer pane filter) | list-filter.ts |
 | `ProviderModelIdSchema` | Zod schema enforcing `provider/model` ID format (provider segment excludes slashes/whitespace) | model-id-schema.ts |
 | Preset resolver | Preset normalization, layered merge (`mergePresetMaps`), and depth-first named-preset resolution (`resolvePresets` atomic, `PresetResolutionError` on unresolvable refs) | presets.ts |
 | `discoverProjectLocalSkillNames` | Current and ancestor `.opencode/skills` discovery from `SKILL.md` frontmatter names, symlink-confined to each location | project-skills.ts |
@@ -204,16 +205,16 @@ This allows consumers to import directly from `src/config` rather than individua
 - `options`: Provider-specific model options
 - `displayName`: Custom display name for the agent
 - `color`: Agent display color as a six-digit hex value or OpenCode theme color
-- `subagents`: Built-in orchestrator only — delegation scope allowlist compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins and skips the scoped `<Agents>` catalog. `'*'` is reserved
+- Delegation restrictions use native `subagent` rules; no separate Slim agent allowlist or scoped prompt catalog
 
 ### CouncilConfig
 - `presets`: Named council presets (map of councillor name → CouncillorConfig)
 - `default_preset`: Default preset name to use
 
 ### MultiplexerConfig
-- `type`: "auto", "tmux", "zellij", "herdr", "cmux", "kitty", "wezterm", "orca", or "none" (client-local admission)
+- `type`: "auto", "tmux", "zellij", "herdr", "rex", "cmux-tui", "kitty", "wezterm", "orca", or "none" (client-local admission)
 - `layout`: Pane layout (main-horizontal, main-vertical, tiled, even-horizontal, even-vertical)
-- `main_pane_size`: Percentage for main pane (20-80), tmux main-* layouts and the first WezTerm main-* split
+- `main_pane_size`: Percentage for main pane (20-80), tmux main-* layouts, first legacy Herdr/WezTerm main-* split, and each Rex main-* parent split (new pane gets `100 - main_pane_size`)
 - `zellij_pane_mode`: removed; stripped with a warning by the loader
 
 ## Environment Variable Support
@@ -242,5 +243,6 @@ Configuration loading is tested via:
 - `src/config/schema.test.ts`: Schema validation and type inference
 - `src/config/utils.test.ts`: Agent configuration utilities
 - `src/config/agent-mcps.test.ts`: MCP permission resolution
+- `src/config/list-filter.test.ts`: Shared `"*"` / `"!name"` list predicate
 - `src/config/council-schema.test.ts`: Council configuration validation
 - `src/config/runtime.test.ts`: RuntimeConfig seeding, derived getters, preset state, and host capture
