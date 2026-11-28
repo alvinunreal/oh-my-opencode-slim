@@ -63,15 +63,14 @@ type _presetRpcPortable = Expect<
   PresetRpc extends Rpc.PortableDefinition ? true : false
 >;
 type _presetRpcNoEvents = Expect<Equal<keyof PresetRpc['events'], never>>;
-type _presetRpcNoErrors = Expect<
+type _presetRpcReadOnlyError = Expect<
   Equal<
-    {
-      [K in keyof PresetRpc['methods']]: 'errors' extends keyof PresetRpc['methods'][K]
-        ? true
-        : false;
-    }[keyof PresetRpc['methods']],
-    false
+    keyof PresetRpc['methods']['read']['errors'],
+    'session_location_mismatch'
   >
+>;
+type _presetRpcApplyNoErrors = Expect<
+  Equal<Extract<keyof PresetRpc['methods']['apply'], 'errors'>, never>
 >;
 type _rpcRegistrationCompatible = Expect<
   RpcDomain extends NonNullable<V2Context['rpc']> ? true : false
@@ -90,15 +89,16 @@ type _rpcHandlerInputs = Expect<
     }
   >
 >;
-type _rpcHandlerOutputs = Expect<
+type _rpcApplyHandlerOutput = Expect<
   Equal<
-    {
-      [K in keyof PresetRpc['methods']]: ReturnType<
-        V2SessionPresetRpcHandlers[K]
-      >;
-    },
-    { [K in keyof PresetRpc['methods']]: ReturnType<RpcHandlers<PresetRpc>[K]> }
+    ReturnType<V2SessionPresetRpcHandlers['apply']>,
+    ReturnType<RpcHandlers<PresetRpc>['apply']>
   >
+>;
+type _rpcReadHandlerCompatible = Expect<
+  V2SessionPresetRpcHandlers['read'] extends RpcHandlers<PresetRpc>['read']
+    ? true
+    : false
 >;
 type _rpcHandlerSignal = Expect<
   Equal<

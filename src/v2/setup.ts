@@ -107,7 +107,7 @@ import {
 } from './internal-admissions';
 import type { V2InterviewBridge } from './interview-bridge';
 import { createPresetCommand, PRESET_COMMAND_NAME } from './preset-command';
-import { sessionPresetRpc } from './preset-rpc';
+import { registerSessionPresetRpc } from './preset-rpc';
 import {
   applyRuntimeProfileOptions,
   createSessionProfileBridge,
@@ -2944,7 +2944,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           ctx.rpc?.register &&
           isCommandEnabled('preset', { disabledCommands })
         ) {
-          const registration = await ctx.rpc.register(sessionPresetRpc, {
+          const registration = await registerSessionPresetRpc(ctx.rpc, {
             read: ({ sessionID }) => presets.readState(sessionID),
             apply: ({ sessionID, presetName }, { signal }) =>
               presets.apply(sessionID, presetName, signal),

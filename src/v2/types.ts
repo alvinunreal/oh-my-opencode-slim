@@ -232,14 +232,32 @@ interface V2McpDraft {
   update(name: string, update: (c: Record<string, unknown>) => void): void;
   remove(name: string): void;
 }
-/** Only this plugin's error-free, event-free Zod contract is registered.
- * Infer handler inputs from its schemas without exposing dev-only host types.
- * The host also supplies an error factory; these handlers only use signal. */
+type PresetRpcMethods = typeof sessionPresetRpc.methods;
+type PresetReadErrors = PresetRpcMethods['read']['errors'];
+type PresetReadError = {
+  readonly type: keyof PresetReadErrors;
+  readonly message: string;
+  readonly data: z.input<PresetReadErrors[keyof PresetReadErrors]>;
+};
+
+/** The read handler returns the host's opaque error value unchanged, without
+ * exposing the dev-only package's branded type in this mirror. */
 export type V2SessionPresetRpcHandlers = {
-  readonly [Name in keyof typeof sessionPresetRpc.methods]: (
-    input: z.output<(typeof sessionPresetRpc.methods)[Name]['input']>,
+  readonly read: <E extends PresetReadError>(
+    input: z.output<PresetRpcMethods['read']['input']>,
+    context: {
+      readonly signal: AbortSignal;
+      readonly error: (
+        type: PresetReadError['type'],
+        message: string,
+        data: PresetReadError['data'],
+      ) => E;
+    },
+  ) => Promise<z.input<PresetRpcMethods['read']['output']> | E>;
+  readonly apply: (
+    input: z.output<PresetRpcMethods['apply']['input']>,
     context: { readonly signal: AbortSignal },
-  ) => Promise<z.input<(typeof sessionPresetRpc.methods)[Name]['output']>>;
+  ) => Promise<z.input<PresetRpcMethods['apply']['output']>>;
 };
 
 /** Native v2 event subscribe options (host `shared-events.SubscribeOptions`

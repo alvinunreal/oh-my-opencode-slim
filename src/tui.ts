@@ -32,6 +32,7 @@ import {
 } from './multiplexer/client/v2-host';
 import { PANE_VIEWER_ENV } from './multiplexer/shared';
 import {
+  type HostSessionInfo,
   type HostSessionViews,
   overlayHostSessions,
 } from './tui-host-sessions';
@@ -2165,7 +2166,10 @@ interface V2TuiContext extends V2PresetManagerContext {
       };
     };
     on?: (type: string, handler: (event: unknown) => void) => unknown;
-    session?: NonNullable<HostSessionViews['session']> & {
+    session?: Omit<NonNullable<HostSessionViews['session']>, 'get'> & {
+      get?: (
+        id: string,
+      ) => (HostSessionInfo & { location?: { directory: string } }) | undefined;
       list?: () => Array<{ id?: string; title?: string }>;
     };
   };
@@ -2228,6 +2232,7 @@ interface SidebarRuntimeAdapter {
   version: string;
   getDirectory: () => string;
   getVisibleSession: () => string | undefined;
+  getSessionDirectory?: (sessionID: string) => string | undefined;
   client?: unknown;
   renderer: { requestRender: () => void; getSelection?: () => unknown };
   theme: () => Parameters<typeof renderSidebar>[2];
@@ -2534,7 +2539,7 @@ function createSidebarRuntime(
       remoteCache,
       { force: forceRemoteRefresh },
     );
-    if (disposed) return;
+    if (disposed || currentSession !== adapter.getVisibleSession()) return;
     // Fold the live picker selection in BEFORE the change check so a new
     // selection triggers requestRender on this poll (server-side state only
     // learns the switch when the next prompt commits it).
@@ -2548,7 +2553,11 @@ function createSidebarRuntime(
       SIDEBAR_FINISHED_CAP,
     );
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
-    if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
+    if (
+      disposed ||
+      !isRefreshCurrent(currentDirectory, adapter.getDirectory()) ||
+      currentSession !== adapter.getVisibleSession()
+    ) {
       return;
     }
     const namesBefore = modelNames();
@@ -2559,11 +2568,19 @@ function createSidebarRuntime(
     if (modelNamesCache.names !== namesBefore) {
       setModelNames(modelNamesCache.names);
     }
-    if (adapter.readSessionPreset && currentSession && presetEnabled) {
+    const presetDirectory = currentSession
+      ? adapter.getSessionDirectory?.(currentSession)
+      : undefined;
+    if (
+      adapter.readSessionPreset &&
+      currentSession &&
+      presetDirectory &&
+      presetEnabled
+    ) {
       let state: SessionPresetState | undefined;
       try {
         state = await adapter.readSessionPreset(
-          currentDirectory,
+          presetDirectory,
           currentSession,
         );
       } catch {
@@ -2572,22 +2589,26 @@ function createSidebarRuntime(
       if (
         disposed ||
         currentDirectory !== adapter.getDirectory() ||
-        currentSession !== adapter.getVisibleSession()
+        currentSession !== adapter.getVisibleSession() ||
+        presetDirectory !== adapter.getSessionDirectory?.(currentSession)
       )
         return;
       const previous = sessionPreset();
       if (
-        previous?.directory !== currentDirectory ||
+        previous?.directory !== presetDirectory ||
         previous?.sessionID !== currentSession ||
         JSON.stringify(previous?.state) !== JSON.stringify(state)
       ) {
         setSessionPreset({
-          directory: currentDirectory,
+          directory: presetDirectory,
           sessionID: currentSession,
           state,
         });
         stateChanged = true;
       }
+    } else if (sessionPreset()) {
+      setSessionPreset(undefined);
+      stateChanged = true;
     }
     const previousRegistry = remoteRegistry();
     if (
@@ -2695,8 +2716,10 @@ function createSidebarRuntime(
           const projection = sessionPreset();
           const registry = remoteRegistry();
           const isCurrentProjection =
-            projection?.directory === adapter.getDirectory() &&
-            projection.sessionID === visible;
+            projection !== undefined &&
+            visible !== undefined &&
+            projection.sessionID === visible &&
+            projection.directory === adapter.getSessionDirectory?.(visible);
           // Only a settled binding that differs from the default is shown;
           // unbound, loading, or unreadable sessions show the default alone.
           const boundPreset =
@@ -2925,6 +2948,8 @@ async function setup(
       hostFlavor: 'v2',
       getDirectory: () => ctx.location?.directory ?? process.cwd(),
       getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
+      getSessionDirectory: (sessionID) =>
+        ctx.data?.session?.get?.(sessionID)?.location?.directory,
       getHostSessions: () => ({
         visibleSessionID: resolveRouteSessionId(ctx.ui.router.current()),
         session: ctx.data?.session,
@@ -2984,7 +3009,8 @@ async function setup(
         void reconcilePaneWiring();
       },
       readSessionPreset: gatesRead.gates.presetRouting
-        ? (directory, sessionID) => readSessionPreset(ctx, sessionID, directory)
+        ? (directory, sessionID) =>
+            readSessionPreset({ client: ctx.client }, sessionID, directory)
         : undefined,
       getPresetRow: (directory, presetName, sessionPreset) => {
         const name = presetName ?? '(none)';

@@ -637,14 +637,27 @@ describe('v2 tui preset plugin', () => {
       slotDisposeCalls: () => number;
     }
 
-    function makeSetupCtx(options: { keymap?: boolean } = {}): SetupStub {
-      const { keymap = true } = options;
+    function makeSetupCtx(
+      options: { keymap?: boolean; sessionDirectory?: string } = {},
+    ): SetupStub {
+      const { keymap = true, sessionDirectory } = options;
       const slotClaims: Array<{ append?: string; render?: () => unknown }> = [];
       const layers: SetupStub['layers'] = [];
       let slotDisposeCalls = 0;
       let keymapDisposed = false;
       const ctx: Record<string, unknown> = {
         location: { directory: projectDir },
+        ...(sessionDirectory && {
+          data: {
+            session: {
+              get: (id: string) => ({
+                id,
+                time: { created: 0 },
+                location: { directory: sessionDirectory },
+              }),
+            },
+          },
+        }),
         renderer: { requestRender: () => {} },
         theme: {
           categorical: [
@@ -942,8 +955,8 @@ describe('v2 tui preset plugin', () => {
       await done;
     });
 
-    test('sidebar shows a differing session preset beside the default and rejects stale route/workspace responses', async () => {
-      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
+    test('sidebar routes preset reads to the visible session directory and rejects stale locations', async () => {
+      writeUserConfig({ ...makeConfig(), multiplexer: { type: 'none' } });
       process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-data');
       process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
       process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
@@ -955,34 +968,50 @@ describe('v2 tui preset plugin', () => {
         type: 'session',
         sessionID: 'root-a',
       });
-      const [directory, setDirectory] = createSignal(projectDir);
+      const workspaceA = path.join(projectDir, 'session-worktree-a');
+      const workspaceC = path.join(projectDir, 'session-worktree-c');
+      const [sessionDirectory, setSessionDirectory] = createSignal<string>();
       const stub = makeSetupCtx();
       const ui = stub.ctx.ui as { router: { current: () => unknown } };
       ui.router.current = route;
-      Object.defineProperty(stub.ctx, 'location', {
-        get: () => ({ directory: directory() }),
-      });
-      let notifyRendered = () => {};
-      const rendered = new Promise<void>((resolve) => {
-        notifyRendered = resolve;
-      });
-      stub.ctx.renderer = { requestRender: () => notifyRendered() };
-      let notifySecondRead = () => {};
-      const secondRead = new Promise<void>((resolve) => {
-        notifySecondRead = resolve;
-      });
-      let finishSecondRead: (value: unknown) => void = () => {};
-      const pending = new Promise((resolve) => {
-        finishSecondRead = resolve;
-      });
+      stub.ctx.location = {
+        directory: projectDir,
+        workspaceID: 'ui-workspace',
+      };
+      const firstLookup = Promise.withResolvers<void>();
+      const nextRead = Promise.withResolvers<void>();
+      const pendingA = Promise.withResolvers<unknown>();
+      const pendingC = Promise.withResolvers<unknown>();
+      let onSession = (_event: unknown) => {};
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          if (type === 'session.created') onSession = handler;
+        },
+        session: {
+          get: (id: string) => ({
+            id,
+            time: { created: 0 },
+            get location() {
+              firstLookup.resolve();
+              const directory = sessionDirectory();
+              return directory ? { directory } : undefined;
+            },
+          }),
+        },
+      };
       const requests: unknown[] = [];
       stub.ctx.client = {
         rpc: () => ({
-          read: async (input: { sessionID: string }, options: unknown) => {
+          read: async (
+            input: { sessionID: string },
+            options: { location: { directory: string } },
+          ) => {
             requests.push({ input, options });
             if (input.sessionID === 'root-b') {
-              notifySecondRead();
-              return pending;
+              nextRead.resolve();
+              return options.location.directory === workspaceA
+                ? pendingA.promise
+                : pendingC.promise;
             }
             return {
               sessionID: input.sessionID,
@@ -1010,7 +1039,8 @@ describe('v2 tui preset plugin', () => {
         cleanup = await tui2Plugin.setup(
           stub.ctx as unknown as V2TuiPluginContext,
         );
-        await rendered;
+        await firstLookup.promise;
+        expect(requests).toHaveLength(0);
         const sidebar = stub.slotClaims.find(
           (slot) => slot.append === 'sidebar.content',
         );
@@ -1020,12 +1050,34 @@ describe('v2 tui preset plugin', () => {
           height: 32,
         });
         await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Preset balanced');
+        expect(screen.captureCharFrame()).toContain('team-b');
+
+        setSessionDirectory(workspaceA);
+        onSession({ data: { sessionID: 'root-a' } });
+        await waitFor(async () => {
+          await screen?.renderOnce();
+          return screen?.captureCharFrame().includes('team-a') ?? false;
+        });
+        expect(requests[0]).toEqual({
+          input: { sessionID: 'root-a' },
+          options: {
+            location: { directory: workspaceA },
+            signal: expect.any(AbortSignal),
+          },
+        });
         expect(screen.captureCharFrame()).toContain(
           'Preset server-alpha · default balanced',
         );
         expect(screen.captureCharFrame()).toContain('team-a');
         expect(screen.captureCharFrame()).not.toContain('team-b');
 
+        setSessionDirectory(workspaceC);
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).not.toContain('server-alpha');
+        expect(screen.captureCharFrame()).not.toContain('team-a');
+
+        setSessionDirectory(workspaceA);
         setRoute({ type: 'session', sessionID: 'root-b' });
         await screen.renderOnce();
         expect(screen.captureCharFrame()).not.toContain('server-alpha');
@@ -1033,15 +1085,12 @@ describe('v2 tui preset plugin', () => {
         // Loading binding: the default shows alone.
         expect(screen.captureCharFrame()).toContain('Preset balanced');
         expect(screen.captureCharFrame()).not.toContain('· default');
-        writeUserConfig({
-          ...makeConfig(),
-          preset: 'cheap',
-        } as unknown as Record<string, unknown>);
-        await notifyConfigChanged(projectDir, 'test-route-refresh');
-        await secondRead;
-        setRoute({ type: 'session', sessionID: 'root-c' });
-        setDirectory(configHome);
-        finishSecondRead({
+        onSession({ data: { sessionID: 'root-b' } });
+        await nextRead.promise;
+        const inFlightCount = requests.length;
+        setSessionDirectory(workspaceC);
+        onSession({ data: { sessionID: 'root-b' } });
+        pendingA.resolve({
           sessionID: 'root-b',
           status: 'bound',
           presetName: 'late-beta',
@@ -1052,32 +1101,102 @@ describe('v2 tui preset plugin', () => {
             inheritance: {},
           },
         });
+        await waitFor(() => requests.length > inFlightCount);
+        expect(requests[inFlightCount]).toMatchObject({
+          input: { sessionID: 'root-b' },
+          options: { location: { directory: workspaceC } },
+        });
+        // Revisiting the old location before the new read settles must not
+        // reveal a stale response cached by the completed read.
+        setSessionDirectory(workspaceA);
         await screen.renderOnce();
         expect(screen.captureCharFrame()).not.toContain('late-beta');
         expect(screen.captureCharFrame()).not.toContain('late-team');
         expect(screen.captureCharFrame()).not.toContain('server-alpha');
-        expect(requests[1]).toEqual({
-          input: { sessionID: 'root-b' },
-          options: {
-            location: { directory: projectDir },
-            signal: expect.any(AbortSignal),
-          },
-        });
         setRoute({ type: 'home', sessionID: '' });
         await screen.renderOnce();
         expect(screen.captureCharFrame()).toContain('Preset');
         expect(screen.captureCharFrame()).not.toContain('· default');
       } finally {
-        finishSecondRead({
-          sessionID: 'root-b',
-          status: 'unbound',
-          presetName: null,
-          affects: 'future-children-only',
-        });
+        pendingA.resolve(undefined);
+        pendingC.resolve(undefined);
         cleanup?.();
         screen?.renderer.destroy();
       }
     });
+
+    test.each([true, false])(
+      'sidebar discards a route changed during model-name hydration (new location known: %s)',
+      async (locationKnown) => {
+        writeUserConfig({
+          ...makeConfig(),
+          autoUpdate: false,
+          multiplexer: { type: 'none' },
+        });
+        process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+        const stub = makeSetupCtx();
+        let sessionID = 'root-a';
+        (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+          () => ({ type: 'session', sessionID });
+        let onSession = (_event: unknown) => {};
+        stub.ctx.data = {
+          on: (type: string, handler: (event: unknown) => void) => {
+            if (type === 'session.created') onSession = handler;
+          },
+          session: {
+            get: (id: string) => ({
+              id,
+              time: { created: 0 },
+              location:
+                id === 'root-a' || locationKnown
+                  ? { directory: projectDir }
+                  : undefined,
+            }),
+          },
+        };
+        const started = Promise.withResolvers<void>();
+        const models = Promise.withResolvers<unknown[]>();
+        const reads: string[] = [];
+        let renders = 0;
+        stub.ctx.renderer = { requestRender: () => renders++ };
+        stub.ctx.client = {
+          model: {
+            list: () => {
+              started.resolve();
+              return models.promise;
+            },
+          },
+          rpc: () => ({
+            read: async ({ sessionID }: { sessionID: string }) => {
+              reads.push(sessionID);
+              return {
+                sessionID,
+                status: 'unbound',
+                presetName: null,
+                affects: 'future-children-only',
+              };
+            },
+          }),
+        };
+        const cleanup = await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        try {
+          await started.promise;
+          sessionID = 'root-b';
+          models.resolve([]);
+          await tick();
+          expect({ reads, renders }).toEqual({ reads: [], renders: 0 });
+
+          onSession({ data: { sessionID } });
+          await waitFor(() => renders > 0);
+          expect(reads).toEqual(locationKnown ? ['root-b'] : []);
+        } finally {
+          models.resolve([]);
+          await cleanup?.();
+        }
+      },
+    );
 
     test('sidebar projects session observations before the session team', async () => {
       writeUserConfig({ ...makeConfig(), compactSidebar: false });
@@ -1114,7 +1233,7 @@ describe('v2 tui preset plugin', () => {
         },
         projectDir,
       );
-      const stub = makeSetupCtx();
+      const stub = makeSetupCtx({ sessionDirectory: projectDir });
       (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
         () => ({ type: 'session', sessionID: 'root-a' });
       let notifyRendered = () => {};
@@ -1523,7 +1642,7 @@ describe('v2 tui preset plugin', () => {
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'disabled-preset-data');
       process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '10';
-      const stub = makeSetupCtx();
+      const stub = makeSetupCtx({ sessionDirectory: projectDir });
       const ui = stub.ctx.ui as {
         router: { current: () => unknown };
         dialog?: unknown;
@@ -1617,7 +1736,7 @@ describe('v2 tui preset plugin', () => {
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'enabled-preset-data');
       process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
-      const stub = makeSetupCtx();
+      const stub = makeSetupCtx({ sessionDirectory: projectDir });
       const ui = stub.ctx.ui as {
         router: { current: () => unknown };
         dialog?: unknown;
@@ -1710,7 +1829,7 @@ describe('v2 tui preset plugin', () => {
       process.env.XDG_DATA_HOME = path.join(configHome, 'switch-preset-data');
       process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '10';
       const [directory, setDirectory] = createSignal(projectDir);
-      const stub = makeSetupCtx();
+      const stub = makeSetupCtx({ sessionDirectory: otherProject });
       const ui = stub.ctx.ui as {
         router: { current: () => unknown };
         dialog?: unknown;
@@ -1784,7 +1903,7 @@ describe('v2 tui preset plugin', () => {
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'idle-preset-data');
       process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '10';
-      const stub = makeSetupCtx();
+      const stub = makeSetupCtx({ sessionDirectory: projectDir });
       const ui = stub.ctx.ui as {
         router: { current: () => unknown };
         dialog?: unknown;
@@ -2919,6 +3038,13 @@ describe('v2 tui preset plugin', () => {
       });
       const handlers = new Map<string, (event: unknown) => void>();
       stub.ctx.data = {
+        session: {
+          get: (id: string) => ({
+            id,
+            time: { created: 0 },
+            location: { directory },
+          }),
+        },
         on: (type: string, handler: (event: unknown) => void) => {
           handlers.set(type, handler);
           return () => handlers.delete(type);
@@ -3013,7 +3139,7 @@ describe('v2 tui preset plugin', () => {
       process.env.XDG_DATA_HOME = path.join(configHome, 'preset-sidebar-data');
       delete process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS;
       delete process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER;
-      const stub = makeSetupCtx();
+      const stub = makeSetupCtx({ sessionDirectory: projectDir });
       const ui = stub.ctx.ui as {
         router: { current: () => unknown };
         dialog?: unknown;

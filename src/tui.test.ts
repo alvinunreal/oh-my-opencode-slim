@@ -2386,7 +2386,9 @@ describe('clickable sidebar sessions', () => {
     };
   }
 
-  function fakeHostData(...entries: HostSessionInfo[]) {
+  function fakeHostData(
+    ...entries: (HostSessionInfo & { location?: { directory: string } })[]
+  ) {
     const sessions = new Map(entries.map((entry) => [entry.id, entry]));
     const running = new Set<string>();
     const listeners = new Map<string, Set<(event: unknown) => void>>();
@@ -2553,6 +2555,7 @@ describe('clickable sidebar sessions', () => {
     const data = fakeHostData({
       id: 'root',
       agent: 'orchestrator',
+      location: { directory: root },
       time: { created: 1 },
     });
     let live = true;
