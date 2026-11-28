@@ -4,24 +4,17 @@
  * Creates panes for sub-agent sessions in Zellij, from inside the client
  * process that displays the parent OpenCode session.
  *
- * Anchoring (same tab, single behavior):
- * - Detection is `ZELLIJ_PANE_ID` (the parent pane the client runs in).
- * - The parent tab is resolved from that pane id via `list-panes --json`
- *   (`current-tab-info` is deliberately not used: it is client-bound and
- *   fails from pane child processes).
- * - The child pane is created with `new-pane --tab-id <parentTab>
- *   --direction <dir>`, so it always splits the parent pane's tab. The
- *   adapter never creates a dedicated tab, never switches tabs, and never
- *   saves/restores focus: child panes live in the same tab as the parent
- *   pane, unconditionally.
+ * The parent pane and tab are resolved from `ZELLIJ_PANE_ID` via
+ * `list-panes --json`. Zellij 0.45+ can open unfocused viewers. For
+ * main-vertical it splits a specific pane by setting the CLI process's
+ * `ZELLIJ_PANE_ID`; other placements still use `new-pane --tab-id`.
  *
  * Multi-instance hardening: every zellij invocation is explicitly addressed
  * with `--session <ZELLIJ_SESSION_NAME>` (placed before `action`), so a
  * machine running several zellij sessions cannot route commands to the wrong
  * one. When the client environment cannot resolve the anchor
- * (`ZELLIJ_PANE_ID` or `ZELLIJ_SESSION_NAME` missing, or the parent tab
- * lookup failing), no zellij command is issued and the spawn fails with
- * `not_found`.
+ * (`ZELLIJ_PANE_ID` or `ZELLIJ_SESSION_NAME` missing, or the parent lookup
+ * failing), no create command is issued and the spawn fails with `not_found`.
  *
  * Version gate: `isAvailable()` parses `zellij --version` and rejects
  * releases older than 0.44.1, whose CLI lacks `new-pane --tab-id` — still
@@ -35,6 +28,7 @@ import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import {
   buildViewCommand,
+  closePaneCommand,
   findBinary,
   gracefulClosePane,
   markViewerCommand,
@@ -49,9 +43,18 @@ interface ZellijPaneInfo {
   tab_id?: number;
   /** Pane title (`--all` field); carries the FR-8 metadata when ours. */
   title?: string;
+  is_floating: boolean;
+  is_suppressed: boolean;
+  is_collapsed: boolean;
+  exited: boolean;
+  pane_x: number;
+  pane_y: number;
+  pane_columns: number;
+  pane_rows: number;
 }
 
 type ZellijPaneDirection = 'right' | 'down';
+type ZellijPaneTarget = { tabId: string } | { paneId: number };
 
 /**
  * One structured diagnostic per process for the viewer-secret bridge gate:
@@ -80,12 +83,15 @@ export class ZellijMultiplexer implements Multiplexer {
   private readonly parentPaneId = process.env.ZELLIJ_PANE_ID;
   private readonly sessionName = process.env.ZELLIJ_SESSION_NAME;
   private readonly paneDirection: ZellijPaneDirection | null;
+  private readonly mainPaneSize: number;
+  private supportsNoFocus = false;
+  private requiresFloatingLayerCheck = false;
+  private readonly mainVerticalPaneIds = new Set<number>();
+  private mainVerticalMutex = Promise.resolve();
 
   constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
-    // Note: Zellij does not support exact main pane sizing like tmux.
-    // Layout config is mapped to pane creation directions where possible.
-    void mainPaneSize;
     this.paneDirection = getPaneDirection(layout);
+    this.mainPaneSize = mainPaneSize;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -107,24 +113,16 @@ export class ZellijMultiplexer implements Multiplexer {
    */
   private async probeAvailability(): Promise<boolean> {
     const binaryPath = await findBinary('zellij');
-    if (binaryPath && (await this.hasSupportedVersion(binaryPath))) {
+    const version = binaryPath ? await this.readVersion(binaryPath) : null;
+    if (binaryPath && version && isSupportedZellijVersion(version)) {
       this.binaryPath = binaryPath;
+      this.supportsNoFocus = version.major > 0 || version.minor >= 45;
+      this.requiresFloatingLayerCheck =
+        version.major === 0 && version.minor === 45;
       return true;
     }
     this.binaryPath = null;
     return false;
-  }
-
-  /**
-   * Parse and gate on the installed Zellij version. The adapter relies on
-   * `new-pane --tab-id` for same-tab anchoring and on the stable `tab_id`
-   * field of `list-panes --json --tab --all`; both only exist in Zellij
-   * >= 0.44.1. Older releases (or unparsable version output) make the backend
-   * unavailable.
-   */
-  private async hasSupportedVersion(path: string): Promise<boolean> {
-    const version = await this.readVersion(path);
-    return version !== null && isSupportedZellijVersion(version);
   }
 
   private async readVersion(path: string): Promise<ZellijVersion | null> {
@@ -210,88 +208,309 @@ export class ZellijMultiplexer implements Multiplexer {
     // project directory itself (`new-pane --cwd`; the adapter already gates
     // on MIN_ZELLIJ_VERSION, which supports the flag).
     const miniCwdArgs = viewerNeedsPaneCwd(options) ? ['--cwd', directory] : [];
+    const viewerArgs = [
+      '--name',
+      paneName,
+      '--close-on-exit',
+      ...miniCwdArgs,
+      '--',
+      'sh',
+      '-lc',
+      opencodeCmd,
+    ];
+
+    if (this.supportsNoFocus && this.paneDirection === 'right') {
+      // Serialize only the placement that depends on live ownership/geometry.
+      const previous = this.mainVerticalMutex;
+      let release!: () => void;
+      this.mainVerticalMutex = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await this.createMainVerticalPane(zellij, viewerArgs);
+      } finally {
+        release();
+      }
+    }
+
     const targetTabId = await this.getParentTabId(zellij);
 
     // The parent tab is the anchor: without it there is no same-tab target,
     // so no pane is created rather than falling back to the focused tab.
     if (!targetTabId) return { success: false, error: 'not_found' };
 
-    return this.runNewPaneWithFallback(
+    const target = { tabId: targetTabId };
+    const first = await this.runNewPane(
       zellij,
-      paneName,
-      opencodeCmd,
-      targetTabId,
-      miniCwdArgs,
+      target,
+      viewerArgs,
+      this.paneDirection,
     );
+    // Native placement for other layouts and legacy Zellij: a crowded tab
+    // may silently drop a directed split, so retry once without the hint.
+    if (first.success || !this.paneDirection) return first;
+    return this.runNewPane(zellij, target, viewerArgs);
   }
 
-  /**
-   * Run `new-pane` in the parent tab, retrying once without the direction
-   * hint on failure.
-   *
-   * Zellij silently drops a `--direction` split once a tab is crowded (exit
-   * code 0 but no `terminal_*` id on stdout), so a failed directed create is
-   * retried without `--direction`, which lets Zellij place the pane in the
-   * largest free space of the target tab. The retry keeps `--session`,
-   * `--tab-id`, `--name`, `--close-on-exit`, and the command part — only the
-   * direction hint is dropped. Two failures (or one failure with no direction
-   * configured) report `{ success: false, error: 'hard' }`.
-   */
-  private async runNewPaneWithFallback(
+  private async createMainVerticalPane(
     zellij: string,
-    paneName: string,
-    opencodeCmd: string,
-    targetTabId: string,
-    miniCwdArgs: string[] = [],
+    viewerArgs: string[],
   ): Promise<PaneResult> {
-    const direction = this.directionArgs();
-    const runOnce = async (directionArgs: string[]): Promise<PaneResult> => {
-      const args = [
-        ...this.sessionArgs(),
-        'action',
-        'new-pane',
-        '--tab-id',
-        targetTabId,
-        ...directionArgs,
-        '--name',
-        paneName,
-        '--close-on-exit',
-        ...miniCwdArgs,
-        '--',
-        'sh',
-        '-lc',
-        opencodeCmd,
-      ];
+    const panes = await this.listPanesJson(zellij);
+    const parentId = normalizePaneId(this.parentPaneId ?? '');
+    const parent = panes?.find(
+      (pane) => isLiveTile(pane) && String(pane.id) === parentId,
+    );
+    if (!panes || parent?.tab_id === undefined) {
+      return { success: false, error: 'not_found' };
+    }
 
-      const proc = crossSpawn([zellij, ...args], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      const exitCode = await proc.exited;
-      const stdout = await proc.stdout();
-      const trimmedStdout = stdout.trim();
-      const paneId = trimmedStdout;
-
-      // Accept success if exit code is 0 and we got a valid pane ID
-      if (exitCode === 0 && paneId?.startsWith('terminal_')) {
-        return { success: true, paneId };
+    const terminals = panes.filter((pane) => !pane.is_plugin && !pane.exited);
+    for (const id of this.mainVerticalPaneIds) {
+      if (!terminals.some((pane) => pane.id === id)) {
+        this.mainVerticalPaneIds.delete(id);
       }
-      log('[zellij] spawnPane: new-pane failed', {
-        command: opencodeCmd,
-        exitCode,
-        stdout: trimmedStdout,
-        stderr: (await proc.stderr()).trim(),
-      });
+    }
+    // Split the tallest owned tile in the right column, not the last pane
+    // blindly: that pane may have closed, moved or become too short.
+    const stackOn = terminals
+      .filter(
+        (pane) =>
+          this.mainVerticalPaneIds.has(pane.id) && isRightTile(parent, pane),
+      )
+      .sort((a, b) => b.pane_rows - a.pane_rows)[0];
+    if (!stackOn && this.mainVerticalPaneIds.size > 0) {
+      return { success: false, error: 'invalid_state' };
+    }
+    // Zellij 0.45 can start an unlisted PTY when the floating layer is
+    // visible, before it rejects this tiled split. Only create with proof
+    // that the parent tab's floating layer is hidden.
+    if (
+      this.requiresFloatingLayerCheck &&
+      !(await this.isFloatingLayerHidden(zellij, parent.tab_id))
+    ) {
+      return { success: false, error: 'invalid_state' };
+    }
+
+    const result = await this.runNewPane(
+      zellij,
+      { paneId: (stackOn ?? parent).id },
+      viewerArgs,
+      stackOn ? 'down' : 'right',
+    );
+    if (!result.success || !result.paneId) return result;
+    const childId = Number(normalizePaneId(result.paneId));
+    if (panes.some((pane) => !pane.is_plugin && pane.id === childId)) {
       return { success: false, error: 'hard' };
+    }
+    this.mainVerticalPaneIds.add(childId);
+    if (!stackOn) {
+      // Sizing is best-effort after creation; the caller still needs the
+      // pane handle for the normal viewer lifecycle if resizing fails.
+      await this.sizeMainPane(zellij, parent, childId).catch(
+        (error: unknown) => {
+          log('[zellij] spawnPane: resize failed', { error });
+        },
+      );
+    }
+
+    // A successful CLI action can report a pane that never appears or put
+    // it in a native stack. Do not confuse a failed read with either case.
+    const readPlacement = async (): Promise<
+      'unknown' | 'absent' | 'exited' | 'misplaced' | 'live'
+    > => {
+      const current = await this.listPanesJson(zellij);
+      if (!current) return 'unknown';
+      const child = current.find(
+        (pane) => !pane.is_plugin && pane.id === childId,
+      );
+      if (!child) return 'absent';
+      if (child.exited) return 'exited';
+      const main = current.find(
+        (pane) => !pane.is_plugin && !pane.exited && pane.id === parent.id,
+      );
+      return main &&
+        main.pane_columns > 0 &&
+        child.pane_columns > 0 &&
+        !isRightTile(main, child)
+        ? 'misplaced'
+        : 'live';
+    };
+    const observePlacement = async () => {
+      let previous: 'absent' | 'misplaced' | undefined;
+      for (let i = 0; i < 3; i++) {
+        const placement = await readPlacement();
+        if (placement !== 'absent' && placement !== 'misplaced')
+          return placement;
+        if (placement === previous) return placement;
+        previous = placement;
+      }
+      return 'unknown';
+    };
+    let placement = await observePlacement();
+    const misplaced = placement === 'misplaced';
+    let closeSucceeded = false;
+    if (misplaced) {
+      // Only close a listed viewer; Zellij 0.45 cannot reap unlisted PTYs
+      // this way. Require exit 0 since exit 1 can mean transport failure.
+      closeSucceeded = await closePaneCommand(zellij, {
+        close: [
+          ...this.sessionArgs(),
+          'action',
+          'close-pane',
+          '--pane-id',
+          result.paneId,
+        ],
+      });
+      placement = await observePlacement();
+    }
+    if (placement === 'absent' || placement === 'exited') {
+      this.mainVerticalPaneIds.delete(childId);
+      return {
+        success: false,
+        error: misplaced ? 'invalid_state' : 'hard',
+        ...(placement === 'absent' && !closeSucceeded
+          ? { creationUncertain: true }
+          : {}),
+      };
+    }
+    if (misplaced) {
+      // Keep the handle for the normal pane lifecycle to close later.
+      log('[zellij] spawnPane: misplaced viewer rollback not confirmed', {
+        paneId: result.paneId,
+      });
+    }
+    return result;
+  }
+
+  private async sizeMainPane(
+    zellij: string,
+    original: ZellijPaneInfo,
+    childId: number,
+  ): Promise<void> {
+    const rightEdge = original.pane_x + original.pane_columns;
+    const desired = (original.pane_columns * this.mainPaneSize) / 100;
+    const readWidth = async (): Promise<number | null> => {
+      const panes = await this.listPanesJson(zellij);
+      const parent = panes?.find(
+        (pane) => pane.id === original.id && isLiveTile(pane),
+      );
+      const child = panes?.find(
+        (pane) => pane.id === childId && isLiveTile(pane),
+      );
+      // Only resize the boundary we just created, never a replacement pane
+      // or a different boundary after a manual close or rearrangement.
+      if (
+        !parent ||
+        !child ||
+        parent.tab_id !== original.tab_id ||
+        parent.pane_x !== original.pane_x ||
+        parent.pane_y !== original.pane_y ||
+        parent.pane_rows !== original.pane_rows ||
+        !isRightTile(parent, child) ||
+        child.pane_rows !== parent.pane_rows ||
+        child.pane_x + child.pane_columns !== rightEdge
+      ) {
+        return null;
+      }
+      return parent.pane_columns;
     };
 
-    const first = await runOnce(direction);
-    if (first.success) return first;
-    // Retry only when a direction was actually applied; an undirected create
-    // already uses Zellij's free-space placement and would just repeat.
-    if (direction.length === 0) return first;
-    return runOnce([]);
+    const resize = async (growMain: boolean): Promise<boolean> => {
+      // Grow the narrower side into the shared boundary; `decrease` can
+      // change the layout to a stack instead of moving that boundary.
+      const proc = crossSpawn(
+        [
+          zellij,
+          ...this.sessionArgs(),
+          'action',
+          'resize',
+          '--pane-id',
+          `terminal_${growMain ? original.id : childId}`,
+          'increase',
+          growMain ? 'right' : 'left',
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      const exitCode = await proc.exited;
+      if (exitCode === 0) return true;
+      log('[zellij] spawnPane: resize failed', {
+        exitCode,
+        stderr: (await proc.stderr()).trim(),
+      });
+      return false;
+    };
+
+    let width = (await readWidth()) ?? (await readWidth());
+    // Zellij moves the boundary in steps (normally five percentage points).
+    // Stop at a no-op or after crossing the desired width, undoing the last
+    // step only if the previous width was closer (or equally close).
+    for (let i = 0; width !== null && width !== desired && i < 20; i++) {
+      const growMain = width < desired;
+      if (!(await resize(growMain))) return;
+      let next = await readWidth();
+      if (next === null || next === width) next = await readWidth();
+      if (next === null || (growMain ? next <= width : next >= width)) return;
+      if (growMain ? next >= desired : next <= desired) {
+        if (
+          Math.abs(next - desired) >= Math.abs(width - desired) &&
+          (await resize(!growMain)) &&
+          (await readWidth()) !== width &&
+          (await readWidth()) !== width
+        ) {
+          log(
+            '[zellij] spawnPane: resize restore did not reach previous width',
+            {
+              paneId: original.id,
+              width,
+            },
+          );
+        }
+        return;
+      }
+      width = next;
+    }
+  }
+
+  private async runNewPane(
+    zellij: string,
+    target: ZellijPaneTarget,
+    viewerArgs: string[],
+    direction: ZellijPaneDirection | null = null,
+  ): Promise<PaneResult> {
+    const args = [
+      ...this.sessionArgs(),
+      'action',
+      'new-pane',
+      ...('tabId' in target ? ['--tab-id', target.tabId] : []),
+      ...(this.supportsNoFocus ? ['--no-focus'] : []),
+      ...(direction ? ['--direction', direction] : []),
+      ...viewerArgs,
+    ];
+    const proc = crossSpawn([zellij, ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // --tab-id takes precedence over the pane environment anchor;
+      // --pane-id on new-pane would replace the pane rather than split it.
+      env:
+        'paneId' in target
+          ? { ...process.env, ZELLIJ_PANE_ID: String(target.paneId) }
+          : undefined,
+    });
+
+    const exitCode = await proc.exited;
+    const paneId = (await proc.stdout()).trim();
+    if (exitCode === 0 && /^terminal_\d+$/.test(paneId)) {
+      return { success: true, paneId };
+    }
+    log('[zellij] spawnPane: new-pane failed', {
+      command: viewerArgs.at(-1),
+      exitCode,
+      stdout: paneId,
+      stderr: (await proc.stderr()).trim(),
+    });
+    return { success: false, error: 'hard' };
   }
 
   private async listPanesJson(
@@ -316,9 +535,41 @@ export class ZellijMultiplexer implements Multiplexer {
       );
       if ((await proc.exited) !== 0) return null;
       const stdout = await proc.stdout();
-      return JSON.parse(stdout) as ZellijPaneInfo[];
+      const panes = JSON.parse(stdout) as ZellijPaneInfo[];
+      return Array.isArray(panes) ? panes : null;
     } catch {
       return null;
+    }
+  }
+
+  private async isFloatingLayerHidden(
+    zellij: string,
+    tabId: number,
+  ): Promise<boolean> {
+    try {
+      const proc = crossSpawn(
+        [
+          zellij,
+          ...this.sessionArgs(),
+          'action',
+          'list-tabs',
+          '--json',
+          '--state',
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      if ((await proc.exited) !== 0) return false;
+      const tabs = JSON.parse(await proc.stdout()) as Array<{
+        tab_id: number;
+        are_floating_panes_visible?: boolean;
+      }>;
+      return (
+        Array.isArray(tabs) &&
+        tabs.find((tab) => tab.tab_id === tabId)?.are_floating_panes_visible ===
+          false
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -375,10 +626,6 @@ export class ZellijMultiplexer implements Multiplexer {
     });
   }
 
-  private directionArgs(): string[] {
-    return this.paneDirection ? ['--direction', this.paneDirection] : [];
-  }
-
   /**
    * `--session <name>` prefix for every zellij invocation. Empty only in
    * paths that already fail closed before running a command.
@@ -430,6 +677,28 @@ export class ZellijMultiplexer implements Multiplexer {
 
 function normalizePaneId(paneId: string): string {
   return paneId.replace(/^terminal_/, '');
+}
+
+function isLiveTile(pane: ZellijPaneInfo): boolean {
+  return (
+    !pane.is_plugin &&
+    !pane.is_floating &&
+    !pane.is_suppressed &&
+    !pane.is_collapsed &&
+    !pane.exited &&
+    pane.pane_columns > 0 &&
+    pane.pane_rows > 0
+  );
+}
+
+function isRightTile(parent: ZellijPaneInfo, pane: ZellijPaneInfo): boolean {
+  return (
+    isLiveTile(pane) &&
+    pane.tab_id === parent.tab_id &&
+    pane.pane_x === parent.pane_x + parent.pane_columns &&
+    pane.pane_y >= parent.pane_y &&
+    pane.pane_y + pane.pane_rows <= parent.pane_y + parent.pane_rows
+  );
 }
 
 interface ZellijVersion {

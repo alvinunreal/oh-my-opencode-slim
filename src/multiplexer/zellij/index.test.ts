@@ -10,7 +10,10 @@ type SpawnResult = {
 };
 
 const logMock = mock(() => {});
-const crossSpawnMock = mock((_command: string[]) => createSpawnResult());
+type SpawnOptions = { env?: Record<string, string | undefined> };
+const crossSpawnMock = mock((_command: string[], _options?: SpawnOptions) =>
+  createSpawnResult(),
+);
 
 mock.module('../../utils/logger', () => ({
   log: logMock,
@@ -70,7 +73,10 @@ function newPaneCommands(): string[][] {
  * Install the standard success mock set (binary found, supported version,
  * list-panes with the parent pane 0 in tab 0, new-pane emitting a valid id).
  */
-function mockStandardImpl(version: string): void {
+function mockStandardImpl(
+  version: string,
+  action?: (command: string[]) => SpawnResult | undefined,
+): void {
   crossSpawnMock.mockImplementation((command: string[]) => {
     if (command[0] === 'which' || command[0] === 'where') {
       return createSpawnResult(0, '/usr/bin/zellij\n');
@@ -78,14 +84,51 @@ function mockStandardImpl(version: string): void {
     if (command.includes('--version')) {
       return createSpawnResult(0, `zellij ${version}\n`);
     }
+    const result = action?.(command);
+    if (result) return result;
     if (command.includes('list-panes')) {
       return createSpawnResult(0, createPaneListJson());
+    }
+    if (command.includes('list-tabs')) {
+      return createSpawnResult(
+        0,
+        '[{"tab_id":0,"are_floating_panes_visible":false}]',
+      );
     }
     if (command.includes('new-pane')) {
       return createSpawnResult(0, 'terminal_2\n');
     }
     return createSpawnResult();
   });
+}
+
+function tile(id: number, x: number, y: number, width: number, rows: number) {
+  return {
+    id,
+    tab_id: 0,
+    is_plugin: false,
+    is_floating: false,
+    is_suppressed: false,
+    is_collapsed: false,
+    exited: false,
+    pane_x: x,
+    pane_y: y,
+    pane_columns: width,
+    pane_rows: rows,
+  };
+}
+
+function placementCommands() {
+  return crossSpawnMock.mock.calls
+    .filter(([command]) => command[4] === 'new-pane')
+    .map(([command, options]) => ({
+      session: command.slice(1, 3),
+      noFocus: command.includes('--no-focus'),
+      tabTarget: command.includes('--tab-id'),
+      paneTarget: command.includes('--pane-id'),
+      anchor: options?.env?.ZELLIJ_PANE_ID,
+      direction: command[command.indexOf('--direction') + 1],
+    }));
 }
 
 function setEnv(key: string, value: string | undefined): void {
@@ -924,6 +967,530 @@ describe('ZellijMultiplexer', () => {
     );
     expect(joined.some((command) => command.includes("'session-2'"))).toBe(
       true,
+    );
+  });
+
+  describe('Zellij 0.45+ placement', () => {
+    test('sizes the real parent once and stacks four concurrent viewers without focus changes', async () => {
+      process.env.ZELLIJ_PANE_ID = 'terminal_7';
+      const column = (width: number) => [
+        tile(7, 20, 4, width, 60),
+        tile(10, 20 + width, 4, 190 - width, 60),
+      ];
+      const sizedParent = tile(7, 20, 4, 114, 60);
+      const twoChildren = [
+        sizedParent,
+        tile(10, 134, 4, 76, 30),
+        tile(11, 134, 34, 76, 30),
+      ];
+      const threeChildren = [
+        sizedParent,
+        tile(10, 134, 4, 76, 15),
+        tile(12, 134, 19, 76, 15),
+        tile(11, 134, 34, 76, 30),
+      ];
+      const snapshots = [
+        [tile(7, 20, 4, 190, 60)],
+        column(95),
+        column(105),
+        column(114),
+        column(114),
+        column(114),
+        twoChildren,
+        twoChildren,
+        threeChildren,
+        threeChildren,
+        [
+          ...threeChildren.slice(0, -1),
+          tile(11, 134, 34, 76, 15),
+          tile(13, 134, 49, 76, 15),
+        ],
+      ];
+      let nextId = 10;
+      mockStandardImpl('0.46.1', (command) => {
+        if (command.includes('list-panes')) {
+          return createSpawnResult(0, JSON.stringify(snapshots.shift()));
+        }
+        if (command.includes('new-pane')) {
+          return createSpawnResult(0, `terminal_${nextId++}\n`);
+        }
+      });
+
+      const { ZellijMultiplexer } = await importFreshZellij();
+      const zellij = new ZellijMultiplexer('main-vertical', 60);
+      const results = await Promise.all(
+        [10, 11, 12, 13].map((id) =>
+          zellij.spawnPane(
+            `child-${id}`,
+            `Worker ${id}`,
+            'http://localhost:4096',
+            '/repo',
+          ),
+        ),
+      );
+      expect(results).toEqual(
+        [10, 11, 12, 13].map((id) => ({
+          success: true,
+          paneId: `terminal_${id}`,
+        })),
+      );
+      expect(snapshots).toHaveLength(0);
+      expect(placementCommands()).toEqual(
+        ['7', '10', '10', '11'].map((anchor, index) => ({
+          session: ['--session', SESSION_NAME],
+          noFocus: true,
+          tabTarget: false,
+          paneTarget: false,
+          anchor,
+          direction: index === 0 ? 'right' : 'down',
+        })),
+      );
+      const actions = commands().filter((command) => command[3] === 'action');
+      expect(
+        actions
+          .map((cmd) => cmd[4])
+          .filter((action) => action !== 'list-panes'),
+      ).toEqual([
+        'new-pane',
+        'resize',
+        'resize',
+        'new-pane',
+        'new-pane',
+        'new-pane',
+      ]);
+      for (const command of actions.filter((cmd) => cmd[4] === 'resize')) {
+        expect(command.slice(1)).toEqual([
+          '--session',
+          SESSION_NAME,
+          'action',
+          'resize',
+          '--pane-id',
+          'terminal_7',
+          'increase',
+          'right',
+        ]);
+      }
+      expect(process.env.ZELLIJ_PANE_ID).toBe('terminal_7');
+    });
+
+    test('shrinks the parent by growing the child and keeps the nearest reachable width', async () => {
+      const widths = [190, 95, 95, 86, 76, 86, 86];
+      mockStandardImpl('0.45.0', (command) => {
+        if (!command.includes('list-panes')) return;
+        const width = widths.shift() ?? 0;
+        return createSpawnResult(
+          0,
+          JSON.stringify([
+            tile(0, 0, 0, width, 60),
+            ...(width === 190 ? [] : [tile(2, width, 0, 190 - width, 60)]),
+          ]),
+        );
+      });
+
+      const { ZellijMultiplexer } = await importFreshZellij();
+      const zellij = new ZellijMultiplexer('main-vertical', 43);
+      expect(
+        await zellij.spawnPane(
+          'child',
+          'Worker',
+          'http://localhost:4096',
+          '/repo',
+        ),
+      ).toEqual({
+        success: true,
+        paneId: 'terminal_2',
+      });
+      expect(widths).toHaveLength(0);
+      expect(
+        commands()
+          .filter((cmd) => cmd[4] === 'resize')
+          .map((cmd) => cmd.slice(5)),
+      ).toEqual([
+        ['--pane-id', 'terminal_2', 'increase', 'left'],
+        ['--pane-id', 'terminal_2', 'increase', 'left'],
+        ['--pane-id', 'terminal_0', 'increase', 'right'],
+      ]);
+    });
+
+    test('uses a surviving owned tile after manual close, never falling back to an unrelated tile', async () => {
+      let panes = [tile(0, 0, 0, 190, 60)];
+      let nextId = 2;
+      let dropSplit = false;
+      mockStandardImpl('0.46.1', (command) => {
+        if (command.includes('list-panes')) {
+          return createSpawnResult(0, JSON.stringify(panes));
+        }
+        if (!command.includes('new-pane')) return;
+        if (dropSplit) return createSpawnResult();
+        if (nextId === 2) {
+          panes = [tile(0, 0, 0, 95, 60), tile(2, 95, 0, 95, 60)];
+        } else if (nextId === 3) {
+          panes = [panes[0], tile(2, 95, 0, 95, 30), tile(3, 95, 30, 95, 30)];
+        } else if (nextId === 4) {
+          panes = [tile(0, 20, 0, 85, 60), tile(4, 105, 0, 85, 60), panes[1]];
+        }
+        return createSpawnResult(0, `terminal_${nextId++}\n`);
+      });
+
+      const { ZellijMultiplexer } = await importFreshZellij();
+      const zellij = new ZellijMultiplexer('main-vertical', 50);
+      const spawn = (id: string) =>
+        zellij.spawnPane(id, 'Worker', 'http://localhost:4096', '/repo');
+      expect((await spawn('first')).success).toBe(true);
+      expect((await spawn('second')).success).toBe(true);
+
+      // The first owned child closed. Another right tile is taller, but
+      // only the surviving owned child can receive a down split.
+      panes = [
+        tile(0, 0, 0, 95, 60),
+        tile(3, 95, 45, 95, 15),
+        tile(9, 95, 0, 95, 45),
+      ];
+      dropSplit = true;
+      expect(await spawn('dropped')).toEqual({ success: false, error: 'hard' });
+      dropSplit = false;
+
+      // The survivor moves to another tab: do not treat it as the column.
+      panes = [panes[0], { ...panes[1], tab_id: 1 }, panes[2]];
+      expect(await spawn('displaced')).toEqual({
+        success: false,
+        error: 'invalid_state',
+      });
+
+      // With both owned tiles closed, the next viewer starts a new column
+      // off the current parent rather than using stale geometry or a neighbor.
+      panes = [tile(0, 20, 0, 170, 60), tile(9, 0, 0, 20, 60)];
+      expect(await spawn('recreate')).toEqual({
+        success: true,
+        paneId: 'terminal_4',
+      });
+      expect(
+        placementCommands().map(({ anchor, direction }) => [anchor, direction]),
+      ).toEqual([
+        ['0', 'right'],
+        ['2', 'down'],
+        ['3', 'down'],
+        ['0', 'right'],
+      ]);
+      expect(commands().some((command) => command[4] === 'resize')).toBe(false);
+    });
+
+    test.each(['visible', 'hidden', 'missing', 'unreadable'] as const)(
+      'checks that the parent tab floating layer is hidden in Zellij 0.45.x (%s)',
+      async (state) => {
+        let created = false;
+        mockStandardImpl('0.45.3', (command) => {
+          if (command[4] === 'list-tabs') {
+            if (state === 'unreadable') return createSpawnResult(1);
+            return createSpawnResult(
+              0,
+              JSON.stringify([
+                { tab_id: 0, are_floating_panes_visible: state === 'hidden' },
+                ...(state === 'missing'
+                  ? []
+                  : [
+                      {
+                        tab_id: 7,
+                        are_floating_panes_visible: state === 'visible',
+                      },
+                    ]),
+              ]),
+            );
+          }
+          if (command[4] === 'list-panes') {
+            const panes = created
+              ? [tile(0, 0, 0, 95, 60), tile(2, 95, 0, 95, 60)]
+              : [tile(0, 0, 0, 190, 60)];
+            return createSpawnResult(
+              0,
+              JSON.stringify(panes.map((pane) => ({ ...pane, tab_id: 7 }))),
+            );
+          }
+          if (command[4] === 'new-pane') created = true;
+        });
+
+        const { ZellijMultiplexer } = await importFreshZellij();
+        const zellij = new ZellijMultiplexer('main-vertical', 50);
+        const result = await zellij.spawnPane(
+          'child',
+          'Worker',
+          'http://localhost:4096',
+          '/repo',
+        );
+        expect(result).toEqual(
+          state === 'hidden'
+            ? { success: true, paneId: 'terminal_2' }
+            : { success: false, error: 'invalid_state' },
+        );
+        expect(newPaneCommands()).toHaveLength(state === 'hidden' ? 1 : 0);
+        expect(
+          commands().filter((command) => command[4] === 'list-tabs'),
+        ).toEqual([
+          [
+            '/usr/bin/zellij',
+            '--session',
+            SESSION_NAME,
+            'action',
+            'list-tabs',
+            '--json',
+            '--state',
+          ],
+        ]);
+      },
+    );
+
+    test.each([
+      'absent',
+      'delayed',
+      'misplaced',
+      'exited',
+      'unreadable',
+    ] as const)(
+      'verifies a reported 0.45.0 down split against %s geometry',
+      async (state) => {
+        let creates = 0;
+        let postSplitReads = 0;
+        let closed = false;
+        const column = [tile(0, 0, 0, 95, 60), tile(2, 95, 0, 95, 60)];
+        const child = tile(14, 95, 30, 95, 30);
+        mockStandardImpl('0.45.0', (command) => {
+          if (command[4] === 'new-pane') {
+            return createSpawnResult(
+              0,
+              ++creates === 1 ? 'terminal_2' : 'terminal_14',
+            );
+          }
+          if (command[4] === 'close-pane') {
+            closed = true;
+            return createSpawnResult();
+          }
+          if (command[4] !== 'list-panes') return;
+          if (creates === 0) {
+            return createSpawnResult(
+              0,
+              JSON.stringify([tile(0, 0, 0, 190, 60)]),
+            );
+          }
+          if (creates === 2) {
+            postSplitReads++;
+            if (state === 'misplaced' && postSplitReads > 1 && !closed) {
+              return createSpawnResult(
+                0,
+                JSON.stringify([...column, tile(14, 0, 59, 190, 1)]),
+              );
+            }
+            if (
+              state === 'exited' ||
+              (state === 'delayed' && postSplitReads === 2)
+            ) {
+              return createSpawnResult(
+                0,
+                JSON.stringify([
+                  column[0],
+                  tile(2, 95, 0, 95, 30),
+                  { ...child, exited: state === 'exited' },
+                ]),
+              );
+            }
+            if (state === 'unreadable' && postSplitReads === 2) {
+              return createSpawnResult(1, '', 'list failed');
+            }
+          }
+          return createSpawnResult(0, JSON.stringify(column));
+        });
+
+        const { ZellijMultiplexer } = await importFreshZellij();
+        const zellij = new ZellijMultiplexer('main-vertical', 50);
+        const spawn = (id: string) =>
+          zellij.spawnPane(id, 'Worker', 'http://localhost:4096', '/repo');
+        expect(await spawn('first')).toEqual({
+          success: true,
+          paneId: 'terminal_2',
+        });
+        const result = await spawn('second');
+        if (state === 'misplaced') {
+          expect(result).toEqual({
+            success: false,
+            error: 'invalid_state',
+          });
+          expect(postSplitReads).toBe(5); // Absent, misplaced twice, then absent twice.
+        } else {
+          expect(result).toEqual(
+            state === 'absent' || state === 'exited'
+              ? {
+                  success: false,
+                  error: 'hard',
+                  ...(state === 'absent' ? { creationUncertain: true } : {}),
+                }
+              : { success: true, paneId: 'terminal_14' },
+          );
+          expect(postSplitReads).toBe(state === 'exited' ? 1 : 2);
+        }
+        expect(
+          placementCommands().map(({ anchor, direction }) => [
+            anchor,
+            direction,
+          ]),
+        ).toEqual([
+          ['0', 'right'],
+          ['2', 'down'],
+        ]);
+        const cleanup = commands()
+          .filter((cmd) => cmd[4] === 'write' || cmd[4] === 'close-pane')
+          .map((cmd) => cmd.slice(4, 7));
+        expect(cleanup).toEqual(
+          state === 'misplaced'
+            ? [['close-pane', '--pane-id', 'terminal_14']]
+            : [],
+        );
+      },
+    );
+
+    test.each([
+      [0, 'absent'],
+      [1, 'listed'],
+      [1, 'absent'],
+      [2, 'unreadable'],
+    ] as const)(
+      'observes rollback (close exit %d, pane %s)',
+      async (closeExit, afterClose) => {
+        let panes = [tile(0, 0, 0, 190, 60)];
+        let postCloseReads: number | undefined;
+        mockStandardImpl('0.46.1', (command) => {
+          switch (command[4]) {
+            case 'list-panes':
+              if (postCloseReads !== undefined) {
+                postCloseReads++;
+                if (afterClose === 'unreadable' && postCloseReads === 1) {
+                  return createSpawnResult(1, '', 'list failed');
+                }
+              }
+              return createSpawnResult(0, JSON.stringify(panes));
+            case 'new-pane':
+              panes = [tile(0, 0, 0, 95, 60), tile(2, 95, 0, 95, 60)];
+              return createSpawnResult(0, 'terminal_2');
+            case 'resize':
+              panes = [tile(0, 0, 0, 190, 60), tile(2, 0, 59, 190, 1)];
+              return createSpawnResult();
+            case 'close-pane':
+              postCloseReads = 0;
+              if (afterClose === 'absent') panes = [tile(0, 0, 0, 190, 60)];
+              return createSpawnResult(closeExit);
+          }
+        });
+
+        const { ZellijMultiplexer } = await importFreshZellij();
+        const zellij = new ZellijMultiplexer('main-vertical', 40);
+        const spawn = (id: string) =>
+          zellij.spawnPane(id, 'Worker', 'http://localhost:4096', '/repo');
+        const result = await spawn('child');
+        expect(result).toEqual(
+          afterClose === 'absent'
+            ? {
+                success: false,
+                error: 'invalid_state',
+                ...(closeExit === 0 ? {} : { creationUncertain: true }),
+              }
+            : { success: true, paneId: 'terminal_2' },
+        );
+        expect(postCloseReads).toBe(afterClose === 'unreadable' ? 1 : 2);
+        if (afterClose !== 'absent') {
+          expect(logMock).toHaveBeenCalledWith(
+            '[zellij] spawnPane: misplaced viewer rollback not confirmed',
+            { paneId: 'terminal_2' },
+          );
+          // The tracked viewer is present but its placement is not an anchor.
+          expect(await spawn('next')).toEqual({
+            success: false,
+            error: 'invalid_state',
+          });
+          expect(newPaneCommands()).toHaveLength(1);
+        }
+        const cleanup = commands().filter(
+          (cmd) => cmd[4] === 'write' || cmd[4] === 'close-pane',
+        );
+        expect(cleanup.map((cmd) => cmd.slice(1))).toEqual([
+          [
+            '--session',
+            SESSION_NAME,
+            'action',
+            'close-pane',
+            '--pane-id',
+            'terminal_2',
+          ],
+        ]);
+      },
+    );
+
+    test('does not treat a failed geometry read as a bad placement', async () => {
+      let created = false;
+      mockStandardImpl('0.46.1', (command) => {
+        if (command[4] === 'list-panes') {
+          return created
+            ? createSpawnResult(1, '', 'list failed')
+            : createSpawnResult(0, JSON.stringify([tile(0, 0, 0, 190, 60)]));
+        }
+        if (command[4] === 'new-pane') created = true;
+      });
+
+      const { ZellijMultiplexer } = await importFreshZellij();
+      const zellij = new ZellijMultiplexer();
+      expect(
+        await zellij.spawnPane(
+          'child',
+          'Worker',
+          'http://localhost:4096',
+          '/repo',
+        ),
+      ).toEqual({
+        success: true,
+        paneId: 'terminal_2',
+      });
+      expect(
+        commands().some((cmd) =>
+          ['resize', 'write', 'close-pane'].includes(cmd[4]),
+        ),
+      ).toBe(false);
+    });
+
+    test.each([
+      ['main-horizontal', 'down'],
+      ['even-horizontal', undefined],
+      ['even-vertical', undefined],
+      ['tiled', undefined],
+    ] as const)(
+      'keeps %s same-tab placement with no focus on every attempt',
+      async (layout, direction) => {
+        let attempts = 0;
+        mockStandardImpl('0.45.0', (command) => {
+          if (command.includes('new-pane') && direction && attempts++ === 0) {
+            return createSpawnResult();
+          }
+        });
+
+        const { ZellijMultiplexer } = await importFreshZellij();
+        const zellij = new ZellijMultiplexer(layout, 60);
+        expect(
+          (
+            await zellij.spawnPane(
+              'child',
+              'Worker',
+              'http://localhost:4096',
+              '/repo',
+            )
+          ).success,
+        ).toBe(true);
+        expect(newPaneCommands()).toHaveLength(direction ? 2 : 1);
+        expect(commands().some((cmd) => cmd[4] === 'list-tabs')).toBe(false);
+        for (const [index, command] of newPaneCommands().entries()) {
+          expect(command.slice(5, 8)).toEqual(['--tab-id', '0', '--no-focus']);
+          if (direction && index === 0) {
+            expect(command.slice(8, 10)).toEqual(['--direction', direction]);
+          } else {
+            expect(command).not.toContain('--direction');
+          }
+        }
+      },
     );
   });
 
