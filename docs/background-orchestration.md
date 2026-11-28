@@ -57,6 +57,16 @@ high-cost judgment, not an automatic extra lane on every task. Role-specific
 routing lives in the agent prompts; [Council](council.md) describes independent
 seat synthesis.
 
+### Fresh scope vs. continuation (opt-in)
+
+`freshForIndependentWork: true` appends one guideline to the native `subagent`
+tool description: omit `sessionID` for a new deliverable, investigation, or
+verification scope, and keep it for follow-ups or corrections on that same
+deliverable and for an explicit resume. Whether work is independent is a
+semantic call, so Slim neither guesses it nor rewrites arguments. The host starts
+a fresh child when `sessionID` is absent and continues the exact child when it is
+present. The setting is off by default and is read when Slim loads.
+
 ## Native completion and continuation
 
 The native `subagent` tool returns immediately and reports each settled child

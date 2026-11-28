@@ -839,6 +839,12 @@ const RawPluginConfigSchema = z
       .describe(
         'Hide undeclared OpenCode general and explore subagents in favor of Slim specialists. Set false to leave the host roster untouched. Default true.',
       ),
+    freshForIndependentWork: z
+      .boolean()
+      .optional()
+      .describe(
+        'Opt-in native v2 subagent policy: omit sessionID for a new deliverable, investigation, or verification scope, and keep it for same-deliverable follow-ups and explicit resumes. Defaults to false.',
+      ),
     questionTimeoutMs: z
       .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
       .optional()

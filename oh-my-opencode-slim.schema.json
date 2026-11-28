@@ -16,6 +16,10 @@
       "description": "Hide undeclared OpenCode general and explore subagents in favor of Slim specialists. Set false to leave the host roster untouched. Default true.",
       "type": "boolean"
     },
+    "freshForIndependentWork": {
+      "description": "Opt-in native v2 subagent policy: omit sessionID for a new deliverable, investigation, or verification scope, and keep it for same-deliverable follow-ups and explicit resumes. Defaults to false.",
+      "type": "boolean"
+    },
     "questionTimeoutMs": {
       "description": "Opt-in question auto-answer timeout in milliseconds. Unset or 0 disables it; otherwise 60,000–2,147,483,647. Permission and closed-choice requests are never answered. On v2, requires an attached OMOS TUI with tui enabled.",
       "anyOf": [

@@ -100,6 +100,7 @@ import {
 } from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
 import { buildV2EventSubscriptionTypes } from './event-subscription';
+import { appendFreshDelegationPolicy } from './fresh-delegation';
 import {
   INTERNAL_SYNTHETIC_MESSAGE_PREFIX,
   isInternalAdmission,
@@ -3081,6 +3082,23 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         }
       } catch (err) {
         log('[v2] tool.transform failed', String(err));
+      }
+
+      // Opt-in delegation policy lives in the native subagent tool
+      // description. It registers independently of Slim task controls and
+      // session-preset routing, which may both be off.
+      if (pluginConfig.freshForIndependentWork) {
+        try {
+          const reg = await ctx.tool.transform((draft) => {
+            draft.update(DELEGATION_TOOL_V2, (tool) => {
+              tool.description = appendFreshDelegationPolicy(tool.description);
+            });
+          });
+          disposers.push(() => reg.dispose());
+          log('[v2] fresh delegation policy applied');
+        } catch (err) {
+          log('[v2] fresh delegation policy failed', String(err));
+        }
       }
 
       log('[v2] mcp servers registered', { count: Object.keys(mcps).length });
