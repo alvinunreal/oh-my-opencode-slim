@@ -167,7 +167,8 @@ in PowerShell, so keep psmux's `default-shell` set to PowerShell.
 **Zellij** — requires Zellij **0.44.1 or newer**. Detected via
 `ZELLIJ_PANE_ID`; every command is addressed with `--session <name>` from
 `ZELLIJ_SESSION_NAME`. Child panes always open in the tab containing the parent
-pane — there is no dedicated agents tab and no tab switching.
+pane — there is no dedicated agents tab and no tab switching. On **0.45.0 or
+newer**, automatic viewer creation leaves focus unchanged.
 
 **Herdr Desktop** — detected via `HC_TERMINAL_ID`. The adapter checks the
 current core terminal's `herdr.space` and `herdr.tab` labels, starts each
@@ -363,7 +364,7 @@ child session; only its pane is skipped. Restart the OpenCode TUI after changing
 | `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"rex"`, `"cmux-tui"`, `"kitty"`, `"wezterm"`, `"orca"`, or `"none"` |
 | `agents` | string[] | `["*"]` | Which subagents get a pane, using the same `"*"` / `"!name"` list syntax as agent `skills` and `mcps`: `["*"]` opens a pane for every child, `["*", "!explorer"]` opens one for every child except the excluded names, and `["oracle", "fixer"]` opens one only for the listed names. A filtered-out subagent still runs normally — only its pane is skipped |
 | `layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression; cmux-tui ignores it, Orca uses split direction only, and Rex uses split direction and percentage (see [Layouts](#layouts)). Legacy Herdr builds an agent area for both `main-*` layouts and re-equalizes only its agent panes after each spawn/close; Herdr Desktop ignores it |
-| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts, and by legacy Herdr (first agent-area split; subsequent agent panes are re-equalized), WezTerm (first agent split), and Rex (each parent split uses `100 - main_pane_size` as the new-pane percentage); ignored by Herdr Desktop, Zellij, kitty, cmux-tui, and Orca |
+| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts, and by Zellij 0.45.0+ (first `main-vertical` split, approximate), legacy Herdr (first agent-area split; subsequent agent panes are re-equalized), WezTerm (first agent split), and Rex (each parent split uses `100 - main_pane_size` as the new-pane percentage); ignored by Herdr Desktop, kitty, cmux-tui, and Orca |
 | `equalize_panes` | boolean | `true` | Herdr only: after each spawn and agent-pane close, equalize the `main-*` agent panes and re-assert the main pane's `main_pane_size` share through Herdr's socket API. Set `false` to keep manual pane sizes |
 | `cmux_tui_binary` | string | omitted | Explicit path to the cmux-tui binary. When omitted, the client resolves `cmux-tui` first, then `cmux`, on `PATH` |
 | `viewer` | string | v1 `"tui"`, v2 `"mini"` | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v2 the mini viewer runs `opencode mini` without a positional directory, so adapters pin the cwd (Herdr/Rex/kitty/WezTerm natively, tmux `-c`, Zellij `--cwd`, cmux-tui and Orca `cd` for POSIX shells and fish). Changing the value takes effect on the next opencode start |
@@ -376,7 +377,8 @@ disables pane management (fail-closed) with a once-per-process diagnostic.
 The five standard layouts and their fixed mapping per adapter. Where an adapter
 has no exact equivalent, it uses the nearest native expression (marked
 *approximate*); `main_pane_size` applies to tmux `main-*` layouts, each Rex
-`main-*` parent split, and the first legacy Herdr/WezTerm agent split.
+`main-*` parent split, the first Zellij 0.45.0+ `main-vertical` split, and the
+first legacy Herdr/WezTerm agent split.
 Legacy Herdr then equalizes only its agent panes after each
 spawn/close, leaving the main pane's share intact, while cmux-tui ignores both
 settings entirely (its child views are tabs inside the parent pane, not panes in
@@ -400,7 +402,7 @@ Neither `even-*` nor `tiled` promises a globally even or tiled layout.
 
 | Layout | tmux | Zellij | Herdr | kitty | WezTerm | Orca | cmux-tui |
 |--------|------|--------|-------|-------|---------|------|------|
-| `main-vertical` | `-h` split of the anchor or `-v -b` of the next pane, then `select-layout main-vertical` (+ `main-pane-width`) | `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | `split-pane --right --percent <100 - main_pane_size>`; *approximate* agent column (below) | `terminal split --direction horizontal` from the anchor; *approximate*, unsized | ignored (no layout expression) |
+| `main-vertical` | `-h` split of the anchor or `-v -b` of the next pane, then `select-layout main-vertical` (+ `main-pane-width`) | 0.45.0+: right split of the parent with *approximate* sizing, then down splits in the agent column; older: `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | `split-pane --right --percent <100 - main_pane_size>`; *approximate* agent column (below) | `terminal split --direction horizontal` from the anchor; *approximate*, unsized | ignored (no layout expression) |
 | `main-horizontal` | `-v` split of the anchor or `-h -b` of the next pane, then `select-layout main-horizontal` (+ `main-pane-height`) | `new-pane --direction down` | `pane split --direction down`; *approximate* agent row (to the right) | `fat` layout | `split-pane --bottom --percent <100 - main_pane_size>`; *approximate* agent row | `terminal split --direction vertical` from the anchor; *approximate*, unsized | ignored (no layout expression) |
 | `even-horizontal` | `-h` split, then `select-layout even-horizontal` | no direction (Zellij's native placement) | `pane split --direction right` | `horizontal` layout | `split-pane --right` from the parent | `terminal split --direction horizontal` from the anchor | ignored (no layout expression) |
 | `even-vertical` | `-v` split, then `select-layout even-vertical` | no direction (native placement) | `pane split --direction down` | `vertical` layout | `split-pane --bottom` from the parent | `terminal split --direction vertical` from the anchor | ignored (no layout expression) |
@@ -414,10 +416,15 @@ Adapter notes:
   exited. For `main-*`, the anchor is split if it has no next pane; otherwise,
   the next pane is split with `-b`. These layouts also set `main-pane-width` /
   `main-pane-height` from `main_pane_size`.
-- **Zellij** — direction is only a hint: when a tab is crowded (Zellij silently
-  drops a directed split around ~4 stacked panes), the create is retried once
-  without a direction and Zellij places the pane in the largest free space of
-  the same tab. There is no layout rebalancing.
+- **Zellij** — on 0.45.0+ with `main-vertical`, the first viewer splits the
+  parent to its right and the adapter adjusts that boundary toward
+  `main_pane_size` in Zellij's resize steps. Later viewers split only live
+  panes opened by this client in the right column, with no fallback split.
+  On 0.45.x, automatic `main-vertical` viewers are skipped unless Zellij
+  confirms the parent tab's floating layer is hidden. This avoids starting
+  an unplaced viewer when the floating layer is visible.
+  On older versions and for other layouts, the adapter retries once using
+  native same-tab placement if Zellij reports that a directed split failed.
 - **Herdr** — `main-*` layouts are approximated: the first child opens the
   agent area at `main_pane_size` (`right` for `main-vertical`, `down` for
   `main-horizontal`), and later children stack inside that agent-area pane
@@ -717,8 +724,9 @@ removed or changed behavior, with migration guidance:
 **Zellij**
 
 - Older than 0.44.1 → the adapter reports unavailable and is skipped.
-- In a crowded tab, the directed split is retried without a direction; the pane
-  still lands in the same tab.
+- On 0.45.0+ with `main-vertical`, there is no fallback if the right-column
+  split does not fit. Other placements retry without a direction, in the same
+  tab, if Zellij reports that a directed split failed.
 
 **Rex**
 
