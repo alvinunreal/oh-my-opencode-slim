@@ -928,6 +928,16 @@ const RawPluginConfigSchema = z
       .describe(
         'Skill names to disable completely. Disabled skills are not granted to agents, even when referenced by presets or agent overrides.',
       ),
+    autoinvoke_skills: z
+      .union([
+        z.boolean(),
+        z.array(z.string()),
+        z.record(z.string(), z.boolean()),
+      ])
+      .optional()
+      .describe(
+        'Control whether registered bundled skills are advertised in the model\'s <available_skills> system prompt list (OpenCode Skill.Info.autoinvoke). Accepts a boolean for all bundled skills, a list using the shared "*" / "!name" filter syntax (e.g. ["*", "!deepwork"] or ["codemap"]), or a map of skill names (or "*") to booleans. Skills with autoinvoke set to false remain registered and manually invocable.',
+      ),
     disabled_hooks: z
       .array(z.enum(DISABLED_HOOKS_VALUES))
       .optional()

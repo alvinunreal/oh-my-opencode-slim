@@ -3169,7 +3169,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           } else {
             const packageRoot = path.dirname(runtimePackageJson);
             const disabled = [...(pluginConfig.disabled_skills ?? [])];
-            const infos = buildBundledSkillInfos(packageRoot, disabled);
+            const infos = buildBundledSkillInfos(
+              packageRoot,
+              disabled,
+              pluginConfig.autoinvoke_skills,
+            );
             if (infos.length === 0) {
               log(
                 '[v2] bundled skill registration produced no skills (check package root)',

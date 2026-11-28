@@ -2257,6 +2257,26 @@ describe('createV2Setup e2e', () => {
     expect(calls.disposed).toContain('skill.transform');
   }, 20_000);
 
+  test('bundled skills forward configured autoinvoke_skills to ctx.skill.transform', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        autoinvoke_skills: ['*', '!deepwork'],
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      calls.rebuildSkills();
+      const deepwork = calls.skillAdds.find((skill) => skill.id === 'deepwork');
+      const reflect = calls.skillAdds.find((skill) => skill.id === 'reflect');
+      expect(deepwork?.autoinvoke).toBe(false);
+      expect(reflect?.autoinvoke).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
   test('retries a throwing legacy skill cleanup on a later rebuild', async () => {
     const legacyDir = path.join(configDir, '.oh-my-opencode-slim');
     await mkdir(legacyDir, { recursive: true });

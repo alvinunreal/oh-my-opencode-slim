@@ -181,6 +181,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `disabled_mcps`: List of MCPs to disable
 - `disabled_tools`: Tool-level cold gate, including enhanced `webfetch`; its former root `webfetch.enabled` switch is removed
 - `disabled_skills`: List of skills to disable
+- `autoinvoke_skills`: Bundled skill `autoinvoke` control (`boolean`, `"*"` / `"!name"` list filter, or per-skill boolean map)
 - `disabled_hooks`: List of hooks to disable (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`)
 - `disabled_commands`: List of slash commands to disable (`interview`, `implement`, `deepwork`, `reflect`, `loop`, `preset`)
 - Enum-backed disabled keys use whole-family replacement semantics: explicit `[]` overrides a lower layer, a mixed list replaces it with the valid subset, and a list containing only unknown names is treated as unset so the lower layer applies.

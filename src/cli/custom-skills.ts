@@ -9,6 +9,7 @@ import {
   rmSync,
 } from 'node:fs';
 import { basename, join, relative } from 'node:path';
+import { matchesListFilter, splitListFilter } from '../config/list-filter';
 import { getConfigDir } from '../config/paths';
 import { CUSTOM_SKILLS } from './custom-skills-registry';
 
@@ -16,8 +17,35 @@ export interface BundledSkillInfo {
   id: string;
   name: string;
   description?: string;
+  autoinvoke?: boolean;
   path: string;
   content: string;
+}
+
+type SkillAutoinvokeConfig =
+  | boolean
+  | readonly string[]
+  | Readonly<Record<string, boolean>>;
+
+function resolveSkillAutoinvoke(
+  skillName: string,
+  autoinvoke: SkillAutoinvokeConfig | undefined,
+  filter: ReturnType<typeof splitListFilter> | undefined,
+): boolean | undefined {
+  if (autoinvoke === undefined) return undefined;
+  if (typeof autoinvoke === 'boolean') return autoinvoke;
+  if (filter !== undefined) return matchesListFilter(skillName, filter);
+  const record = autoinvoke as Readonly<Record<string, boolean>>;
+  if (
+    Object.hasOwn(record, skillName) &&
+    typeof record[skillName] === 'boolean'
+  ) {
+    return record[skillName];
+  }
+  if (Object.hasOwn(record, '*') && typeof record['*'] === 'boolean') {
+    return record['*'];
+  }
+  return undefined;
 }
 
 /** Parse the `---` frontmatter block of a SKILL.md into flat string values. */
@@ -51,8 +79,12 @@ export function stripFrontmatter(text: string): string {
 export function buildBundledSkillInfos(
   packageRoot: string,
   disabled: readonly string[],
+  autoinvoke?: SkillAutoinvokeConfig,
 ): BundledSkillInfo[] {
   const skip = new Set(disabled);
+  const filter = Array.isArray(autoinvoke)
+    ? splitListFilter(autoinvoke)
+    : undefined;
   const infos: BundledSkillInfo[] = [];
   for (const skill of CUSTOM_SKILLS) {
     if (skip.has(skill.name)) continue;
@@ -61,10 +93,18 @@ export function buildBundledSkillInfos(
       if (!existsSync(mdPath)) continue;
       const raw = readFileSync(mdPath, 'utf-8').replace(/^\uFEFF/, '');
       const fm = parseFrontmatter(raw);
+      const resolvedAutoinvoke = resolveSkillAutoinvoke(
+        skill.name,
+        autoinvoke,
+        filter,
+      );
       infos.push({
         id: skill.name,
         name: skill.name,
         description: fm.description ?? skill.description,
+        ...(resolvedAutoinvoke !== undefined
+          ? { autoinvoke: resolvedAutoinvoke }
+          : {}),
         path: mdPath,
         content: stripFrontmatter(raw).trim(),
       });

@@ -6,7 +6,11 @@ permissions and registers bundled skills in-process; it does not maintain a
 second skill catalog or copy new skills into the user directory.
 
 Plugin changes apply after restart/reload. `disabled_skills` omits selected
-bundled registrations and grants. A same-named user skill directory overrides
+bundled registrations and grants. `autoinvoke_skills` controls whether
+registered bundled skills appear in OpenCode's `<available_skills>` system
+prompt list (`false`, a `"*"` / `"!name"` filter list such as
+`["*", "!deepwork"]`, or a `{ "<skill>": boolean }` map) while keeping them
+registered for manual invocation. A same-named user skill directory overrides
 the bundled version. Legacy unedited copies are cleaned up; edited copies are
 retained, or moved outside discovery to
 `<user-config>/.oh-my-opencode-slim-skill-backups/` when disabled.
