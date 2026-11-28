@@ -1,4 +1,5 @@
 import type { Hooks, Plugin, ToolDefinition } from '@opencode-ai/plugin';
+import { isDeepStrictEqual } from 'node:util';
 import {
   type AgentModelProjection,
   type AgentRuntimeProfiles,
@@ -1869,7 +1870,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const existing = mergedAgentConfig[name];
           if (
             existing !== undefined &&
-            !Bun.deepEquals(existing, { disable: true })
+            !isDeepStrictEqual(existing, { disable: true })
           )
             continue;
           mergedAgentConfig[name] = { disable: true };
@@ -1886,7 +1887,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         Object.entries(currentMcpConfig).filter(
           ([name, value]) =>
             !Object.hasOwn(injectedMcps, name) ||
-            !Bun.deepEquals(injectedMcps[name], value),
+            !isDeepStrictEqual(injectedMcps[name], value),
         ),
       );
       // User-authored MCP entries own their key (issue #1290): reconcile
