@@ -43,7 +43,11 @@ import { MarketplaceStore } from '../marketplace/store';
 import { flushLoggerForTesting } from '../utils/logger';
 import { compilePermissionPolicy } from './permissions';
 import { createV2Setup } from './setup';
-import type { V2Context, V2PermissionRule } from './types';
+import type {
+  V2Context,
+  V2PermissionRule,
+  V2SessionPresetRpcHandlers,
+} from './types';
 
 type CapturedTool = {
   name: string;
@@ -2511,6 +2515,101 @@ describe('createV2Setup e2e', () => {
     expect(calls.commandAdds.map((c) => c.name)).toContain('deepwork');
 
     await cleanup();
+  }, 20_000);
+
+  test('preset read declares only a confirmed location mismatch', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    const elsewhere = path.join(fixtureRoot, 'other-worktree');
+    // Genuine failures must still throw even when their message matches.
+    const failure = new Error('Session preset session/location mismatch');
+    ctx.session.get = async ({ sessionID }) => {
+      if (sessionID === 'host-failure') throw failure;
+      if (sessionID === 'unknown') return undefined;
+      if (sessionID === 'wrong-id')
+        return { id: 'another', directory: elsewhere };
+      if (sessionID === 'unknown-location') return { id: sessionID };
+      return {
+        id: sessionID,
+        location: {
+          directory: [
+            'wrong-location',
+            'moved-child',
+            'unverified-child',
+          ].includes(sessionID)
+            ? elsewhere
+            : projectDir,
+        },
+        parentID:
+          sessionID === 'moved-child'
+            ? 'parent'
+            : sessionID === 'unverified-child'
+              ? 'host-failure'
+              : undefined,
+      };
+    };
+    let handlers: V2SessionPresetRpcHandlers | undefined;
+    const get = jest.fn(async (key: string) => {
+      if (key.endsWith('/kv-failure')) throw failure;
+      return undefined;
+    });
+    const cleanup = await createV2Setup()({
+      ...ctx,
+      rpc: {
+        register: async (contract, registered) => {
+          expect(
+            contract.methods.read.errors.session_location_mismatch.parse(null),
+          ).toBeNull();
+          handlers = registered;
+          return { dispose() {} };
+        },
+      },
+      storage: {
+        get,
+        set: async () => {},
+        remove: async () => {},
+        scan: async () => ({ entries: [] }),
+      },
+    });
+    try {
+      if (!handlers) throw new Error('Preset RPC not registered');
+      const { read: readPreset } = handlers;
+      const signal = new AbortController().signal;
+      const error = jest.fn(
+        (type: 'session_location_mismatch', message: string, data: null) => ({
+          type,
+          message,
+          data,
+        }),
+      );
+      const read = (sessionID: string) =>
+        readPreset({ sessionID }, { signal, error });
+      expect(await read('wrong-location')).toEqual({
+        type: 'session_location_mismatch',
+        message: failure.message,
+        data: null,
+      });
+      expect(get).not.toHaveBeenCalledWith('session-preset/v1/wrong-location');
+      expect(await read('moved-child')).toMatchObject({ status: 'unbound' });
+      for (const id of [
+        'unknown',
+        'wrong-id',
+        'unknown-location',
+        'unverified-child',
+      ]) {
+        await expect(read(id)).rejects.toThrow(failure.message);
+      }
+      await expect(read('host-failure')).rejects.toBe(failure);
+      await expect(read('kv-failure')).rejects.toBe(failure);
+      await expect(
+        handlers.apply(
+          { sessionID: 'wrong-location', presetName: 'ignored' },
+          { signal },
+        ),
+      ).rejects.toThrow(failure.message);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      await cleanup();
+    }
   }, 20_000);
 
   test('reduced ctx (no agent.transform) skips gracefully', async () => {

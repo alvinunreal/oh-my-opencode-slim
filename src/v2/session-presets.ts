@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
+import { SessionPresetLocationMismatch } from './preset-rpc';
 import type { V2AgentRuntimeProfiles } from './runtime-profiles';
 import type { V2Context } from './types';
 
@@ -273,44 +274,56 @@ export function createSessionPresets(options: {
       return undefined;
     }
   }
-  /** Strict directory guard: the session id matches and its reported
-   * directory is the plugin's startup directory. */
-  function inPluginDirectory(
+  /** Only trust a reported directory when the host confirmed the session ID. */
+  function sessionDirectory(
     info: Record<string, unknown> | undefined,
     id: string,
-  ): boolean {
-    if (!info || info.id !== id) return false;
+  ): string | undefined {
+    if (info?.id !== id) return undefined;
     const location = info.location as { directory?: string } | undefined;
     const directory = location?.directory ?? info.directory;
+    return typeof directory === 'string' ? directory : undefined;
+  }
+  function inPluginDirectory(directory: string | undefined): boolean {
     return (
-      typeof directory === 'string' &&
+      directory !== undefined &&
       path.resolve(directory) === path.resolve(options.directory)
     );
   }
-  async function identity(id: string) {
+  async function identity(id: string, classifyLocationMismatch = false) {
     check();
     if (!id || typeof options.session?.get !== 'function') {
       throw new Error('Session preset identity unavailable');
     }
     const info = await readSession(id);
-    if (inPluginDirectory(info, id)) return info;
+    const directory = sessionDirectory(info, id);
+    if (inPluginDirectory(directory)) return info;
     // #1915: a child that moved itself after creation (session_move)
     // reports a directory outside the plugin's startup directory. Its
     // parent still lives there, so prove provenance through the parent
     // instead of rejecting a live child of this project. A session with
     // no reported directory, no parent, or an unprovable parent keeps
     // the strict rejection below.
-    const location = info?.location as { directory?: string } | undefined;
-    const directory = location?.directory ?? info?.directory;
     const parentID =
       typeof info?.parentID === 'string' ? info.parentID : undefined;
-    if (info?.id === id && typeof directory === 'string' && parentID) {
-      const parent = await readSessionQuiet(parentID);
-      if (parent?.id === parentID && inPluginDirectory(parent, parentID)) {
-        return info;
-      }
+    let parentDirectory: string | undefined;
+    if (directory !== undefined && parentID) {
+      parentDirectory = sessionDirectory(
+        await readSessionQuiet(parentID),
+        parentID,
+      );
+      if (inPluginDirectory(parentDirectory)) return info;
     }
-    throw new Error('Session preset session/location mismatch');
+    const mismatch = 'Session preset session/location mismatch';
+    // An unavailable parent proves nothing; preserve the internal failure.
+    if (
+      classifyLocationMismatch &&
+      directory &&
+      (!parentID || parentDirectory)
+    ) {
+      throw new SessionPresetLocationMismatch(mismatch);
+    }
+    throw new Error(mismatch);
   }
   async function ensureTransaction(
     id: string,
@@ -559,7 +572,7 @@ export function createSessionPresets(options: {
     async readState(id: string) {
       requireAvailable();
       return serial(id, async () => {
-        const info = await identity(id);
+        const info = await identity(id, true);
         const record = await read(id);
         if (
           record &&
