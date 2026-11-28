@@ -1397,6 +1397,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "brixtonpham",
+      "name": "Brixton Pham",
+      "avatar_url": "https://avatars.githubusercontent.com/u/117471232?v=4",
+      "profile": "https://github.com/brixtonpham",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

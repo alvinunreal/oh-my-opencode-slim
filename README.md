@@ -810,7 +810,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-154-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-155-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -1026,6 +1026,7 @@ Use this section as a map: start with installation, then jump to features, confi
       <td align="center" valign="top" width="16.66%"><a href="https://begenchgeldyev.com/"><img src="https://avatars.githubusercontent.com/u/83501597?v=4?s=100" width="100px;" alt="Begench"/><br /><sub><b>Begench</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=begenchgeldyev" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/Jack-mi"><img src="https://avatars.githubusercontent.com/u/38183377?v=4?s=100" width="100px;" alt="下一块巧克力"/><br /><sub><b>下一块巧克力</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=Jack-mi" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/vitornp"><img src="https://avatars.githubusercontent.com/u/1016814?v=4?s=100" width="100px;" alt="Vitor de Moraes"/><br /><sub><b>Vitor de Moraes</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=vitornp" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/brixtonpham"><img src="https://avatars.githubusercontent.com/u/117471232?v=4?s=100" width="100px;" alt="Brixton Pham"/><br /><sub><b>Brixton Pham</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=brixtonpham" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
