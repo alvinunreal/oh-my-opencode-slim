@@ -30,8 +30,9 @@ yarn-error.log*
 # TypeScript cache
 *.tsbuildinfo
 
-# Test coverage
-coverage/
+# Test coverage (root output dir only; tools/coverage/ holds the converter)
+# and must stay tracked.
+/coverage/
 reports/
 
 # Stryker scratch
