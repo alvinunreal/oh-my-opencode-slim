@@ -879,7 +879,7 @@ const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
+        'When true, omit the orchestrator model and variant from agent registration unless the selected resolved preset defines orchestrator.model. This does not clear session selections or remove configured fallback entries. Defaults to false.',
       ),
     autoUpdate: z
       .boolean()

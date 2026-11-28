@@ -149,7 +149,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `getAgentOverride(config, name)`: Get agent-specific override with alias support
 - `getCustomAgentNames(config)`: List custom agents declared in config.agents
 - `loadAgentPrompt(agentName, preset?)`: Load custom prompt files for agents, searching current and ancestor locations before global directories
-- `stripOrchestratorModel` / `applyOrchestratorModelConfig` (strip-orchestrator-model.ts): Strip the orchestrator's single model/variant when a fallback chain is configured
+- `stripOrchestratorModel` / `applyOrchestratorModelConfig` (strip-orchestrator-model.ts): Omit `orchestrator.model` and `orchestrator.variant` from agent registration when `stripOrchestratorModel` is `true` and the selected resolved preset does not define `orchestrator.model`
 
 ### Runtime State
 
